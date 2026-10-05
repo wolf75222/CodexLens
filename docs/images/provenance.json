@@ -1,0 +1,33 @@
+{
+  "method": "ScreenCaptureKit compositor capture of the current isolated app, after CUA inspection and navigation",
+  "version": "0.41.0",
+  "build": "75",
+  "uuid": "7C7ECD3A-984F-319A-A137-9C25E90A853F",
+  "syntheticSession": true,
+  "images": {
+    "activity.png": {
+      "width": 2960,
+      "height": 1640,
+      "capturedAt": "2026-10-05T22:59:54Z",
+      "method": "ScreenCaptureKit compositor capture of the explicitly requested own Lens QA window",
+      "sha256": "3a449c06e1038d6d6930ebe03d0f80b0451864063e498347812804b12065c555"
+    },
+    "diff.png": {
+      "width": 3024,
+      "height": 1640,
+      "capturedAt": "2026-10-05T23:03:52Z",
+      "method": "ScreenCaptureKit compositor capture of the explicitly requested own Lens QA window",
+      "sha256": "bd57ffab01bfaedf4058eb9fd0d2a5a144cc993ccb68955e0e2172261a3c8f1f"
+    },
+    "chat.png": {
+      "width": 3024,
+      "height": 1640,
+      "capturedAt": "2026-10-05T23:09:42Z",
+      "method": "ScreenCaptureKit compositor capture of the explicitly requested own Lens QA window",
+      "sha256": "3721d5970150fadbb1b9f7e9f8bb1b28e9b032ac4255d256d3846474c8eb8502"
+    }
+  },
+  "modelRequests": 0,
+  "chatState": "Unsent contextual draft; no generated answer",
+  "signingDelta": "QA-only signature and preferences, identical Mach-O sections and UUID"
+}

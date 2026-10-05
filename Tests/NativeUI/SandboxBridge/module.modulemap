@@ -1,0 +1,5 @@
+module CSandbox [system] {
+    header "shim.h"
+    link "sandbox"
+    export *
+}

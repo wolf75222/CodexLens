@@ -1,0 +1,33 @@
+name: Bug report
+description: Report a reproducible problem in Codex Lens.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach credentials, private conversations, or unredacted Codex logs. Use a small anonymous example.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Lens version, macOS version, architecture, and Codex version if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: What did you open or select, and what happened?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Anonymous example or screenshot
+      description: Remove account names, private paths and message contents before sharing.
+

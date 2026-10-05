@@ -1,0 +1,9 @@
+blank_issues_enabled: false
+contact_links:
+  - name: User guide
+    url: https://github.com/wolf75222/CodexLens/blob/main/docs/USER_GUIDE.md
+    about: Installation, navigation, local Codex and troubleshooting.
+  - name: Private security report
+    url: https://github.com/wolf75222/CodexLens/security/advisories/new
+    about: Report a vulnerability without publishing private data.
+

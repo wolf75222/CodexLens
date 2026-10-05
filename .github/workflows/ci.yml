@@ -1,0 +1,86 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      version:
+        description: Validated application version
+        value: ${{ jobs.validate.outputs.version }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Build, test and package
+    runs-on: macos-26
+    timeout-minutes: 35
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      LENS_BUILD_DIR: ${{ github.workspace }}/.build/ci
+      LENS_APP_PATH: ${{ github.workspace }}/dist/Codex Lens.app
+      LENS_VERIFY_LOCAL_CODEX_METADATA: '0'
+      LENS_VERIFY_LIVE_CONVERSATION: '0'
+      LENS_VERIFY_LIVE_CODEX: '0'
+      LENS_VERIFY_LIVE_RESUME: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Toolchain identity
+        run: |
+          xcodebuild -version
+          swift --version
+          xcrun --sdk macosx --show-sdk-version
+          python3 --version
+          uname -m
+      - name: Public source and documentation checks
+        run: python3 scripts/check-repository.py
+      - name: Script syntax and packaging regression tests
+        run: |
+          for file in scripts/*.sh; do bash -n "$file"; done
+          python3 -m unittest discover -s scripts/tests -v
+      - name: Swift tests
+        run: bash scripts/test.sh -c release -Xswiftc -g --jobs 3
+      - name: Build native app with symbols
+        run: bash scripts/build.sh --profile
+      - name: Native AppKit icon tests
+        run: bash scripts/test-app-icon.sh "$RUNNER_TEMP/icon-receipt.json"
+      - name: Offline native UI smoke
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          renders="/private/tmp/lens-ci-ui-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python3 scripts/create-origin-corpus-v21.py --output "$corpus" --events 600
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$renders" --corpus "$corpus" --entrypoint PublicDocsMain.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation
+          cp "$renders/native-design-v07-receipt.json" dist/ui-validation/receipt.json
+          cp "$renders/"*.png dist/ui-validation/
+      - name: Package and verify installer
+        run: bash scripts/package-release.sh --app "$LENS_APP_PATH" --output dist/release
+      - name: Release version
+        id: version
+        run: python3 -c 'import plistlib,os; d=plistlib.load(open("Support/Info.plist","rb")); open(os.environ["GITHUB_OUTPUT"],"a").write("version="+d["CFBundleShortVersionString"]+"\n")'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-lens-${{ github.sha }}
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-ui-${{ github.sha }}
+          path: dist/ui-validation/
+          if-no-files-found: error
+          retention-days: 7
