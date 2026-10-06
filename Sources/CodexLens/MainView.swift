@@ -121,6 +121,7 @@ struct MainView: View {
         .toolbar(id: windowContext?.toolbarIdentifier ?? "LensSessionToolbar-" + store.windowIdentity) { navigationToolbar; inspectionToolbar }
         .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
         .sheet(item: presentation) { sheet in
+            Group {
             switch sheet {
             case .onboarding:
                 LensOnboardingView(onOpenSession: { store.perform(.openSession) }) {
@@ -134,6 +135,7 @@ struct MainView: View {
                     ConversationExportView(snapshot: snapshot, onClose: { store.showConversation = false })
                 }
             }
+            }.lensControlAccent(LensControlAccent(rawValue: controlAccent) ?? .lens)
         }
         .lensMotionAware()
     }
@@ -561,8 +563,8 @@ struct SessionPickerView: View {
                 LensNativeSearchField(placeholder: LensL10n.text("Rechercher, coller un ID ou un lien Codex…"), text: $text, focused: Binding(get: { searchFocused }, set: { searchFocused = $0 }), onSubmit: { openSelection() }).frame(height: 28)
                     .onChange(of: text) { _, _ in selectedSessionID = nil }
                     .accessibilityLabel(LensL10n.text("Recherche, ID ou lien de session"))
-                Button(LensL10n.text("Ouvrir la session")) { openSelection() }
-                    .disabled(openingID == nil || store.busy).keyboardShortcut(.defaultAction)
+                LensNativePrimaryButton(title: LensL10n.text("Ouvrir la session"), isDefault: true) { openSelection() }
+                    .disabled(openingID == nil || store.busy)
                     .help(LensL10n.text("Collez un ID ou un lien codex://threads/…, sélectionnez une session ou affinez la recherche."))
             }
             HStack {

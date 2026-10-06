@@ -29,6 +29,7 @@ private extension LensStore {
 }
 
 struct AgentsView: View {
+    @Environment(\.lensAccent) private var accent
     @EnvironmentObject var store: LensStore
     @State private var searchFocused = false
     @FocusState private var listFocused: Bool
@@ -55,7 +56,7 @@ struct AgentsView: View {
             List(tree, id: \.0.id, selection: store.objectListSelection(in: .agents)) { agent, depth in
                 Button { store.navigate(.agent(agent.id)); listFocused = true } label: {
                     HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: LensSymbols.agent(agent.relation)).font(.system(size: 13, weight: .medium)).foregroundStyle(agent.accessible ? LensBrand.ink : LensAppearance.warningText).frame(width: 20, height: 18).accessibilityHidden(true)
+                        Image(systemName: LensSymbols.agent(agent.relation)).font(.system(size: 13, weight: .medium)).foregroundStyle(agent.accessible ? accent.color : LensAppearance.warningText).frame(width: 20, height: 18).accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 5) {
                             HStack(spacing: 8) {
                                 Text(agent.name.nonempty ?? String(agent.id.prefix(8))).font(LensUI.body.weight(.semibold)).lineLimit(1).truncationMode(.middle).help(agent.name.nonempty ?? agent.id)
@@ -72,7 +73,7 @@ struct AgentsView: View {
                             if !agent.accessible { Label(LensL10n.text("Historique inaccessible"), systemImage: LensSymbols.name("doc.questionmark")).font(.caption).foregroundStyle(.secondary) }
                         }
                     }.padding(.leading, CGFloat(depth) * 20).padding(.vertical, 9).contentShape(Rectangle())
-                }.buttonStyle(.plain).tag(agent.id).listRowBackground(store.selection == .agent(agent.id) ? LensBrand.selection : .clear)
+                }.buttonStyle(.plain).tag(agent.id).listRowBackground(store.selection == .agent(agent.id) ? accent.selectionColor : .clear)
                     .simultaneousGesture(TapGesture(count: 2).onEnded { store.navigate(.agent(agent.id), newTab: true) })
                     .help(LensL10n.text("Double-clic ou Retour pour ouvrir l’agent sélectionné."))
                     .accessibilityAddTraits(store.selection == .agent(agent.id) ? .isSelected : [])
@@ -298,6 +299,7 @@ enum FileTreeSelection {
     }
 }
 struct FileTreeRow: View {
+    @Environment(\.lensAccent) private var accent
     @EnvironmentObject var store: LensStore
     let entry: FileEntry
     let environmentID: String
@@ -320,7 +322,7 @@ struct FileTreeRow: View {
                         if entry.isDirectory { Image(systemName: LensSymbols.name(expanded ? "chevron.down" : "chevron.right")).imageScale(.small) }
                         else { Color.clear }
                     }.frame(width: 10).accessibilityHidden(true)
-                    Image(systemName: LensSymbols.name(entry.isSymbolicLink ? "link" : LensUI.fileSymbol(entry.id, isDirectory: entry.isDirectory))).foregroundStyle(entry.isDirectory ? Color.accentColor : .secondary).accessibilityHidden(true)
+                    Image(systemName: LensSymbols.name(entry.isSymbolicLink ? "link" : LensUI.fileSymbol(entry.id, isDirectory: entry.isDirectory))).foregroundStyle(entry.isDirectory ? accent.color : .secondary).accessibilityHidden(true)
                     Text(entry.name).font(LensUI.body.weight(isSelected ? .semibold : .regular)).lineLimit(1)
                     Spacer(minLength: 0)
                     LensSelectionMark(selected: isSelected)
@@ -331,7 +333,7 @@ struct FileTreeRow: View {
                 .accessibilityValue(entry.isRestricted ? LensL10n.text("Accès non autorisé") : entry.isDirectory ? (expanded ? LensL10n.text("Développé") : LensL10n.text("Réduit")) : "")
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .help(entry.id + (entry.isRestricted ? LensL10n.text(" · accès non autorisé") : ""))
-                .background(isSelected ? LensBrand.selection : .clear)
+                .background(isSelected ? accent.selectionColor : .clear)
                 .contextMenu { NativeFilePathActions(path: entry.id, worktreeRoot: worktreeRoot, isDirectory: entry.isDirectory, restricted: entry.isRestricted, onIssue: { issue = $0 }) }
             if let issue { Text(LensL10n.display(issue)).font(.caption).foregroundStyle(LensAppearance.warningText).textSelection(.enabled).padding(.leading, CGFloat(depth + 1) * 13) }
             if expanded {
@@ -342,6 +344,7 @@ struct FileTreeRow: View {
 }
 
 struct ResourcesView: View {
+    @Environment(\.lensAccent) private var accent
     @EnvironmentObject var store: LensStore
     @State private var role: ResourceRole?
     @State private var showRecovery = false
@@ -365,7 +368,7 @@ struct ResourcesView: View {
                     Button { store.navigate(.resource(resource.id)) } label: {
                         LensResourceRowLabel(resource: resource, isKnownDirectory: directories.contains(NativeFileLocation.localPath(resource.location) ?? ""), isSelected: store.selection == .resource(resource.id))
                             .padding(.vertical, 7).contentShape(Rectangle())
-                    }.buttonStyle(.plain).tag(resource.id).listRowBackground(store.selection == .resource(resource.id) ? LensBrand.selection : .clear)
+                    }.buttonStyle(.plain).tag(resource.id).listRowBackground(store.selection == .resource(resource.id) ? accent.selectionColor : .clear)
                         .accessibilityAddTraits(store.selection == .resource(resource.id) ? .isSelected : [])
                         .contextMenu {
                             if let path = NativeFileLocation.localPath(resource.location) { NativeFilePathActions(path: path, isDirectory: directories.contains(path)) }
@@ -696,6 +699,7 @@ struct PDFPreview: NSViewRepresentable {
 }
 
 struct ChangesView: View {
+    @Environment(\.lensAccent) private var accent
     @EnvironmentObject var store: LensStore
     @Environment(\.lensWindowContext) private var windowContext
     @State private var kind: ChangeKind?
@@ -755,7 +759,7 @@ struct ChangesView: View {
                     Text(LensL10n.text("{0} · {1}", String(describing: store.agentName(change.agentID)), String(describing: change.environmentID))).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     Text(change.evidence).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }.padding(.vertical, 8).contentShape(Rectangle())
-            }.buttonStyle(.plain).id(change.id).tag(change.id).listRowBackground(store.selection == .change(change.id) ? LensBrand.selection : .clear)
+            }.buttonStyle(.plain).id(change.id).tag(change.id).listRowBackground(store.selection == .change(change.id) ? accent.selectionColor : .clear)
                 .accessibilityAddTraits(store.selection == .change(change.id) ? .isSelected : [])
                 .contextMenu {
                     Button(LensL10n.text("Voir l’action et son contexte")) { store.navigate(.event(change.eventID), newTab: true) }

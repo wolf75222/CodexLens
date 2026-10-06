@@ -6,6 +6,7 @@ import SwiftUI
 enum CodeTextCopyScope: Equatable { case selection, loadedText }
 
 struct CodeDocumentView: NSViewRepresentable {
+    @Environment(\.lensAccent) private var accent
     @Environment(\.lensReadingMagnify) private var magnify
     var text: String
     var path: String
@@ -27,6 +28,7 @@ struct CodeDocumentView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: CodeDocumentHost, context: Context) {
+        accent.applyTextSelection(to: view.editor)
         view.install(text: text, path: path, versionLabel: versionLabel,
                      requestedLine: scrollToLine, fontSize: fontSize, codeFont: codeFont, onSelection: onSelection, onLineNavigate: onLineNavigate,
                      onInvestigateSelection: onInvestigateSelection, onCopyText: onCopyText,

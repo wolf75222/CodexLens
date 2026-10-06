@@ -72,6 +72,7 @@ enum LensUI {
 /// Content headers share a leading edge and scale, without imposing a fixed
 /// height on translated titles or longer descriptions.
 struct LensSectionHeader: View {
+    @Environment(\.lensAccent) private var accent
     let title: String
     var detail: String? = nil
     var symbol: String? = nil
@@ -79,7 +80,7 @@ struct LensSectionHeader: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 8) {
                 if let symbol {
-                    Image(systemName: LensSymbols.name(symbol)).foregroundStyle(LensBrand.ink).accessibilityHidden(true)
+                    Image(systemName: LensSymbols.name(symbol)).foregroundStyle(accent.color).accessibilityHidden(true)
                 }
                 Text(title).font(LensUI.sectionTitle).fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
@@ -99,6 +100,7 @@ struct LensQuietButtonStyle: ButtonStyle {
         LensQuietButton(configuration: configuration)
     }
     private struct LensQuietButton: View {
+        @Environment(\.lensAccent) private var accent
         let configuration: ButtonStyle.Configuration
         @State private var hovered = false
         @Environment(\.isEnabled) private var enabled
@@ -109,7 +111,7 @@ struct LensQuietButtonStyle: ButtonStyle {
                 .frame(minWidth: 16, minHeight: 16)
                 .padding(.horizontal, 7).padding(.vertical, 4)
                 .contentShape(RoundedRectangle(cornerRadius: 5))
-                .background(enabled && (hovered || configuration.isPressed) ? LensBrand.controlHover.opacity(configuration.isPressed ? 1.5 : 1) : .clear,
+                .background(enabled && (hovered || configuration.isPressed) ? accent.hoverColor.opacity(configuration.isPressed ? 1.5 : 1) : .clear,
                     in: RoundedRectangle(cornerRadius: 5))
                 .overlay {
                     if contrast == .increased, enabled && hovered {
@@ -167,6 +169,7 @@ struct LensAdaptiveRow<Leading: View, Trailing: View>: View {
 
 /// Empty rows have a reason; clearing restores only this collection's filters.
 struct LensCollectionEmptyState: View {
+    @Environment(\.lensAccent) private var accent
     let title: String
     let detail: String
     let symbol: String
@@ -174,7 +177,7 @@ struct LensCollectionEmptyState: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Image(systemName: LensSymbols.name(symbol)).font(.system(size: 26, weight: .light))
-                .foregroundStyle(LensBrand.ink).accessibilityHidden(true)
+                .foregroundStyle(accent.color).accessibilityHidden(true)
             LensSectionHeader(title: title, detail: detail)
             if let onClear { Button(LensL10n.text("Retirer les filtres de cette liste"), action: onClear).buttonStyle(.bordered) }
         }.frame(maxWidth: 420, alignment: .leading).padding(24)

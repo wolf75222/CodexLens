@@ -700,3 +700,7 @@ For a specific failure or unavailable record, inspect Sources and limitations an
 - **Codex Lens → Check for Updates…** checks the signed stable GitHub feed. **Settings → General → Updates** offers optional automatic checks and the installed version. Installation needs your confirmation and replaces the current app in place, then relaunches it.
 - **Settings → General → Maintenance** opens an uninstall review. Local Lens data stays by default. Optional cleanup lists only default Lens-owned folders and preferences; custom storage, Codex credentials, observed sessions, repositories and exports remain. Items move to Trash for recovery.
 - Sparkle 2.10.0 is pinned. Feed and archive signatures are verified before extraction; release-note WebViews and system profiling are disabled. Developer/QA copies cannot use the uninstall command. See [updates and removal](UPDATES.md) for installation requirements and verification limits.
+
+## Control accents
+
+**Settings → General → Reading → Control color** selects Lens violet, slate, sage or the macOS system accent. Owned settings navigation, primary controls, search focus, text selection and navigation indicators share that choice and update in Light/Dark appearances. The System choice retains native macOS colors. Event-type, diff and syntax colors keep their separate meanings. System-owned menus and alerts retain platform styling.

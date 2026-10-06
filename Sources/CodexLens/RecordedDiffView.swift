@@ -197,6 +197,7 @@ struct RecordedDiffPresentation: Sendable {
 }
 
 struct RecordedDiffView: View {
+    @Environment(\.lensAccent) private var accent
     @Environment(\.lensWindowContext) private var windowContext
     @Environment(\.lensReadingMagnify) private var onMagnify
     @State private var previousMagnification: CGFloat = 1
@@ -563,6 +564,6 @@ struct RecordedDiffView: View {
                 Text(line.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
             }
         }.font(store.codeFont.font(size: store.fontSize)).padding(.vertical, 2).background(sideBySide ? .clear : tint(line.kind)).contentShape(Rectangle())
-            .overlay(alignment: .leading) { if selectedLine?.id == line.id { Rectangle().fill(Color.accentColor).frame(width: 2) } }
+            .overlay(alignment: .leading) { if selectedLine?.id == line.id { Rectangle().fill(accent.color).frame(width: 2) } }
     }
 }

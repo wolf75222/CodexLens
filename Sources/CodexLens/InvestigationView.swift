@@ -671,6 +671,7 @@ extension LensStore {
 /// The investigation is a persistent side conversation. Its store owns the draft,
 /// connection and in-flight request; hiding this view never stops that work.
 struct InvestigationView: View {
+    @Environment(\.lensAccent) private var accent
     @AppStorage("lens.language") private var language = "en"
     @Environment(\.lensWindowContext) private var windowContext
     @EnvironmentObject var store: LensStore
@@ -955,7 +956,7 @@ struct InvestigationView: View {
                     .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
                     .overlay {
                         RoundedRectangle(cornerRadius: 16)
-                            .strokeBorder(questionFocused ? Color.accentColor : Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
+                            .strokeBorder(questionFocused ? accent.color : Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
                     }
             }.padding(12)
         }.background(Color(nsColor: .textBackgroundColor))

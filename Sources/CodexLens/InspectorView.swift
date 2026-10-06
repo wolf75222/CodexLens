@@ -658,6 +658,7 @@ struct PagedTextView: View {
     }
 }
 struct NativeTextView: NSViewRepresentable {
+    @Environment(\.lensAccent) private var accent
     var text: String
     var monospaced = true
     var fontSize: Double = LensUI.defaultReadingSize
@@ -679,11 +680,13 @@ struct NativeTextView: NSViewRepresentable {
         view.font = monospaced ? codeFont.nativeFont(size: fontSize) : NSFont.systemFont(ofSize: LensUI.readingSize(fontSize))
         view.textColor = .labelColor; view.backgroundColor = .textBackgroundColor; scroll.documentView = view
         view.string = text
+        accent.applyTextSelection(to: view)
         applyMarkdown(to: view, coordinator: context.coordinator)
         return scroll
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let view = scroll.documentView as? NSTextView else { return }
+        accent.applyTextSelection(to: view)
         (view as? RecordedCopyTextView)?.recordedCopyActions = recordedCopyActions
         (view as? RecordedCopyTextView)?.onMagnify = onMagnify
         let selected = view.selectedRanges, origin = scroll.contentView.bounds.origin

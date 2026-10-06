@@ -6,6 +6,10 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep custom control accents consistent across settings navigation, session dialogs, search focus, text selection and content indicators. Native System mode continues to follow macOS.
+
 ## [0.42.0] - 2026-10-06
 
 ### Added

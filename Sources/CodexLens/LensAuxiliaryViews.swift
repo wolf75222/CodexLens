@@ -13,31 +13,22 @@ struct LensSettingsView: View {
     @State private var uninstallPresented = false
     @State private var maintenancePrepared = false
     @State private var uninstallPreservedStorage: [URL] = []
+    @State private var languageRevision = 0
     var body: some View {
-        TabView(selection: $guide.settingsPage) {
-            generalSettings.tabItem { Label(LensL10n.text("Général"), systemImage: "gearshape") }.tag(LensSettingsPage.general)
-            Form {
-                Section(LensL10n.text("IA")) {
-                    CodexLocalConnectionView(investigator: investigationSettings)
-                    if let issue = investigationSettings.issue { Text(LensL10n.display(issue)).font(.caption).foregroundStyle(LensAppearance.warningText).textSelection(.enabled) }
-                }
-                Section(LensL10n.text("Confidentialité")) {
-                    Text(LensL10n.text("Envoyer transmet à OpenAI votre question, le contexte joint et les échanges précédents de ce chat. Les règles de conservation d’OpenAI s’appliquent."))
-                    Text(LensL10n.text("Le chat est distinct des sessions observées. Le moteur n’a accès ni à leurs dépôts, ni aux outils, hooks ou connecteurs. Le passage à l’API dédiée reste manuel."))
-                        .foregroundStyle(.secondary)
-                }
-            }.formStyle(.grouped).padding(12)
-                .task { await investigationSettings.refreshConnection() }
-                .tabItem { Label(LensL10n.text("IA"), systemImage: "text.bubble") }.tag(LensSettingsPage.ai)
-            LensGuideView().tabItem { Label(LensL10n.text("Aide"), systemImage: "questionmark.circle") }.tag(LensSettingsPage.help)
-        }
+        LensSettingsNavigation(selection: $guide.settingsPage,
+            accent: LensControlAccent(rawValue: controlAccent) ?? .lens,
+            language: LensL10n.Language(rawValue: language) ?? .system, content: AnyView(settingsContent.id(languageRevision)))
         .frame(minWidth: 640, idealWidth: 850, maxWidth: .infinity, minHeight: 520, idealHeight: 720, maxHeight: .infinity)
         .lensControlAccent(LensControlAccent(rawValue: controlAccent) ?? .lens)
-        .onChange(of: language) { _, value in LensL10n.language = LensL10n.Language(rawValue: value) ?? .system }
+        .onChange(of: language) { _, value in
+            LensL10n.language = LensL10n.Language(rawValue: value) ?? .system
+            languageRevision &+= 1
+        }
         .environment(\.locale, Locale(identifier: LensL10n.resolvedLanguage == .fr ? "fr" : "en"))
         .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
         .sheet(isPresented: $guide.replayPresented, onDismiss: { guide.onboarding.dismiss() }) {
             LensOnboardingView { guide.replayPresented = false }
+                .lensControlAccent(LensControlAccent(rawValue: controlAccent) ?? .lens)
         }
         .sheet(isPresented: $uninstallPresented) {
             LensUninstallView(prepareForUninstall: {
@@ -54,9 +45,30 @@ struct LensSettingsView: View {
             }, preservedStorageURLs: uninstallPreservedStorage, resumeAfterFailure: {
                 maintenancePrepared = false
                 await LensApplicationCoordinator.shared.resumeAfterFailedUninstall()
-            })
+            }).lensControlAccent(LensControlAccent(rawValue: controlAccent) ?? .lens)
         }
         .onDisappear { if !maintenancePrepared { Task { await investigationSettings.flushAndStop() } } }
+    }
+    @ViewBuilder private var settingsContent: some View {
+        switch guide.settingsPage {
+        case .general: generalSettings
+        case .ai: aiSettings
+        case .help: LensGuideView()
+        }
+    }
+    private var aiSettings: some View {
+        Form {
+                Section(LensL10n.text("IA")) {
+                    CodexLocalConnectionView(investigator: investigationSettings)
+                    if let issue = investigationSettings.issue { Text(LensL10n.display(issue)).font(.caption).foregroundStyle(LensAppearance.warningText).textSelection(.enabled) }
+                }
+                Section(LensL10n.text("Confidentialité")) {
+                    Text(LensL10n.text("Envoyer transmet à OpenAI votre question, le contexte joint et les échanges précédents de ce chat. Les règles de conservation d’OpenAI s’appliquent."))
+                    Text(LensL10n.text("Le chat est distinct des sessions observées. Le moteur n’a accès ni à leurs dépôts, ni aux outils, hooks ou connecteurs. Le passage à l’API dédiée reste manuel."))
+                        .foregroundStyle(.secondary)
+                }
+            }.formStyle(.grouped).padding(12)
+                .task { await investigationSettings.refreshConnection() }
     }
     private var generalSettings: some View {
         Form {
