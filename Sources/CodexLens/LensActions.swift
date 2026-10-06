@@ -112,7 +112,10 @@ extension LensStore {
     func perform(_ action: LensAction, target: Destination? = nil) {
         guard canPerform(action, target: target) else { return }
         switch action {
-        case .openSession: showConversation = false; showSessionPicker = true
+        case .openSession:
+            // Cmd-O is an explicit choice to browse; a restored/in-flight Lens
+            // read must not cover that list or subsequently replace the choice.
+            cancelSessionOpening(); showConversation = false; showSessionPicker = true
         case .back: goBack()
         case .forward: goForward()
         case .liveTimeline: if liveTimelineVisible { disableLiveTimeline() } else { enableLiveTimeline() }

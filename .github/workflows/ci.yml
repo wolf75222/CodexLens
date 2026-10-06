@@ -103,6 +103,14 @@ jobs:
           mkdir -p dist/ui-validation/scenes
           cp "$scenes/native-design-v07-receipt.json" dist/ui-validation/scenes/receipt.json
           cp "$scenes/"*.png dist/ui-validation/scenes/
+      - name: Session picker regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          picker="/private/tmp/lens-ci-picker-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$picker" --corpus "$corpus" --entrypoint SessionCatalogPickerMain.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/picker
+          cp "$picker/native-design-v07-receipt.json" dist/ui-validation/picker/receipt.json
+          cp "$picker/"*.png dist/ui-validation/picker/
       - name: Control color regression
         run: |
           corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

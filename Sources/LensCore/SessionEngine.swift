@@ -1,6 +1,7 @@
 import Foundation
 import CSQLite
 import CryptoKit
+import Darwin
 
 /// Read-only adapter for local Codex rollout JSONL, supported schema families 0.158/0.159.
 /// It never starts Codex, uses an app server, resumes a thread, or opens auth.json.
@@ -20,6 +21,10 @@ public actor SessionEngine {
     private var eventsByID: [String: LensEvent] = [:]
     private var fingerprintsBySource: [SourceRef: String] = [:]
     private var catalogIssues: [CoverageIssue] = []
+    private var catalogHeaderCache: SessionCatalogCache
+    internal private(set) var catalogHeaderReads = 0
+    internal private(set) var catalogHeaderHits = 0
+    internal var catalogHeaderCacheBytes: Int { catalogHeaderCache.estimatedBytes }
     private var loadedCache = false
     private var lastCollectionSignature: String?
     private var lastSelectedSignature: String?
@@ -32,12 +37,14 @@ public actor SessionEngine {
     public init(home: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex"), cacheDirectory: URL? = nil, investigationRegistryDirectory: URL? = nil) {
         self.home = home.standardizedFileURL
         self.cacheDirectory = cacheDirectory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("CodexLens/Index-v1")
+        self.catalogHeaderCache = SessionCatalogCache(home: self.home, cacheDirectory: self.cacheDirectory)
         self.investigationRegistryDirectory = investigationRegistryDirectory
         self.investigationWorkspaceRoot = CodexInvestigationRegistry.workspaceRoot(directory: investigationRegistryDirectory).path
         self.investigationConnectionProbeRoot = CodexInvestigationRegistry.workspaceRoot(directory: investigationRegistryDirectory).deletingLastPathComponent().appendingPathComponent("ConnectionProbe", isDirectory: true).path
     }
 
     public func catalog() async throws -> [SessionSummary] {
+        let span = LensSignposts.begin("SessionCatalog"); defer { span.end() }
         relationSources = [:]
         try Task.checkCancellation()
         catalogIssues = []
@@ -46,6 +53,7 @@ public actor SessionEngine {
         var found: [String: SessionSummary] = [:]
         var meta: [String: RolloutMetadata] = [:]
         var candidatePaths = Set<String>()
+        let databaseSpan = LensSignposts.begin("CatalogDatabase")
         let databaseURL = home.appendingPathComponent("state_5.sqlite")
         if FileManager.default.fileExists(atPath: databaseURL.path) {
             do {
@@ -77,27 +85,51 @@ public actor SessionEngine {
                 }
             } catch { catalogIssues.append(CoverageIssue("catalogue", "Base locale non lisible : \(error.localizedDescription). Repli sur les journaux.", source: databaseURL.path)) }
         }
+        databaseSpan.end()
+        let enumerationSpan = LensSignposts.begin("CatalogEnumeration")
         for directory in ["sessions", "archived_sessions"] {
             let url = home.appendingPathComponent(directory)
             candidatePaths.formUnion(Self.rolloutPaths(in: url))
         }
+        enumerationSpan.end()
+        catalogHeaderCache.prepare(paths: candidatePaths)
+        let headerSpan = LensSignposts.begin("CatalogHeaders")
         // First record is the file owner. Later copied session_meta records are inherited context.
         for path in candidatePaths.sorted() {
             try Task.checkCancellation()
             guard FileManager.default.fileExists(atPath: path) else { continue }
             do {
-                let (first, firstSource) = try Self.firstRecord(path: path, limit: 16 * 1024 * 1024)
-                guard first["type"] as? String == "session_meta", let payload = first["payload"] as? [String: Any], let id = payload["id"] as? String else { catalogIssues.append(CoverageIssue("métadonnées", "Premier enregistrement sans session_meta.id ; association du fichier inconnue.", source: path)); continue }
-                if excludedInvestigationIDs.contains(id) || isInvestigationWorkspace(payload["cwd"] as? String ?? "") { excludedInvestigationIDs.insert(id); continue }
-                let parsed = RolloutMetadata(payload: payload)
-                let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+                let stamp = try SessionCatalogStamp.read(path: path)
+                let header: SessionCatalogHeader
+                if let cached = catalogHeaderCache.header(path: path, stamp: stamp) {
+                    header = cached; catalogHeaderHits += 1
+                } else {
+                    catalogHeaderReads += 1
+                    // Foundation's large JSON objects must die per file, not at
+                    // the end of a catalog containing thousands of instructions.
+                    guard let read = try autoreleasepool(invoking: { try Self.catalogHeader(path: path) }) else {
+                        catalogIssues.append(CoverageIssue("métadonnées", "Premier enregistrement sans session_meta.id ; association du fichier inconnue.", source: path)); continue
+                    }
+                    guard try SessionCatalogStamp.read(path: path) == stamp else { throw LensError.unavailable("Métadonnées du journal modifiées pendant leur lecture.") }
+                    header = read
+                    catalogHeaderCache.insert(header, stamp: stamp)
+                }
+                let id = header.id, firstSource = header.source
+                if excludedInvestigationIDs.contains(id) || isInvestigationWorkspace(header.cwd) {
+                    excludedInvestigationIDs.insert(id); catalogHeaderCache.remove(path: path); continue
+                }
+                // A new mutable object for this merge; cached parentage cannot
+                // inherit a previous database edge that has since disappeared.
+                let parsed = RolloutMetadata(id: id, cwd: header.cwd, branch: header.branch, gitRef: header.gitRef,
+                    name: header.name, parent: header.parent, relation: header.relation)
+                parsed.sessionID = header.sessionID; parsed.historyStart = header.historyStart
                 var summary = found[id] ?? SessionSummary(id: id)
                 summary.sessionID = parsed.sessionID ?? id
                 if !summary.paths.contains(path) { summary.paths.append(path) }
                 summary.cwd = parsed.cwd.isEmpty ? summary.cwd : parsed.cwd
-                summary.cliVersion = (payload["cli_version"] as? String) ?? summary.cliVersion
+                summary.cliVersion = header.cliVersion ?? summary.cliVersion
                 summary.agentName = parsed.name.isEmpty ? summary.agentName : parsed.name
-                summary.modifiedAt = max(summary.modifiedAt, attrs?[.modificationDate] as? Date ?? .distantPast)
+                summary.modifiedAt = max(summary.modifiedAt, stamp.modifiedAt)
                 if let parent = parsed.parent { summary.parentID = parent; summary.relation = parsed.relation; relationSources[id] = [firstSource] }
                 summary.evidence += "; session_meta initial propriétaire (\(URL(fileURLWithPath: path).lastPathComponent))"
                 if let existing = meta[id], parsed.parent == nil { parsed.parent = existing.parent; parsed.relation = existing.relation }
@@ -105,6 +137,7 @@ public actor SessionEngine {
                 found[id] = summary
             } catch { catalogIssues.append(CoverageIssue("journal", "Métadonnées non lisibles : \(error.localizedDescription)", source: path)) }
         }
+        headerSpan.end()
         // A child of a private investigation cannot re-enter the source catalog
         // through its own rollout, even when rows/edges arrived in another order.
         var exclusionsGrew = true
@@ -114,6 +147,7 @@ public actor SessionEngine {
             exclusionsGrew = before != excludedInvestigationIDs.count
         }
         for id in excludedInvestigationIDs { found.removeValue(forKey: id); meta.removeValue(forKey: id) }
+        let titleSpan = LensSignposts.begin("CatalogTitles")
         let titleURL = home.appendingPathComponent("session_index.jsonl")
         if (try? LocalContentGuard.requireResident(path: titleURL.path)) != nil,
            let attrs = try? FileManager.default.attributesOfItem(atPath: titleURL.path),
@@ -123,7 +157,10 @@ public actor SessionEngine {
                 if let row = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any], let id = row["id"] as? String, let title = row["thread_name"] as? String ?? row["title"] as? String { found[id]?.title = Self.redact(title) }
             }
         }
+        titleSpan.end()
         for id in found.keys { if found[id]?.title.isEmpty == true { found[id]?.title = "Session \(id.prefix(8))" } }
+        try Task.checkCancellation()
+        catalogHeaderCache.persist()
         summaries = found; metadata = meta
         return found.values.sorted { $0.modifiedAt > $1.modifiedAt }
     }
@@ -856,17 +893,32 @@ public actor SessionEngine {
         return false
     }
 
+    private static func catalogHeader(path: String) throws -> SessionCatalogHeader? {
+        let (first, source) = try firstRecord(path: path, limit: 16 * 1024 * 1024)
+        guard first["type"] as? String == "session_meta", let payload = first["payload"] as? [String: Any],
+              let id = payload["id"] as? String, !id.isEmpty else { return nil }
+        let parsed = RolloutMetadata(payload: payload)
+        return SessionCatalogHeader(id: id, sessionID: parsed.sessionID, cwd: parsed.cwd,
+            cliVersion: payload["cli_version"] as? String, name: parsed.name, branch: parsed.branch, gitRef: parsed.gitRef,
+            parent: parsed.parent, relation: parsed.relation, historyStart: parsed.historyStart, source: source)
+    }
     private static func firstRecord(path: String, limit: Int) throws -> ([String: Any], SourceRef) {
         try LocalContentGuard.requireResident(path: path)
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path)); defer { try? handle.close() }
         var data = Data()
         while let chunk = try handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
-            data.append(chunk)
-            if let newline = data.firstIndex(of: 10) {
-                let record = Data(data.prefix(upTo: newline))
+            let newlineOffset = chunk.withUnsafeBytes { bytes -> Int? in
+                guard let start = bytes.baseAddress, let newline = memchr(start, 10, bytes.count) else { return nil }
+                return start.distance(to: newline)
+            }
+            if let newlineOffset {
+                guard data.count <= limit - newlineOffset else { throw LensError.unsupported("session_meta dépasse \(limit) octets") }
+                data.append(contentsOf: chunk.prefix(newlineOffset))
+                let record = data
                 return ((try JSONSerialization.jsonObject(with: record)) as? [String: Any] ?? [:], SourceRef(path: path, offset: 0, length: record.count, line: 1, sha256: Self.digest(record)))
             }
-            if data.count > limit { throw LensError.unsupported("session_meta dépasse \(limit) octets") }
+            guard data.count <= limit - chunk.count else { throw LensError.unsupported("session_meta dépasse \(limit) octets") }
+            data.append(chunk)
         }
         return ((try JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:], SourceRef(path: path, offset: 0, length: data.count, line: 1, sha256: Self.digest(data)))
     }
@@ -920,10 +972,14 @@ public actor SessionEngine {
         let clean = redact(String(bounded.prefix(limit)))
         return more ? clean + "\n[aperçu ; contenu complet chargé depuis la source]" : clean
     }
+    private static let redactions: [(NSRegularExpression, String)] = [#"(?i)(\"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|client_secret|creator_user_id|creator_account_id)\"\s*:\s*\")[^\"]*(\")"#, #"(?i)(Bearer\s+)[A-Za-z0-9._~+/-]{12,}"#, #"\bsk-[A-Za-z0-9_-]{16,}\b"#].compactMap { pattern in
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        return (regex, pattern.hasPrefix("\\b") ? "[secret masqué]" : pattern.contains("Bearer") ? "$1[secret masqué]" : "$1[secret masqué]$2")
+    }
     private static func redact(_ text: String) -> String {
         var value = text
-        for pattern in [#"(?i)(\"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|client_secret|creator_user_id|creator_account_id)\"\s*:\s*\")[^\"]*(\")"#, #"(?i)(Bearer\s+)[A-Za-z0-9._~+/-]{12,}"#, #"\bsk-[A-Za-z0-9_-]{16,}\b"#] {
-            if let regex = try? NSRegularExpression(pattern: pattern) { value = regex.stringByReplacingMatches(in: value, range: NSRange(value.startIndex..., in: value), withTemplate: pattern.hasPrefix("\\b") ? "[secret masqué]" : pattern.contains("Bearer") ? "$1[secret masqué]" : "$1[secret masqué]$2") }
+        for (regex, replacement) in redactions {
+            value = regex.stringByReplacingMatches(in: value, range: NSRange(value.startIndex..., in: value), withTemplate: replacement)
         }
         return value
     }
@@ -946,7 +1002,14 @@ public actor SessionEngine {
         return matchesDiagnostic(diagnostic, patterns: successDiagnostics)
     }
     private static func digest(_ value: String) -> String { digest(Data(value.utf8)) }
-    private static func digest(_ value: Data) -> String { SHA256.hash(data: value).map { String(format: "%02x", $0) }.joined() }
+    private static let digestHex = Array("0123456789abcdef".utf8)
+    private static func digest(_ value: Data) -> String {
+        var encoded: [UInt8] = []; encoded.reserveCapacity(64)
+        for byte in SHA256.hash(data: value) {
+            encoded.append(digestHex[Int(byte >> 4)]); encoded.append(digestHex[Int(byte & 15)])
+        }
+        return String(decoding: encoded, as: UTF8.self)
+    }
     private static func resolve(_ path: String, cwd: String) -> String {
         if path.hasPrefix("file://"), let url = URL(string: path) { return url.standardizedFileURL.path }
         if path.hasPrefix("http://") || path.hasPrefix("https://") || path.hasPrefix("data:") || path.hasPrefix("trace:") { return path }

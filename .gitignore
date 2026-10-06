@@ -33,6 +33,7 @@ __pycache__/
 /scripts/*.swift
 !/scripts/build.sh
 !/scripts/test.sh
+!/scripts/measure-session-catalog.py
 !/scripts/run.sh
 !/scripts/stop.sh
 !/scripts/lens_local.py

@@ -9,6 +9,12 @@ Compatibility and test coverage are documented in each release's notes. A listed
 ### Fixed
 
 - Keep custom control accents consistent across settings navigation, session dialogs, search focus, text selection and content indicators. Native System mode continues to follow macOS.
+- Let Open Session cancel a Lens read and keep a startup restoration from overriding an explicit session choice.
+
+### Changed
+
+- Reuse compact, source-validated session metadata across refreshes and restarts. Bound its memory estimate and disk namespace to 8 MiB, revalidate source stamps, and merge current titles, database relations and ownership exclusions.
+- Reduce first-record scanning, hash formatting, regular-expression compilation and temporary JSON retention during catalog loading. Share overlapping catalog requests and drain cancelled readers before cleanup.
 
 ## [0.42.0] - 2026-10-06
 

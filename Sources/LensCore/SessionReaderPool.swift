@@ -14,19 +14,52 @@ public actor SessionReader {
     private struct Flight { let id: UUID; let task: Task<Void, Never> }
     private var flight: Flight?
     private var waiters: [UUID: CheckedContinuation<SessionReaderUpdate, Error>] = [:]
+    private var catalogFlight: Flight?
+    private var retiringCatalogFlights: [UUID: Task<Void, Never>] = [:]
+    private var catalogWaiters: [UUID: CheckedContinuation<[SessionSummary], Error>] = [:]
     private var closed = false
     private var closingTask: Task<Void, Never>?
     internal private(set) var startedCollections = 0
+    internal private(set) var startedCatalogs = 0
 
     fileprivate init(engine: SessionEngine, rootID: String?) { self.engine = engine; self.rootID = rootID }
 
     public func catalog() async throws -> [SessionSummary] {
         try Task.checkCancellation()
         guard !closed else { throw CancellationError() }
-        let result = try await engine.catalog()
+        let waiterID = UUID()
+        let result: [SessionSummary] = try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+                catalogWaiters[waiterID] = continuation
+                if catalogFlight == nil { beginCatalog() }
+            }
+        }, onCancel: { Task { await self.cancelCatalogWaiter(waiterID) } })
         try Task.checkCancellation()
         guard !closed else { throw CancellationError() }
         return result
+    }
+
+    private func beginCatalog() {
+        let engine = self.engine, id = UUID()
+        let task = Task { [weak self] in
+            do { let result = try await engine.catalog(); await self?.finishCatalog(id: id, result: .success(result)) }
+            catch { await self?.finishCatalog(id: id, result: .failure(error)) }
+        }
+        catalogFlight = Flight(id: id, task: task); startedCatalogs += 1
+    }
+    private func finishCatalog(id: UUID, result: Result<[SessionSummary], Error>) {
+        retiringCatalogFlights[id] = nil
+        guard !closed, catalogFlight?.id == id else { return }
+        catalogFlight = nil
+        let pending = catalogWaiters; catalogWaiters = [:]
+        for continuation in pending.values { continuation.resume(with: result) }
+    }
+    private func cancelCatalogWaiter(_ id: UUID) {
+        catalogWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
+        if catalogWaiters.isEmpty, let flight = catalogFlight {
+            flight.task.cancel(); retiringCatalogFlights[flight.id] = flight.task; catalogFlight = nil
+        }
     }
 
     public func load() async throws -> SessionReaderUpdate { try await collect(refresh: false) }
@@ -77,9 +110,15 @@ public actor SessionReader {
 
     fileprivate func close() async {
         if closed { await closingTask?.value; return }
-        closed = true; closingTask = flight?.task; closingTask?.cancel(); flight = nil; latest = nil
+        closed = true
+        let tasks = [flight?.task, catalogFlight?.task].compactMap { $0 } + Array(retiringCatalogFlights.values)
+        for task in tasks { task.cancel() }
+        closingTask = Task { for task in tasks { await task.value } }
+        flight = nil; catalogFlight = nil; retiringCatalogFlights = [:]; latest = nil
         let pending = waiters; waiters = [:]
         for continuation in pending.values { continuation.resume(throwing: CancellationError()) }
+        let pendingCatalogs = catalogWaiters; catalogWaiters = [:]
+        for continuation in pendingCatalogs.values { continuation.resume(throwing: CancellationError()) }
         // Cancellation alone doesn't wait for an already-running cache write.
         await closingTask?.value
         closingTask = nil
@@ -115,7 +154,8 @@ public actor SessionReaderPool {
     private var entries: [SessionReaderKey: Entry] = [:]
     private var closingReaders: [UUID: SessionReader] = [:]
     private var acquisitionsSuspended = false
-    public init() {}
+    private let investigationRegistryDirectory: URL?
+    public init(investigationRegistryDirectory: URL? = nil) { self.investigationRegistryDirectory = investigationRegistryDirectory }
     internal var activeReaderCount: Int { entries.count }
     public func setAcquisitionsSuspended(_ value: Bool) { acquisitionsSuspended = value }
 
@@ -143,7 +183,7 @@ public actor SessionReaderPool {
         let key = SessionReaderKey(home: Self.canonicalKeyURL(home).path, cache: Self.canonicalKeyURL(cache).path, rootID: root)
         let reader: SessionReader
         if let entry = entries[key] { reader = entry.reader }
-        else { reader = SessionReader(engine: SessionEngine(home: sourceURL, cacheDirectory: cacheURL), rootID: root) }
+        else { reader = SessionReader(engine: SessionEngine(home: sourceURL, cacheDirectory: cacheURL, investigationRegistryDirectory: investigationRegistryDirectory), rootID: root) }
         let id = UUID()
         var subscribers = entries[key]?.subscribers ?? []; subscribers.insert(id)
         entries[key] = Entry(reader: reader, subscribers: subscribers)

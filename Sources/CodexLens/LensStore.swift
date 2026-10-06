@@ -603,15 +603,20 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
     func start() async {
         guard !LensApplicationCoordinator.shared.maintenanceInProgress else { return }
         guard !started else { return }; started = true; isStopped = false; lifecycleGeneration = UUID()
-        let lifecycle = lifecycleGeneration
+        let lifecycle = lifecycleGeneration, initialOpening = openGeneration
         await refreshCatalog()
         guard !Task.isCancelled, !isStopped, lifecycle == lifecycleGeneration else { return }
-        if let index = CommandLine.arguments.firstIndex(of: "--session"), CommandLine.arguments.count > index + 1 {
-            await open(CommandLine.arguments[index + 1])
-        } else if let id = (UserDefaults.standard.dictionary(forKey: "lensRootByWindow") as? [String: String])?[navigationScope] {
+        if initialOpening == openGeneration, let index = CommandLine.arguments.firstIndex(of: "--session"), CommandLine.arguments.count > index + 1 {
+            let commandLineOpening = UUID()
+            showSessionPicker = false
+            await open(CommandLine.arguments[index + 1], generation: commandLineOpening)
+            if snapshot == nil, commandLineOpening == openGeneration { showSessionPicker = true }
+        } else if initialOpening == openGeneration, let id = (UserDefaults.standard.dictionary(forKey: "lensRootByWindow") as? [String: String])?[navigationScope] {
             let restorationOpening = UUID()
+            showSessionPicker = false
             await open(id, generation: restorationOpening)
             if snapshot?.root.id != id { await restoreArchivedRoot(id, lifecycle: lifecycle, opening: restorationOpening) }
+            if snapshot == nil, restorationOpening == openGeneration { showSessionPicker = true }
         }
         guard !Task.isCancelled, !isStopped, lifecycle == lifecycleGeneration else { return }
         pollTask = Task { [weak self] in
@@ -717,7 +722,9 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
             let task = Task { try await lease.reader.catalog() }; catalogTask = task
             let next = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
             guard !Task.isCancelled, !isStopped, lifecycle == lifecycleGeneration, generation == catalogGeneration else { return }
+            let publishSpan = LensSignposts.begin("CatalogPublish")
             catalog = next
+            publishSpan.end()
         } catch is CancellationError { }
         catch { if !Task.isCancelled, !isStopped, lifecycle == lifecycleGeneration, generation == catalogGeneration { self.error = error.localizedDescription } }
         if generation == catalogGeneration { catalogTask = nil }
