@@ -6,6 +6,8 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+## [0.42.1] - 2026-10-06
+
 ### Fixed
 
 - Keep custom control accents consistent across settings navigation, session dialogs, search focus, text selection and content indicators. Native System mode continues to follow macOS.
@@ -105,6 +107,7 @@ These versions were local deliveries, not published GitHub releases. Their dates
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
 
-[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.0...main
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.1...main
+[0.42.1]: https://github.com/wolf75222/CodexLens/compare/v0.42.0...v0.42.1
 [0.42.0]: https://github.com/wolf75222/CodexLens/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/wolf75222/CodexLens/releases/tag/v0.41.0
