@@ -54,30 +54,41 @@ struct AgentsView: View {
                 }
             }.padding(.horizontal, 14).padding(.vertical, 10)
             List(tree, id: \.0.id, selection: store.objectListSelection(in: .agents)) { agent, depth in
-                Button { store.navigate(.agent(agent.id)); listFocused = true } label: {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: LensSymbols.agent(agent.relation)).font(.system(size: 13, weight: .medium)).foregroundStyle(agent.accessible ? accent.color : LensAppearance.warningText).frame(width: 20, height: 18).accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack(spacing: 8) {
-                                Text(agent.name.nonempty ?? String(agent.id.prefix(8))).font(LensUI.body.weight(.semibold)).lineLimit(1).truncationMode(.middle).help(agent.name.nonempty ?? agent.id)
-                                Spacer(minLength: 6)
-                                LensSelectionMark(selected: store.selection == .agent(agent.id))
+                HStack(alignment: .top, spacing: 6) {
+                    Button { store.navigate(.agent(agent.id)); listFocused = true } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: LensSymbols.agent(agent.relation)).font(.system(size: 13, weight: .medium)).foregroundStyle(agent.accessible ? accent.color : LensAppearance.warningText).frame(width: 20, height: 18).accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack(spacing: 8) {
+                                    Text(agent.name.nonempty ?? String(agent.id.prefix(8))).font(LensUI.body.weight(.semibold)).lineLimit(1).truncationMode(.middle).help(agent.name.nonempty ?? agent.id)
+                                    Spacer(minLength: 6)
+                                    LensSelectionMark(selected: store.selection == .agent(agent.id))
+                                }
+                                HStack(spacing: 8) {
+                                    Text(relationLabel(agent.relation)).lineLimit(1)
+                                    AgentRoleCaption(agent: agent)
+                                    Spacer(minLength: 6)
+                                    Text(LensUI.count(store.presentation?.eventCountByAgent[agent.id] ?? 0, singular: "événement", plural: "événements")).monospacedDigit().lineLimit(1)
+                                }.font(LensUI.metadata).foregroundStyle(.secondary)
+                                Text(agent.mission.nonempty ?? LensL10n.text("Mission non enregistrée")).font(LensUI.readingFont(store.fontSize)).lineLimit(3).foregroundStyle(.secondary)
+                                Text(agent.id).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(agent.id)
+                                if !agent.accessible { Label(LensL10n.text("Historique inaccessible"), systemImage: LensSymbols.name("doc.questionmark")).font(.caption).foregroundStyle(.secondary) }
                             }
-                            HStack(spacing: 8) {
-                                Text(relationLabel(agent.relation)).lineLimit(1)
-                                Spacer(minLength: 6)
-                                Text(LensUI.count(store.presentation?.eventCountByAgent[agent.id] ?? 0, singular: "événement", plural: "événements")).monospacedDigit().lineLimit(1)
-                            }.font(LensUI.metadata).foregroundStyle(.secondary)
-                            Text(agent.mission.nonempty ?? LensL10n.text("Mission non enregistrée")).font(LensUI.readingFont(store.fontSize)).lineLimit(3).foregroundStyle(.secondary)
-                            Text(agent.id).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(agent.id)
-                            if !agent.accessible { Label(LensL10n.text("Historique inaccessible"), systemImage: LensSymbols.name("doc.questionmark")).font(.caption).foregroundStyle(.secondary) }
-                        }
-                    }.padding(.leading, CGFloat(depth) * 20).padding(.vertical, 9).contentShape(Rectangle())
-                }.buttonStyle(.plain).tag(agent.id).listRowBackground(store.selection == .agent(agent.id) ? accent.selectionColor : .clear)
-                    .simultaneousGesture(TapGesture(count: 2).onEnded { store.navigate(.agent(agent.id), newTab: true) })
-                    .help(LensL10n.text("Double-clic ou Retour pour ouvrir l’agent sélectionné."))
-                    .accessibilityAddTraits(store.selection == .agent(agent.id) ? .isSelected : [])
+                        }.padding(.vertical, 9).contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                        .simultaneousGesture(TapGesture(count: 2).onEnded { store.navigate(.agent(agent.id), newTab: true) })
+                        .help(LensL10n.text("Double-clic ou Retour pour ouvrir l’agent sélectionné."))
+                        .accessibilityAddTraits(store.selection == .agent(agent.id) ? .isSelected : [])
+                        Button { store.showAgentMetadata(agent.id) } label: {
+                            Image(systemName: LensSymbols.name("info.circle")).frame(width: 24, height: 24)
+                        }.buttonStyle(.borderless).padding(.top, 7)
+                            .help(LensL10n.text("Informations sur l’agent"))
+                            .accessibilityLabel(LensL10n.text("Informations sur l’agent {0}", agent.name.nonempty ?? agent.id))
+                            .accessibilityIdentifier("lens-agent-information")
+                }.padding(.leading, CGFloat(depth) * 20).tag(agent.id)
+                    .listRowBackground(store.selection == .agent(agent.id) ? accent.selectionColor : .clear)
                     .contextMenu {
+                        Button(LensL10n.text("Informations sur l’agent")) { store.showAgentMetadata(agent.id) }
                         LensActionButton(store: store, action: .investigate, target: .agent(agent.id))
                         Button(LensL10n.text("Ouvrir dans un onglet")) { store.navigate(.agent(agent.id), newTab: true) }
                         Button(LensL10n.text("Filtrer son activité")) { store.showActivity(for: .agent(agent.id)) }

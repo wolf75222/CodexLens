@@ -32,7 +32,7 @@ public actor SessionEngine {
     private let maximumLineBytes = 64 * 1024 * 1024
     private let maximumIndexedEvents = 150_000
     // Parsing changes must invalidate cached classification of unchanged source bytes.
-    private let cacheVersion = 7
+    private let cacheVersion = 8
 
     public init(home: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex"), cacheDirectory: URL? = nil, investigationRegistryDirectory: URL? = nil) {
         self.home = home.standardizedFileURL
@@ -59,7 +59,7 @@ public actor SessionEngine {
             do {
                 let database = try ReadOnlyDatabase(url: databaseURL)
                 let columns = try database.columns("threads")
-                let wanted = ["id", "rollout_path", "updated_at", "updated_at_ms", "cwd", "title", "cli_version", "agent_nickname", "agent_path", "source", "git_branch", "git_sha"].filter { columns.contains($0) }
+                let wanted = ["id", "rollout_path", "updated_at", "updated_at_ms", "cwd", "title", "cli_version", "agent_nickname", "agent_path", "agent_role", "agent_description", "model", "model_provider", "reasoning_effort", "source", "git_branch", "git_sha"].filter { columns.contains($0) }
                 guard wanted.contains("id"), wanted.contains("rollout_path") else { throw LensError.unsupported("Schéma threads sans id/rollout_path.") }
                 for row in try database.rows("SELECT " + wanted.joined(separator: ",") + " FROM threads") {
                     guard let id = row["id"], let path = row["rollout_path"] else { continue }
@@ -68,6 +68,7 @@ public actor SessionEngine {
                     let spawn = Self.spawnMetadata(source)
                     let date = Double(row["updated_at_ms"] ?? "").map { Date(timeIntervalSince1970: $0 / 1000) } ?? Double(row["updated_at"] ?? "").map(Date.init(timeIntervalSince1970:)) ?? .distantPast
                     found[id] = SessionSummary(id: id, title: Self.redact(row["title"] ?? ""), cwd: row["cwd"] ?? "", paths: [path], modifiedAt: date, cliVersion: row["cli_version"] ?? "", parentID: spawn?["parent_thread_id"] as? String, relation: spawn == nil ? .root : .subagent, agentName: row["agent_nickname"] ?? row["agent_path"] ?? "", evidence: "state_5.sqlite threads (lecture SQLITE_OPEN_READONLY)")
+                    found[id]?.agentMetadata = AgentMetadataField.threadFields(row, path: databaseURL.path)
                     candidatePaths.insert(path)
                     meta[id] = RolloutMetadata(id: id, cwd: row["cwd"] ?? "", branch: row["git_branch"], gitRef: row["git_sha"], name: row["agent_nickname"] ?? row["agent_path"] ?? "", parent: spawn?["parent_thread_id"] as? String, relation: spawn == nil ? .root : .subagent)
                 }
@@ -130,6 +131,7 @@ public actor SessionEngine {
                 summary.cliVersion = header.cliVersion ?? summary.cliVersion
                 summary.agentName = parsed.name.isEmpty ? summary.agentName : parsed.name
                 summary.modifiedAt = max(summary.modifiedAt, stamp.modifiedAt)
+                summary.agentMetadata = (summary.agentMetadata ?? []) + (header.agentMetadata ?? [])
                 if let parent = parsed.parent { summary.parentID = parent; summary.relation = parsed.relation; relationSources[id] = [firstSource] }
                 summary.evidence += "; session_meta initial propriétaire (\(URL(fileURLWithPath: path).lastPathComponent))"
                 if let existing = meta[id], parsed.parent == nil { parsed.parent = existing.parent; parsed.relation = existing.relation }
@@ -462,11 +464,14 @@ public actor SessionEngine {
             let incoming = events.first { $0.agentID == id && $0.kind == .user }
             let spawnObservation = all.first { $0.spawnedChildID == id && $0.event.agentID == summary.parentID }
             let parentMission = spawnObservation.flatMap { observation in all.first { $0.event.agentID == summary.parentID && $0.event.callID == observation.event.callID && $0.delegatedMission != nil } }
+            let parentRequest = spawnObservation.flatMap { observation in all.first { $0.event.agentID == summary.parentID && $0.event.callID == observation.event.callID && $0.delegatedMetadata != nil } }
             let encrypted = events.first { $0.agentID == id && $0.preview.contains("Charge utile chiffrée") }
             let mission = id == selectedID ? incoming?.preview ?? "" : parentMission?.delegatedMission ?? incoming?.preview ?? (encrypted == nil ? "Mission non enregistrée dans les données disponibles." : "Charge utile de mission chiffrée, non accessible dans ce journal.")
             let missionEventID = id == selectedID ? incoming?.id : parentMission?.event.id ?? incoming?.id ?? encrypted?.id
             let parentSources = relationSources[id] ?? spawnObservation.map { [$0.event.source] + $0.event.supplementarySources } ?? []
-            agents.append(AgentRecord(id: id, parentID: id == selectedID ? nil : summary.parentID, name: summary.agentName.isEmpty ? (id == selectedID ? "Session principale" : "Agent \(id.prefix(8))") : summary.agentName, relation: id == selectedID ? .root : summary.relation, mission: mission, missionEventID: missionEventID, evidence: summary.evidence, paths: summary.paths, environmentIDs: environments.values.filter { $0.agentIDs.contains(id) }.map(\.id).sorted(), accessible: accessible, relationSources: parentSources))
+            var agentMetadata = summary.agentMetadata ?? []
+            if let requested = parentRequest?.delegatedMetadata { agentMetadata += requested }
+            agents.append(AgentRecord(id: id, parentID: id == selectedID ? nil : summary.parentID, name: summary.agentName.isEmpty ? (id == selectedID ? "Session principale" : "Agent \(id.prefix(8))") : summary.agentName, relation: id == selectedID ? .root : summary.relation, mission: mission, missionEventID: missionEventID, evidence: summary.evidence, paths: summary.paths, environmentIDs: environments.values.filter { $0.agentIDs.contains(id) }.map(\.id).sorted(), accessible: accessible, relationSources: parentSources, metadata: agentMetadata.isEmpty ? nil : agentMetadata))
             if !accessible { coverage.append(CoverageIssue("descendant inaccessible", "Lien parent/enfant enregistré pour \(id), mais ses octets de journal sont indisponibles.", source: summary.paths.first ?? id)) }
             if let version = summaries[id]?.cliVersion, !version.isEmpty, !version.hasPrefix("0.158"), !version.hasPrefix("0.159") { coverage.append(CoverageIssue("compatibilité", "Version \(version) hors des familles vérifiées 0.158/0.159 ; champs inconnus conservés comme événements bruts.", source: id)) }
         }
@@ -624,7 +629,11 @@ public actor SessionEngine {
                     event.preview = Self.preview(Self.pretty(visible))
                     index.issues.append(CoverageIssue("mission opaque", "Forme chiffrée reconnue dans un message d’agent ; contenu et authenticité non vérifiés. Aucun texte de mission reconstruit.", source: source.path))
                 }
-                if name.contains("spawn_agent") { record.delegatedMission = opaqueMessage ? "Mission opaque ; contenu non accessible dans les données visibles." : (args["message"] as? String).map(Self.preview) }
+                if name.contains("spawn_agent") {
+                    record.delegatedMission = opaqueMessage ? "Mission opaque ; contenu non accessible dans les données visibles." : (args["message"] as? String).map(Self.preview)
+                    var metadataSource = source; metadataSource.sha256 = record.fingerprint
+                    record.delegatedMetadata = AgentMetadataField.delegationFields(args, source: metadataSource, eventID: event.id)
+                }
                 let cwd = args["workdir"] as? String ?? args["cwd"] as? String
                 if let cwd { event.environmentID = Self.resolve(cwd, cwd: index.cwd) }
                 let command = args["cmd"] as? String ?? args["command"] as? String ?? ""
@@ -848,14 +857,26 @@ public actor SessionEngine {
         }
     }
     private func selectedSignature(root: String) -> String {
+        struct AgentAttributes: Encodable {
+            let name: String?
+            let cliVersion: String?
+            let metadata: [AgentMetadataField]?
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
         let ids = descendants(of: root).sorted()
         return Self.digest(ids.map { id in
             let summary = summaries[id]
+            // The thread database can change while the journal stays unchanged.
+            // Refresh the displayed fields without invalidating cached headers.
+            let attributes = AgentAttributes(name: summary?.agentName,
+                cliVersion: summary?.cliVersion, metadata: summary?.agentMetadata)
+            let metadataSignature = Self.digest((try? encoder.encode(attributes)) ?? Data())
             let paths = (summary?.paths ?? []).sorted().map { path in
                 let a = (try? FileManager.default.attributesOfItem(atPath: path)) ?? [:]
                 return path + ":" + String(describing: a[.size] ?? "") + ":" + String(describing: a[.systemFileNumber] ?? "") + ":" + String((a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)
             }.joined(separator: "|")
-            return id + ":" + (summary?.parentID ?? "") + ":" + (summary?.relation.rawValue ?? "") + ":" + (summary?.title ?? "") + ":" + paths
+            return id + ":" + (summary?.parentID ?? "") + ":" + (summary?.relation.rawValue ?? "") + ":" + (summary?.title ?? "") + ":" + paths + ":" + metadataSignature
         }.joined(separator: "\n"))
     }
     private func persist(root: String) -> CoverageIssue? {
@@ -900,7 +921,8 @@ public actor SessionEngine {
         let parsed = RolloutMetadata(payload: payload)
         return SessionCatalogHeader(id: id, sessionID: parsed.sessionID, cwd: parsed.cwd,
             cliVersion: payload["cli_version"] as? String, name: parsed.name, branch: parsed.branch, gitRef: parsed.gitRef,
-            parent: parsed.parent, relation: parsed.relation, historyStart: parsed.historyStart, source: source)
+            parent: parsed.parent, relation: parsed.relation, historyStart: parsed.historyStart, source: source,
+            agentMetadata: AgentMetadataField.sessionFields(payload, source: source))
     }
     private static func firstRecord(path: String, limit: Int) throws -> ([String: Any], SourceRef) {
         try LocalContentGuard.requireResident(path: path)
@@ -1157,6 +1179,7 @@ private struct IndexedEvent: Codable {
     var resultPatchPaths: [String] = []
     var spawnedChildID: String?
     var delegatedMission: String?
+    var delegatedMetadata: [AgentMetadataField]?
     var producedPaths: [String] = []
     mutating func mergeFileChangeStatus(_ other: IndexedEvent, isError: Bool) {
         let existing = fileChangeStatuses ?? fileChangeStatus.map { [$0] } ?? []

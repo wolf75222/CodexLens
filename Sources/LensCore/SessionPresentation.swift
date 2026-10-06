@@ -115,7 +115,7 @@ public actor SessionPresentationBuilder {
             let agentRows = try flattenedAgents(snapshot.agents, agentsByID: agentsByID)
             var searchText: [String: String] = [:]
             for (agent, _) in agentRows {
-                searchText[agent.id] = ([agent.name, agent.id, agent.mission] + agent.environmentIDs + agent.paths).joined(separator: "\n")
+                searchText[agent.id] = ([agent.name, agent.id, agent.mission, AgentMetadataField.searchText(agent.metadata ?? [])] + agent.environmentIDs + agent.paths).joined(separator: "\n")
             }
             agentSearchText = searchText
             let contextInspection = { let span = LensSignposts.begin("ContextInspectionIndex"); defer { span.end() }; return ContextInspectionIndex(events: snapshot.events) }()

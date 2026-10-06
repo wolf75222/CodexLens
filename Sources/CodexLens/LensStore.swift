@@ -41,7 +41,15 @@ struct LensTimelinePosition {
 }
 struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String; let destination: Destination; let title: String }
 
+struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: String }
+
 @MainActor final class LensStore: ObservableObject {
+    @Published private(set) var agentMetadataRequest: LensAgentMetadataRequest?
+    func showAgentMetadata(_ id: String) {
+        guard presentation?.agentsByID[id] != nil else { return }
+        navigate(.agent(id)); inspectorVisible = true
+        agentMetadataRequest = LensAgentMetadataRequest(agentID: id)
+    }
     @Published private(set) var sourceHome: URL
     private var selectedSourceHome: URL?
     private let cacheDirectory: URL?

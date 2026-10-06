@@ -59,6 +59,7 @@ Entry points: **File → Open Session…**, the toolbar's session action, **Comm
 | --- | --- | --- |
 | Optional introduction | Three steps introduce a session, the timeline, and the sidebar chat | Skip is available; the guide can be replayed without resetting the observed session |
 | Session catalogue | Search and select locally available session summaries | A summary is not a guarantee that every descendant or source file remains readable |
+| Agent information | Inspect recorded role, available description, configured model/effort, requested spawn settings and original tasks/instructions | Requests remain distinct from recorded thread data. Child attribution needs explicit IDs; current definitions do not fill historical gaps. [Data boundaries](QA/AGENT_METADATA.md) |
 | Validated catalogue cache | Reuse compact first-record metadata in memory and after restart; refresh titles and relations from current sources | File identity, nanosecond modification/change times, size, mode and cloud flags validate hits; new/deleted files and investigation exclusions are checked on each scan. No prompt or transcript bodies are cached here |
 | ID input | Paste a complete session or thread UUID | Turn IDs and call IDs are not interchangeable with session IDs |
 | Codex link input | Paste `codex://threads/<thread-id>` | The recognized route resolves the UUID; it does not launch or resume that thread in Codex |

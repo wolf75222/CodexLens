@@ -6,6 +6,15 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+### Added
+
+- Agent information in the existing inspector and context menu: recorded role, available descriptions, model/effort configuration, requested spawn settings and links to original tasks/instructions. Missing fields stay unavailable; request settings require an explicit child link.
+
+### Changed
+
+- Include agent attributes in search and version the compact header/event caches for their new fields, while keeping prompt and instruction bodies in original sources.
+- Refresh agent information when only the Codex thread database changes, without rereading unchanged journal headers.
+
 ## [0.42.1] - 2026-10-06
 
 ### Fixed

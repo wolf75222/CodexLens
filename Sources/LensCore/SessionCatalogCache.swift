@@ -8,9 +8,11 @@ struct SessionCatalogHeader: Codable {
     var id: String, sessionID: String?, cwd: String, cliVersion: String?, name: String
     var branch: String?, gitRef: String?, parent: String?, relation: RelationKind, historyStart: Int?
     var source: SourceRef
+    var agentMetadata: [AgentMetadataField]? = nil
     var estimatedBytes: Int {
-        [id, sessionID ?? "", cwd, cliVersion ?? "", name, branch ?? "", gitRef ?? "", parent ?? "", source.path]
+        let base = [id, sessionID ?? "", cwd, cliVersion ?? "", name, branch ?? "", gitRef ?? "", parent ?? "", source.path]
             .reduce(512) { $0 + $1.utf8.count * 2 }
+        return base + (agentMetadata ?? []).reduce(0) { $0 + 256 + ($1.value.utf8.count + $1.sourcePath.utf8.count) * 2 }
     }
     func isValid(path: String) -> Bool {
         !id.isEmpty && source.path == path && source.offset == 0 && source.line == 1
@@ -71,7 +73,7 @@ struct SessionCatalogCache {
                let container = try? PropertyListDecoder().decode(Container.self, from: data),
                container.checksum == Data(SHA256.hash(data: container.payload)),
                let envelope = try? PropertyListDecoder().decode(Envelope.self, from: container.payload),
-               envelope.version == 1, envelope.home == home, envelope.entries.count <= Self.maximumEntries {
+               envelope.version == 2, envelope.home == home, envelope.entries.count <= Self.maximumEntries {
                 for (path, entry) in envelope.entries where paths.contains(path) && entry.header.isValid(path: path) {
                     guard estimatedBytes <= Self.maximumBytes - entry.header.estimatedBytes else { break }
                     entries[path] = entry; estimatedBytes += entry.header.estimatedBytes; clock = max(clock, entry.used)
@@ -106,7 +108,7 @@ struct SessionCatalogCache {
         guard dirty, !Task.isCancelled else { return }
         do {
             let encoder = PropertyListEncoder(); encoder.outputFormat = .binary
-            let payload = try encoder.encode(Envelope(version: 1, home: home, entries: entries))
+            let payload = try encoder.encode(Envelope(version: 2, home: home, entries: entries))
             let data = try encoder.encode(Container(payload: payload, checksum: Data(SHA256.hash(data: payload))))
             guard data.count <= Self.maximumBytes else { return }
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])

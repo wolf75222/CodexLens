@@ -118,6 +118,14 @@ jobs:
           zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$colors" --corpus "$corpus" --entrypoint ControlColorsMain.swift --after-source-freeze --run
           mkdir -p dist/ui-validation/colors
           cp "$colors/native-design-v07-receipt.json" dist/ui-validation/colors/receipt.json
+      - name: Agent information regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          agents="/private/tmp/lens-ci-agents-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$agents" --corpus "$corpus" --entrypoint AgentMetadataMain.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/agents
+          cp "$agents/native-design-v07-receipt.json" dist/ui-validation/agents/receipt.json
+          cp "$agents/"*.png dist/ui-validation/agents/
       - name: Signed update regression
         run: |
           updates="/private/tmp/lens-ci-updates-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -133,7 +141,7 @@ jobs:
         if: always()
         run: |
           mkdir -p dist/native-diagnostics
-          for kind in ui navigation scenes curves timeline; do
+          for kind in ui navigation scenes curves timeline picker colors agents; do
             probe="/private/tmp/lens-ci-${kind}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             mkdir -p "dist/native-diagnostics/$kind"
             for file in native-design-v07-receipt.json process-receipt.json phase.json scene-phase.json runtime.log build.log toolchain.log; do

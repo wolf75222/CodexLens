@@ -114,7 +114,7 @@ final class FileChangeAdapterTests: XCTestCase {
         XCTAssertEqual(initial.changes.count, 1)
         let cacheURL = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: fixture.cache, includingPropertiesForKeys: nil).first { $0.pathExtension == "json" })
         var cache = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: cacheURL)) as? [String: Any])
-        XCTAssertEqual(cache["version"] as? Int, 7)
+        XCTAssertEqual(cache["version"] as? Int, 8)
         var files = try XCTUnwrap(cache["files"] as? [String: [String: Any]])
         for key in Array(files.keys) {
             var index = try XCTUnwrap(files[key])
@@ -128,7 +128,7 @@ final class FileChangeAdapterTests: XCTestCase {
         XCTAssertEqual(restored.changes.count, 1, "Stale classifications cannot be restored solely because source bytes are unchanged")
         XCTAssertEqual(restored.changes.first?.id, initial.changes.first?.id)
         let replaced = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: cacheURL)) as? [String: Any])
-        XCTAssertEqual(replaced["version"] as? Int, 7)
+        XCTAssertEqual(replaced["version"] as? Int, 8)
     }
 
     private struct Fixture {

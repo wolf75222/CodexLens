@@ -154,8 +154,7 @@ enum CapsuleJSON {
 }
 
 enum EvidenceRedaction {
-    static func redact(_ text: String) -> String {
-        var value = text
+    private static let expressions: [(NSRegularExpression, String)] = {
         let patterns: [(String, String)] = [
             (#"(?is)-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----"#, "[clé privée masquée]"),
             (#"(?i)(Bearer\s+)[A-Za-z0-9._~+/-]{8,}"#, "$1[secret masqué]"),
@@ -164,7 +163,14 @@ enum EvidenceRedaction {
             (#"(?i)(https?://)[^\s/:@]+:[^\s/@]+@"#, "$1[identifiants masqués]@"),
             (#"(?i)([?&](?:token|key|api_key|access_token|password)=)[^&\s]+"#, "$1[secret masqué]")
         ]
-        for (pattern, replacement) in patterns { if let expression = try? NSRegularExpression(pattern: pattern) { value = expression.stringByReplacingMatches(in: value, range: NSRange(value.startIndex..., in: value), withTemplate: replacement) } }
+        return patterns.compactMap { pattern, replacement in
+            guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
+            return (expression, replacement)
+        }
+    }()
+    static func redact(_ text: String) -> String {
+        var value = text
+        for (expression, replacement) in expressions { value = expression.stringByReplacingMatches(in: value, range: NSRange(value.startIndex..., in: value), withTemplate: replacement) }
         return value
     }
     static func utf8Prefix(_ text: String, limit: Int) -> String {
