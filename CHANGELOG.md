@@ -24,6 +24,7 @@ Compatibility and test coverage are documented in each release's notes. A listed
 ### Fixed
 
 - Restore the activity selection, list scroll anchor, timeline framing, filters and paused live state when returning from a reading tab.
+- Ignore temporary AppKit clip positions before timeline layout or while a saved position is waiting to be restored.
 - Closing the last reading tab returns to the originating collection without clearing its selection.
 - Scope stored reading tabs and prepared context-menu commands to the observed source, preventing same-ID sessions in different source folders from sharing destinations.
 - Wait for presentation indexes before opening a selected item in another window, and reject stale window openings.

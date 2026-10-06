@@ -47,7 +47,9 @@ Tab persistence includes the observed source path. Legacy entries without a sour
 
 ## Validation
 
-The final Release logic run executed **536 tests, four optional skips, zero failures**. The source-matched native regression entrypoint executed **54 assertions, zero failures**, and exits nonzero if an assertion or setup/layout flow fails. Its actual AppKit event-list top row and offset remained exact through Back and both changed-filter restoration routes: offset 7, vertical origin 10217. These pixel values are fixture observations, not performance goals.
+The Release logic run executed **536 tests, four optional skips, zero failures**. The final source-matched native regression entrypoint executed **58 assertions, zero failures**, and exits nonzero if an assertion or setup/layout flow fails. Its actual AppKit event-list top row and offset remained exact through Back and both changed-filter restoration routes: offset 7, vertical origin 10217. The recorded timeline zoom remained 19.6 and the origin remained (1600, 0). These pixel values are fixture observations, not performance goals.
+
+The first remote runs exposed four failed temporal-restoration assertions on macOS 26.6.2. AppKit could publish a new clip's temporary zero origin before its first usable layout. The bounds callback now accepts updates only after a matching root and restoration revision have been configured. Four deterministic checks cover notifications before layout, a pending restoration, applying the saved native clip origin and ordinary user scrolling. Expected and actual temporal values are retained in receipts, and CI retains failure diagnostics even when a native probe fails.
 
 The harness also verified paused Live state, closing a preview back to its originating reader, closing a background reader without hiding the preview, captured-target window acceptance, distinct window navigation scopes, shared source-engine identity, surviving source reads after another observer closes, and unchanged fixture journals/worktree files. Three Core regressions cover cold aliased caches, source folders created later and blocked cache locations.
 

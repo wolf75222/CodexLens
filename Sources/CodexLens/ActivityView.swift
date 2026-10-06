@@ -695,7 +695,12 @@ struct TimelineView: NSViewRepresentable {
         }
         private func resize() { if let store, !isConfiguring { configure(store: store, live: live) } }
         @objc private func boundsChanged() {
-            guard !isConfiguring, let scroll, let store else { return }
+            // AppKit emits bounds notifications while a reader is remounted,
+            // before configure can apply the restored origin. Those layout
+            // notifications are not user scrolling and must not replace it.
+            guard !isConfiguring, let scroll, let store,
+                  previousViewport != nil, rootID == store.snapshot?.root.id,
+                  previousReset == store.timelineReset else { return }
             if live { liveOrigin = scroll.contentView.bounds.origin }
             else { store.timelineOrigin = scroll.contentView.bounds.origin }
             scroll.documentView?.needsDisplay = true

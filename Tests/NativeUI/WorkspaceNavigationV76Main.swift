@@ -69,6 +69,29 @@ import SwiftUI
             && manifest?["productionEntryPointReplaced"] as? Bool == true
             && manifest?["copiedAppSourcesModified"] as? Bool == false)
 
+        // Exercise the pre-layout notification ordering without relying on
+        // one WindowServer's timing when remounting the SwiftUI hierarchy.
+        let pendingScroll = TimelineScrollView(frame: .zero)
+        pendingScroll.documentView = TimelineCanvas(frame: .zero)
+        let pendingCoordinator = TimelineView.Coordinator()
+        pendingCoordinator.attach(pendingScroll, store: store)
+        store.timelineZoom = 19.6; store.timelineOrigin = CGPoint(x: 1600, y: 0)
+        pendingCoordinator.configure(store: store)
+        NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: pendingScroll.contentView)
+        check("pre-layout-notification-cannot-overwrite-saved-timeline-origin", store.timelineOrigin.x == 1600)
+        pendingScroll.setFrameSize(NSSize(width: 1000, height: 180))
+        pendingCoordinator.configure(store: store)
+        store.timelineOrigin = CGPoint(x: 1200, y: 0); store.timelineReset &+= 1
+        pendingScroll.contentView.scroll(to: .zero)
+        NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: pendingScroll.contentView)
+        check("pending-restoration-notification-cannot-overwrite-saved-timeline-origin", store.timelineOrigin.x == 1200)
+        pendingCoordinator.configure(store: store)
+        check("pending-restoration-applies-saved-origin-to-native-clip", abs(pendingScroll.contentView.bounds.origin.x - 1200) < 1)
+        pendingScroll.contentView.scroll(to: CGPoint(x: 1300, y: 0))
+        NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: pendingScroll.contentView)
+        check("configured-user-scroll-updates-timeline-origin", abs(store.timelineOrigin.x - 1300) < 1)
+        pendingCoordinator.detach()
+
         store.navigate(a)
         check("ordinary-collection-selection-creates-no-reader", store.tabs.isEmpty && store.workspacePresented
             && store.selection == a && store.tabContentDestination == nil)
@@ -94,6 +117,10 @@ import SwiftUI
         try await settle(host)
         let baseline = try viewport(in: host, store: store)
         let timelineOrigin = store.timelineOrigin, timelineZoom = store.timelineZoom
+        func temporalReceipt(_ scenario: String) -> [String: Any] {
+            ["scenario": scenario, "expectedZoom": timelineZoom, "actualZoom": store.timelineZoom,
+             "expectedOrigin": NSStringFromPoint(timelineOrigin), "actualOrigin": NSStringFromPoint(store.timelineOrigin)]
+        }
         check("native-list-is-scrolled-away-from-selected-message", baseline.origin.y > 1000
             && baseline.anchorID != original.id && store.selection == a)
         check("native-list-publishes-lightweight-anchor", store.eventListViewport(calls: false).map {
@@ -109,6 +136,7 @@ import SwiftUI
         check("temporal-viewport-is-not-default-before-opening", abs(timelineZoom - 19.6) < 0.001
             && timelineOrigin.x > 100)
         observations.append(baseline.receipt("before-reader"))
+        observations.append(temporalReceipt("before-reader-temporal"))
         let baselineCount = store.events.count
         renders.append(try capture(host, path: output.appendingPathComponent("component-cache-workspace-before-reader.png")))
 
@@ -128,6 +156,7 @@ import SwiftUI
         check("back-restores-time-zoom-and-pan", abs(store.timelineZoom - timelineZoom) < 0.001
             && distance(store.timelineOrigin, timelineOrigin) < 1)
         observations.append(try viewport(in: host, store: store).receipt("after-back"))
+        observations.append(temporalReceipt("after-back-temporal"))
         renders.append(try capture(host, path: output.appendingPathComponent("component-cache-workspace-after-back.png")))
         store.goForward()
         try await waitFor(host, store: store, stage: "forward-restores-reader") { store.tabContentDestination == a }
@@ -141,6 +170,7 @@ import SwiftUI
             && returnedViewport.matches(baseline))
         check("workspace-return-restores-time-place", abs(store.timelineZoom - timelineZoom) < 0.001
             && distance(store.timelineOrigin, timelineOrigin) < 1)
+        observations.append(temporalReceipt("after-workspace-return-temporal"))
         for route in ["workspace", "back"] {
             store.navigate(a, newTab: true)
             store.kindFilter = .toolCall
@@ -161,6 +191,7 @@ import SwiftUI
             check("changed-reader-filters-retain-time-zoom-and-pan-" + route,
                 abs(store.timelineZoom - timelineZoom) < 0.001 && distance(store.timelineOrigin, timelineOrigin) < 1)
             observations.append(returned.receipt("after-filter-projection-" + route))
+            observations.append(temporalReceipt("after-filter-projection-temporal-" + route))
         }
         check("keyboard-tab-cycle-enabled-with-one-reader", context.canCycleTabs)
         context.cycleTab(forward: true)
@@ -377,6 +408,8 @@ import SwiftUI
             "selection": String(describing: store.selection), "workspacePresented": store.workspacePresented,
             "tabContent": String(describing: store.tabContentDestination), "activeTab": store.activeTab?.uuidString ?? "none",
             "events": store.events.count, "query": store.query, "kindFilter": String(describing: store.kindFilter),
+            "timelineZoom": store.timelineZoom, "timelineOrigin": NSStringFromPoint(store.timelineOrigin),
+            "timelineReset": store.timelineReset,
             "tables": views.compactMap { $0 as? NSTableView }.map { table in
                 ["class": String(describing: type(of: table)), "columns": table.tableColumns.map { $0.identifier.rawValue },
                  "rows": table.numberOfRows, "frame": NSStringFromRect(table.frame),
