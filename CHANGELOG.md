@@ -8,6 +8,7 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ### Added
 
+- Detailed feature catalogue with native macOS screenshots, entry points, keyboard commands and availability limits.
 - Preview-first release preparation that updates the app version, build number, changelog and release notes together without creating a tag or publishing.
 - CI checks for release metadata consistency, changelog structure and version/tag mismatches.
 - Release-tag validation that rejects commits outside the main branch before building or publishing.

@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "method": "CUA native macOS App.getScreenshot, original JPEG bytes",
+  "sourceBaseline": "5378bd558f4c19259bf332da8ca3e7c833a4fd2a",
+  "version": "0.41.0",
+  "build": "75",
+  "binaryUUID": {
+    "command": [
+      "/usr/bin/xcrun",
+      "dwarfdump",
+      "--uuid",
+      "/private/tmp/CodexLens-features-20261006/Codex Lens (test).app/Contents/MacOS/CodexLens"
+    ],
+    "status": 0,
+    "stdout": "UUID: 7C7ECD3A-984F-319A-A137-9C25E90A853F (arm64) /private/tmp/CodexLens-features-20261006/Codex Lens (test).app/Contents/MacOS/CodexLens\n",
+    "stderr": ""
+  },
+  "swiftCModuleMapInputsMatchedBuildManifest": true,
+  "machOSectionsUnchangedAfterQASigning": true,
+  "qaOnlySignature": true,
+  "syntheticSession": true,
+  "imageRetouching": false,
+  "modelRequests": 0,
+  "networkDeniedForQAProcess": true,
+  "liveRecordsAppendedOnlyToDisposableFixture": 3,
+  "recoveryCandidate": "Deliberate fixture-image copy with matching filename; original identity unconfirmed",
+  "images": {
+    "getting-started.jpg": {
+      "format": "JPEG",
+      "width": 1098,
+      "height": 680,
+      "bytes": 49674,
+      "sha256": "f3dccd722a5df1fb0675a5c88a84f0b9d3aa9c2ef9c9b7f54b6a3c5e1fc93041",
+      "savedAtUTC": "2026-10-06T00:35:07.850441Z"
+    },
+    "session-picker.jpg": {
+      "format": "JPEG",
+      "width": 1240,
+      "height": 1080,
+      "bytes": 105315,
+      "sha256": "87c17a4a53d23e5c2dabe17a2be2c49399441e7a81edefa342d454ad692ce18a",
+      "savedAtUTC": "2026-10-06T00:39:37.460756Z"
+    },
+    "activity-overview.jpg": {
+      "format": "JPEG",
+      "width": 2960,
+      "height": 1640,
+      "bytes": 381375,
+      "sha256": "4b0f7ea26f7cbdc52cf2e20fbca38bebe767504fa3e25931072d0fc25d139134",
+      "savedAtUTC": "2026-10-06T00:36:05.038709Z"
+    },
+    "agents.jpg": {
+      "format": "JPEG",
+      "width": 2960,
+      "height": 1640,
+      "bytes": 536289,
+      "sha256": "3080a64bf0a51533f6c79cccd24a7c713613bf01c1f0e99b35f0a82ab14fe634",
+      "savedAtUTC": "2026-10-06T00:36:43.698048Z"
+    },
+    "tool-output.jpg": {
+      "format": "JPEG",
+      "width": 2960,
+      "height": 1640,
+      "bytes": 338901,
+      "sha256": "3bff365e93274b1fb7c471cb728e952f03c2358c7d9e8efd51d57932fccca506",
+      "savedAtUTC": "2026-10-06T00:38:29.207311Z"
+    },
+    "communications.jpg": {
+      "format": "JPEG",
+      "width": 2960,
+      "height": 1640,
+      "bytes": 378132,
+      "sha256": "cda1c3745a493b58a4a07e5568eb0b42dfad2f29028d6ff0ccfeef03c3f0e9c5",
+      "savedAtUTC": "2026-10-06T00:52:39.344475Z"
+    },
+    "compaction.jpg": {
+      "format": "JPEG",
+      "width": 2960,
+      "height": 1640,
+      "bytes": 448317,
+      "sha256": "33f8cefb75da536e97f8970d94f3f13bdf5cd688bccf3fd8aee7b6e719633e9d",
+      "savedAtUTC": "2026-10-06T00:54:56.435223Z"
+    },
+    "environments.jpg": {
+      "format": "JPEG",
+      "width": 2960,
+      "height": 1640,
+      "bytes": 404872,
+      "sha256": "6a858450fee73350b358c22c6f3ffa4d55ed64b43fa4732e6caf3ff4b1da8d39",
+      "savedAtUTC": "2026-10-06T00:41:27.019476Z"
+    },
+    "file-reader.jpg": {
+      "format": "JPEG",
+      "width": 2960,
+      "height": 1640,
+      "bytes": 366466,
+      "sha256": "1a7c0afd179f14ec9536635c12efa7463da2b4bee215a3e8347d3da25a8fbed3",
+      "savedAtUTC": "2026-10-06T00:41:47.314324Z"
+    },
+    "resources.jpg": {
+      "format": "JPEG",
+      "width": 2960,
+      "height": 1640,
+      "bytes": 369437,
+      "sha256": "ae70978c142d39948f59cd4530874641f698bd481a2f66b9be895869316deea9",
+      "savedAtUTC": "2026-10-06T00:42:11.284958Z"
+    },
+    "resource-recovery.jpg": {
+      "format": "JPEG",
+      "width": 1240,
+      "height": 1300,
+      "bytes": 248113,
+      "sha256": "f271b22c4e11cc718efe2eed0e5f4f8c9b150911f2363ae7ec5116c5909e1026",
+      "savedAtUTC": "2026-10-06T00:44:12.119674Z"
+    },
+    "historical-versions.jpg": {
+      "format": "JPEG",
+      "width": 2960,
+      "height": 1640,
+      "bytes": 390863,
+      "sha256": "865071e902c6c71ae48b4860c93753a6b38f892c71dfdc40426a2d73699f8bdc",
+      "savedAtUTC": "2026-10-06T00:48:10.181629Z"
+    },
+    "origin.jpg": {
+      "format": "JPEG",
+      "width": 2960,
+      "height": 1640,
+      "bytes": 500040,
+      "sha256": "7272f916690b86995fd11c90ada7723da9fa0c44c8f23768983ee207ef9be8fc",
+      "savedAtUTC": "2026-10-06T01:15:16.586443Z"
+    },
+    "live-diff.jpg": {
+      "format": "JPEG",
+      "width": 2960,
+      "height": 1640,
+      "bytes": 361014,
+      "sha256": "8450f987d925ef61534cbaf9e0000e181d8924162e582b607f1156a26582af25",
+      "savedAtUTC": "2026-10-06T01:12:22.819269Z"
+    },
+    "conversation-export.jpg": {
+      "format": "JPEG",
+      "width": 1520,
+      "height": 1380,
+      "bytes": 296279,
+      "sha256": "e03af434462172647c215b6f0e799c0a0f2b47df5614cd361adbcf2989fd29d5",
+      "savedAtUTC": "2026-10-06T00:39:16.707830Z"
+    },
+    "settings-general.jpg": {
+      "format": "JPEG",
+      "width": 1700,
+      "height": 1440,
+      "bytes": 178498,
+      "sha256": "4581fbb3e91c8ee164e224f3b4bd44575a417adca38d1a78a80a279d53c84aa9",
+      "savedAtUTC": "2026-10-06T00:58:11.222090Z"
+    },
+    "help.jpg": {
+      "format": "JPEG",
+      "width": 1700,
+      "height": 1440,
+      "bytes": 204065,
+      "sha256": "a85bfa4f314bdcf404bb1d9fd0a30e417e4ebfd3fdc0acdbe15251d4c9208f2d",
+      "savedAtUTC": "2026-10-06T00:58:17.256674Z"
+    }
+  }
+}

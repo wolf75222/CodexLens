@@ -2,6 +2,8 @@
 
 Codex Lens starts from a session, then connects its events, agents, calls, environments, resources, and file versions. You can explore in any order; opening a session does not resume it in Codex.
 
+For the complete inventory of functions, settings and source-dependent limits, see the illustrated [Feature catalogue](FEATURES.md).
+
 ## Open a session
 
 1. Choose **File → Open Session…** or press **Command-O**.
@@ -45,7 +47,7 @@ Use a file's context menu to reveal its current location in Finder or open it wi
 
 **Resources** distinguishes supplied, referenced, recorded-read, modified, and produced content. A reference to an attachment does not guarantee its bytes remain available. Local text, code, images, and PDFs can be previewed; external URLs are not fetched automatically.
 
-For a missing attachment, **Find File…** lets you search a chosen local directory. A matching name is a candidate, not proof of the original content. A matching recorded hash can establish content equality, but does not establish when or how that copy was created. Cloud placeholders are not downloaded by Lens; make them available explicitly in Finder before retrying.
+For a missing attachment, **Find File…** lets you search chosen local directories. A matching name is a candidate, not confirmation of the original content. The current recovery screen shows the candidate's observed hash but does not supply a recorded original hash for comparison. Opening a candidate labels it as a current local observation. Cloud placeholders are not downloaded by Lens; make them available explicitly in Finder before retrying.
 
 ## Ask questions in the sidebar chat
 

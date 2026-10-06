@@ -72,6 +72,7 @@ CI runs the repository's build and test scripts. Release workflows and their exa
 
 ## Documentation
 
+- [Feature catalogue](docs/FEATURES.md): detailed functions, entry points, shortcuts, limits, and annotated screenshots.
 - [User guide](docs/USER_GUIDE.md): sessions, live following, versions, chat, exports, and keyboard shortcuts.
 - [Architecture](docs/ARCHITECTURE.md): data flow, identities, storage limits, and source boundaries.
 - [Contributing](CONTRIBUTING.md): local validation and review expectations.
