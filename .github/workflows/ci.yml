@@ -58,6 +58,17 @@ jobs:
         run: bash scripts/build.sh --profile
       - name: Native AppKit icon tests
         run: bash scripts/test-app-icon.sh "$RUNNER_TEMP/icon-receipt.json"
+      - name: Session curves regression
+        env:
+          LENS_CURVES_COMPACT_LAYOUT: "1"
+        run: |
+          corpus="/private/tmp/lens-ci-curves-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curves="/private/tmp/lens-ci-curves-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python3 scripts/create-curves-corpus-v77.py --output "$corpus" --events 600
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$curves" --corpus "$corpus" --entrypoint SessionCurvesV77Main.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/curves
+          cp "$curves/native-design-v07-receipt.json" dist/ui-validation/curves/receipt.json
+          cp "$curves/"*.png dist/ui-validation/curves/
       - name: Offline native UI smoke
         run: |
           corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -83,15 +94,6 @@ jobs:
           mkdir -p dist/ui-validation/scenes
           cp "$scenes/native-design-v07-receipt.json" dist/ui-validation/scenes/receipt.json
           cp "$scenes/"*.png dist/ui-validation/scenes/
-      - name: Session curves regression
-        run: |
-          corpus="/private/tmp/lens-ci-curves-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          curves="/private/tmp/lens-ci-curves-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          python3 scripts/create-curves-corpus-v77.py --output "$corpus" --events 600
-          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$curves" --corpus "$corpus" --entrypoint SessionCurvesV77Main.swift --after-source-freeze --run
-          mkdir -p dist/ui-validation/curves
-          cp "$curves/native-design-v07-receipt.json" dist/ui-validation/curves/receipt.json
-          cp "$curves/"*.png dist/ui-validation/curves/
       - name: Package and verify installer
         run: bash scripts/package-release.sh --app "$LENS_APP_PATH" --output dist/release
       - name: Release version

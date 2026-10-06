@@ -108,7 +108,7 @@ Code review found a separate major race when changing source directories while k
 
 The frozen follow-up build retires old projections after a source opening succeeds, validates period actions against their source/opening identity, and preserves table reading by a stable bucket/date anchor. Selected-row reveal waits for a document tall enough to contain the row. The 109-input source manifest has SHA-256 `bd0f3a8d0a8de2f0245205e229ff42cb3a1a9eaac3140209b4b9a1ec64431360`; it identifies the frozen dirty development source above, not a clean release revision.
 
-Its final native entrypoint executed **41 checks, all passed**, with process exit 0. The added scope includes same-root source transitions and rejected old-source commands, table reveal after timeline and reader returns, and preserved manual reading during model publication and rebinning. Two source-transition regressions fail against the earlier `77322f2` code and pass with the correction. Core code was unchanged after the **557-test Release logic suite with five optional skips and no failures**; the new UI/dispatch behavior is covered by the native batch and GUI replay, not attributed to that older logic run.
+That frozen native entrypoint executed **41 checks, all passed**, with process exit 0. The added scope includes same-root source transitions and rejected old-source commands, table reveal after timeline and reader returns, and preserved manual reading during model publication and rebinning. Two source-transition regressions fail against the earlier `77322f2` code and pass with the correction. Core code was unchanged after the **557-test Release logic suite with five optional skips and no failures**; the new UI/dispatch behavior is covered by the native batch and GUI replay, not attributed to that older logic run.
 
 Those 41 checks ran in a separately compiled source-matched probe replacing `@main`, UUID `6DEDA9E5-4F2A-3B94-9EB7-E98AE83E50FF`. They do not test the production entrypoint. The independent production-interface replay below uses UUID `69B9CA48` from the same frozen app-source phase.
 
@@ -152,7 +152,17 @@ The row for 14:01:03–14:01:04 was activated through its native accessibility t
 
 *The final visual check inspected the chart, table, metadata and controls at this wide size. It did not replay Back or source changes, rerun the 41 native assertions, measure contrast numerically, or qualify narrow windows and hardware input.*
 
-These last captures remain bound to the frozen dirty release-candidate source. A later commit or CI run requires its own source mapping and result; neither is invented from a screenshot.
+These last captures remain bound to the frozen dirty release-candidate source. They precede the visible-region scroll correction below; their palette qualification is retained, but they are not screenshots of that later scrolling behavior. A later commit or CI run requires its own source mapping and result; neither is invented from a screenshot.
+
+## CI failures and visible-region correction
+
+GitHub CI attempts at `77322f2` and `7dd3c561feefea9ca88f839a2872fd18e595e306` failed during the initial values-table loading/reveal stage. The latter attempt stopped before viewport diagnostics were available. Neither run passed. A local attempt to reproduce the failure in a **1024 × 640 window with legacy scrollbars** completed all **41 checks** in Native13. The CI failure was not reproduced by that local attempt, and its exact cause has not been established.
+
+The subsequent source correction reveals the selected row using `NSTableView.visibleRect`, including ancestor clipping and insets, instead of assuming the enclosing clip-view bounds describe the region people can see. It adjusts the vertical origin through `constrainBoundsRect` while preserving horizontal reading. The corresponding assertion requires the row's **entire height** to be visible and the visible region to have positive width. It does not require the full width of a horizontally scrollable table to fit on screen.
+
+The corrected-source Native14 batch also completed **41 checks, all passed**, in the compact legacy-scrollbar configuration, with process exit 0. Its source-manifest SHA-256 is `71c0cad27fcf0afd5d463be4bc607d40e9800fe1e11a80c60c222165da3633f2`. It is a separately compiled native probe replacing `@main`, based on `7dd3c56` plus the pending scroll/assertion changes; it is not a new production-compositor replay or a successful CI run. The earlier UUID `4DF7E741` JPEGs have not been relabeled as qualification of this correction.
+
+The test's failure path now records horizontal and vertical geometry, selected-row bounds and height/width visibility separately, clip/document visible regions, content insets, scrollbar style, and ancestor frames/bounds/visible regions. These diagnostics are intended to make the next CI failure inspectable. Their addition does not explain the earlier failures, which occurred before this diagnostic data was available. Final-head CI remains to be checked independently.
 
 ## Reproduction commands
 

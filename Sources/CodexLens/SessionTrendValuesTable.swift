@@ -168,10 +168,25 @@ struct SessionTrendValuesTable: NSViewRepresentable {
                 let rowRect = table.rect(ofRow: row)
                 guard rowRect.height > 0, table.bounds.maxY >= rowRect.maxY else { return }
                 table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-                if pendingReveal { table.scrollRowToVisible(row) }
-                let visible = table.visibleRect
-                if pendingReveal, visible.height >= rowRect.height,
-                   visible.minY > rowRect.minY || visible.maxY < rowRect.maxY { return }
+                if pendingReveal {
+                    let visible = table.visibleRect
+                    guard visible.width > 0, visible.height >= rowRect.height else { return }
+                    let delta = visible.minY > rowRect.minY ? rowRect.minY - visible.minY
+                        : max(0, rowRect.maxY - visible.maxY)
+                    if delta != 0 {
+                        // Use the actual visible region, including ancestor
+                        // clipping/insets, and preserve horizontal reading.
+                        var target = scroll.contentView.bounds
+                        target.origin.y += delta
+                        let legal = scroll.contentView.constrainBoundsRect(target).origin
+                        if legal != scroll.contentView.bounds.origin {
+                            scroll.contentView.scroll(to: legal)
+                            scroll.reflectScrolledClipView(scroll.contentView)
+                        }
+                    }
+                    let revealed = table.visibleRect
+                    guard revealed.minY <= rowRect.minY, revealed.maxY >= rowRect.maxY else { return }
+                }
             } else { table.deselectAll(nil) }
             pendingSelection = false; pendingReveal = false
         }

@@ -11,6 +11,7 @@ import SwiftUI
 @main struct SessionCurvesV77Main {
     @MainActor private static var stage = "fixture-and-store-setup"
     @MainActor private static var diagnosticOutput: URL?
+    @MainActor private static weak var diagnosticStore: LensStore?
     @MainActor static func main() {
         NSApplication.shared.setActivationPolicy(.accessory)
         Task { @MainActor in
@@ -31,6 +32,7 @@ import SwiftUI
         let store = LensStore(sourceHome: fixture.home,
             investigationArchive: InvestigationArchive(directory: output.appendingPathComponent("archive")),
             cacheDirectory: output.appendingPathComponent("cache"), readerPool: SessionReaderPool())
+        diagnosticStore = store
         store.setNavigationScope(UUID().uuidString)
         await store.start(); await store.open(fixture.rootID); await store.waitForPresentation()
         defer { store.stopObserving() }
@@ -85,18 +87,21 @@ import SwiftUI
         let context = LensWindowContext(store: store)
         let host = NSHostingView(rootView: MainView().environmentObject(store)
             .environment(\.lensWindowContext, context).environment(\.colorScheme, .light))
-        let window = NSWindow(contentRect: NSRect(x: -6000, y: -6000, width: 1380, height: 920),
+        let compactLayout = ProcessInfo.processInfo.environment["LENS_CURVES_COMPACT_LAYOUT"] == "1"
+        let initialSize = compactLayout ? NSSize(width: 1024, height: 640) : NSSize(width: 1380, height: 920)
+        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: -6000, y: -6000), size: initialSize),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.appearance = NSAppearance(named: .aqua)
         window.title = "Codex Lens — anonymous session curves qualification"
         window.contentView = host; context.attach(window); window.orderBack(nil)
-        host.frame = NSRect(x: 0, y: 0, width: 1380, height: 920)
+        host.frame = NSRect(origin: .zero, size: initialSize)
         defer { window.contentView = nil; window.close() }
         try await waitFor(host, "native-curve-table") { valuesTable(in: host)?.numberOfRows == projection.buckets.count }
+        if compactLayout { valuesTable(in: host)?.enclosingScrollView?.scrollerStyle = .legacy }
         try await settle(host)
         let selectedRow = projection.buckets.firstIndex { $0.id == bucket.id }!
         try await waitFor(host, "native-initial-table-reveal") {
-            valuesTable(in: host).map { $0.selectedRow == selectedRow && $0.visibleRect.contains($0.rect(ofRow: selectedRow)) } ?? false
+            valuesTable(in: host).map { $0.selectedRow == selectedRow && rowVisible(selectedRow, in: $0) } ?? false
         }
         observations.append(["scenario": "initial-table-selection", "expectedRow": selectedRow,
             "actualRow": valuesTable(in: host)?.selectedRow ?? -1, "selectedDate": store.trendSelectedDate?.ISO8601Format() ?? "none"])
@@ -106,7 +111,7 @@ import SwiftUI
         }
         check("chart-selection-is-shared-with-native-values-table", valuesTable(in: host)?.selectedRow == selectedRow)
         if let table = valuesTable(in: host), let scroll = table.enclosingScrollView {
-            check("initial-chart-selection-is-revealed-in-values-table", table.visibleRect.contains(table.rect(ofRow: selectedRow)))
+            check("initial-chart-selection-is-revealed-in-values-table", rowVisible(selectedRow, in: table))
         }
         if let table = valuesTable(in: host), projection.buckets.count > 1 {
             let row = selectedRow == 0 ? 1 : 0
@@ -117,7 +122,7 @@ import SwiftUI
         store.trendSelectedDate = bucket.start; try await settle(host)
         if let table = valuesTable(in: host), let scroll = table.enclosingScrollView {
             check("changed-chart-selection-is-revealed-in-values-table", table.selectedRow == selectedRow
-                && table.visibleRect.contains(table.rect(ofRow: selectedRow)))
+                && rowVisible(selectedRow, in: table))
         }
         let identifiers = accessibilityIDs(host)
         observations.append(["scenario": "programmatic-accessibility-tree", "identifiers": identifiers.sorted(),
@@ -154,7 +159,7 @@ import SwiftUI
                 "documentBounds": NSStringFromRect(table.bounds)])
         }
         check("back-reveals-restored-selected-table-row", valuesTable(in: host).map {
-            $0.selectedRow == selectedRow && $0.visibleRect.contains($0.rect(ofRow: selectedRow))
+            $0.selectedRow == selectedRow && rowVisible(selectedRow, in: $0)
         } ?? false)
         guard let event = datedEvents.first(where: { $0.kind == .toolCall }) else { throw LensError.unavailable("MCP invocation unavailable") }
         store.navigate(.event(event.id), newTab: true); try await settle(host)
@@ -163,7 +168,7 @@ import SwiftUI
         check("workspace-return-restores-curve-selection", store.workspacePresented && store.activityMode == .trends
             && store.trendSelectedDate == bucket.start && store.trendMetric == .mcpCalls && store.trendValuesVisible)
         check("reader-return-reveals-restored-selected-table-row", valuesTable(in: host).map {
-            $0.selectedRow == selectedRow && $0.visibleRect.contains($0.rect(ofRow: selectedRow))
+            $0.selectedRow == selectedRow && rowVisible(selectedRow, in: $0)
         } ?? false)
 
         stage = "in-memory-model-publication"
@@ -241,6 +246,13 @@ import SwiftUI
         return URL(fileURLWithPath: CommandLine.arguments[index + 1])
     }
     @MainActor private static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    /// Horizontal scrolling is intentional. A revealed row must still have
+    /// its entire height visible, not merely intersect the viewport.
+    @MainActor private static func rowVisible(_ row: Int, in table: NSTableView) -> Bool {
+        let rect = table.rect(ofRow: row), visible = table.visibleRect
+        return !table.isHiddenOrHasHiddenAncestor && rect.height > 0 && visible.width > 0
+            && visible.minY <= rect.minY && visible.maxY >= rect.maxY
+    }
     @MainActor private static func valuesTable(in host: NSView) -> NSTableView? {
         descendants(host).compactMap { $0 as? NSTableView }.first {
             let titles = Set($0.tableColumns.map { $0.headerCell.title })
@@ -265,10 +277,31 @@ import SwiftUI
         for _ in 0..<500 { host.layoutSubtreeIfNeeded(); if predicate() { return }; try await Task.sleep(nanoseconds: 10_000_000) }
         if let output = diagnosticOutput {
             let tables = descendants(host).compactMap { $0 as? NSTableView }.map { table -> [String: Any] in
-                ["class": String(describing: type(of: table)), "headers": table.tableColumns.map { $0.headerCell.title },
-                 "rows": table.numberOfRows, "frame": NSStringFromRect(table.frame), "hidden": table.isHiddenOrHasHiddenAncestor]
+                let selected = (0..<table.numberOfRows).contains(table.selectedRow) ? table.rect(ofRow: table.selectedRow) : nil
+                let visible = table.visibleRect, scroll = table.enclosingScrollView
+                var ancestors: [[String: String]] = [], node = table.superview
+                while let view = node, ancestors.count < 16 {
+                    ancestors.append(["class": String(describing: type(of: view)), "frame": NSStringFromRect(view.frame),
+                        "bounds": NSStringFromRect(view.bounds), "visibleRect": NSStringFromRect(view.visibleRect)])
+                    node = view.superview
+                }
+                return ["class": String(describing: type(of: table)), "headers": table.tableColumns.map { $0.headerCell.title },
+                 "rows": table.numberOfRows, "frame": NSStringFromRect(table.frame), "bounds": NSStringFromRect(table.bounds),
+                 "visibleRect": NSStringFromRect(table.visibleRect), "selectedRow": table.selectedRow,
+                 "selectedRowRect": selected.map(NSStringFromRect) ?? "none", "ancestors": ancestors,
+                 "selectedHeightVisible": selected.map { visible.minY <= $0.minY && visible.maxY >= $0.maxY } ?? false,
+                 "selectedWidthVisible": selected.map { visible.minX <= $0.minX && visible.maxX >= $0.maxX } ?? false,
+                 "clipBounds": table.enclosingScrollView.map { NSStringFromRect($0.contentView.bounds) } ?? "none",
+                 "documentVisibleRect": scroll.map { NSStringFromRect($0.contentView.documentVisibleRect) } ?? "none",
+                 "headerFrame": table.headerView.map { NSStringFromRect($0.frame) } ?? "none",
+                 "scrollerStyle": scroll?.scrollerStyle.rawValue ?? -1,
+                 "contentInsets": scroll.map { "\($0.contentInsets)" } ?? "none",
+                 "hidden": table.isHiddenOrHasHiddenAncestor]
             }
             let diagnostics: [String: Any] = ["stage": stage, "tables": tables,
+                "selectedDate": diagnosticStore?.trendSelectedDate?.ISO8601Format() ?? "none",
+                "activityMode": diagnosticStore?.activityMode.rawValue ?? "none",
+                "isProjecting": diagnosticStore?.isProjecting ?? false,
                 "views": descendants(host).prefix(80).map { ["class": String(describing: type(of: $0)), "frame": NSStringFromRect($0.frame), "hidden": $0.isHiddenOrHasHiddenAncestor] }]
             try? JSONSerialization.data(withJSONObject: diagnostics, options: [.prettyPrinted, .sortedKeys])
                 .write(to: output.appendingPathComponent("phase.json"))
