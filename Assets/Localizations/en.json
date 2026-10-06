@@ -2108,6 +2108,9 @@
     "Passer": "Skip",
     "Consultez l’historique et suivez l’activité d’une session Codex.": "Browse the history and follow the activity of a Codex session.",
     "Guide": "Guide",
-    "Sessions": "Sessions"
+    "Sessions": "Sessions",
+    "Ouvrir dans une nouvelle fenêtre": "Open in a new window",
+    "Source indisponible dans cette session.": "Source unavailable in this session.",
+    "Retrouver la vue et la position de lecture": "Return to the view and reading position"
   }
 }

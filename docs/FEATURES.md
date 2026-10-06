@@ -2,6 +2,8 @@
 
 This is the detailed catalogue of the existing Codex Lens app, reviewed on **2026-10-06** against source commit **`5378bd5`**, app **0.41.0**, build **75**. It describes implemented entry points and the conditions under which their data is available. It is not a roadmap or a claim that every workflow has been retested on every macOS version.
 
+The navigation section also includes the current unreleased workspace-return fixes. Their baseline, verification and separate captures are documented in the [navigation audit](QA/WORKSPACE_NAVIGATION.md).
+
 The images show native macOS windows from an isolated QA app with anonymous session data. New captures in `images/features/` use CUA's native-window screenshot API; earlier images retain their documented capture methods. See the [capture notes](images/features/README.md) for methods and provenance. Recorded fixture text keeps its original language; some macOS-owned menus may be French. The chat image shows a prepared, unsent question. No personal account identity or live model answer is shown.
 
 For a shorter walkthrough, see the [User guide](USER_GUIDE.md). For module and data-flow details, see [Architecture](ARCHITECTURE.md).
@@ -366,20 +368,21 @@ Source: [origin views](../Sources/CodexLens/OriginEvidenceView.swift), [origin m
 
 | Feature | Entry point or behavior | Boundary |
 | --- | --- | --- |
-| Selection history | Toolbar Back/Forward; Command-[ / Command-]; native horizontal swipe | Scoped to the current window; restores navigation/filter/time state |
+| Selection history | Toolbar Back/Forward; Command-[ / Command-]; native horizontal swipe | Scoped to the current window; restores selection, filters, timeline framing and event-list scroll anchor |
 | Reading tabs | Open Selection, double-click/Return, or Open in Tab | Tabs are app destinations, not native macOS window tab groups |
+| Collection return | Activity, Calls, or the originating collection remains beside reading tabs | Closing the last reader restores the collection; ordinary row selection does not retarget explicit tabs |
 | Tab overflow | One menu exposes all tabs; active tab stays visible | Does not require a wide horizontal scrollbar |
 | Pin/close tab | Tab context menu and close control | Pinning is distinct from bookmarking |
-| Tab cycling | Control-Tab / Shift-Control-Tab; Window → Window Tabs | Requires more than one tab |
+| Tab cycling | Control-Tab / Shift-Control-Tab; Window → Window Tabs | Includes the collection and its readers; works with one reader |
 | Bookmarks | Shift-Command-D or a context action; session menu → Bookmarks | Stored destinations keep their session identity |
 | Internal links | Shift-Command-C or context menu | Source/version references are included where supported; a link cannot restore deleted bytes by itself |
 | Quick Access | Session menu → Agents/Environments | Menu lists are bounded; All Agents/Environments opens the complete corresponding view |
 | Inspector/chat | Option-Command-I / Option-Command-C | They share the optional right pane; they are not two simultaneous independent sidebars |
 | Panel sizing | Drag native split dividers; Option-Command-Left/Right | Keyboard resize follows the focused pane and its minimum/maximum |
 | Region focus | Option-Command-1…4 | Sidebar, content, inspector, chat respectively; hidden auxiliary regions can be opened |
-| New windows | Command-N | Each window owns its navigation/selection; readers can be shared internally |
+| New windows | Command-N; context menu/File → Open in a new window for a selected item | Each window owns navigation/selection; a selected-item window uses the same observed source and full destination/version identity. Accessible journals are required |
 
-Source: [tabs](../Sources/CodexLens/LensWorkspaceTabs.swift), [window/pane integration](../Sources/CodexLens/LensMacIntegration.swift), [navigation state](../Sources/LensCore/InspectionNavigation.swift).
+Source: [tabs](../Sources/CodexLens/LensWorkspaceTabs.swift), [window/pane integration](../Sources/CodexLens/LensMacIntegration.swift), [navigation state](../Sources/CodexLens/LensStore.swift).
 
 ## Investigation chat
 

@@ -4,11 +4,11 @@ import LensCore
 
 enum LensAction: String, CaseIterable, Identifiable {
     case openSession, back, forward, follow, liveTimeline, clearFilters, copyLink, inspector, chat, investigate, bookmark, largerText, smallerText
-    case provenance, revealInFinder, exportInvestigation, importArchive, conversation
+    case provenance, revealInFinder, exportInvestigation, importArchive, conversation, openInNewTab, openInNewWindow
     var id: String { rawValue }
     var scope: LensCommandScope {
         switch self {
-        case .copyLink, .investigate, .bookmark, .provenance, .revealInFinder: return .selection
+        case .copyLink, .investigate, .bookmark, .provenance, .revealInFinder, .openInNewTab, .openInNewWindow: return .selection
         default: return .window
         }
     }
@@ -34,6 +34,8 @@ enum LensAction: String, CaseIterable, Identifiable {
         case .exportInvestigation: return LensL10n.text("Exporter l’enquête…")
         case .importArchive: return LensL10n.text("Importer une archive d’enquête…")
         case .conversation: return LensL10n.text("Conversation et orientations…")
+        case .openInNewTab: return LensL10n.text("Ouvrir dans un onglet")
+        case .openInNewWindow: return LensL10n.text("Ouvrir dans une nouvelle fenêtre")
         }
     }
     @MainActor func symbol(in store: LensStore, target: Destination? = nil) -> String {
@@ -65,6 +67,8 @@ enum LensAction: String, CaseIterable, Identifiable {
         case .exportInvestigation: return "square.and.arrow.up"
         case .importArchive: return "square.and.arrow.down"
         case .conversation: return "bubble.left.and.bubble.right"
+        case .openInNewTab: return "plus.rectangle.on.rectangle"
+        case .openInNewWindow: return "macwindow"
         }
     }
 }
@@ -83,6 +87,10 @@ extension LensStore {
         case .revealInFinder: return finderLocation(for: target ?? selection) != nil
         case .exportInvestigation: return investigation.capsule != nil && !investigation.preparing && !investigation.sending
         case .conversation: return snapshot != nil && !showSessionPicker && !showConversation
+        case .openInNewWindow:
+            return isObserving && hasSessionReader && snapshot != nil && observedSourceHome.isFileURL
+                && deepLink(for: target ?? selection) != nil
+                && LensApplicationCoordinator.shared.newWindowHandler != nil
         case .largerText: return fontSize < 24
         case .smallerText: return fontSize > 10
         default: return true
@@ -120,6 +128,11 @@ extension LensStore {
         case .provenance: if let target = target ?? selection { navigate(target) }; inspectorVisible = true
         case .revealInFinder, .exportInvestigation, .importArchive: break // Native window operations use LensCommandTarget.
         case .conversation: showConversation = true
+        case .openInNewTab: if let destination = target ?? selection { navigate(destination, newTab: true) }
+        case .openInNewWindow:
+            if let destination = target ?? selection {
+                LensApplicationCoordinator.shared.openInNewWindow(destination: destination, from: self)
+            }
         }
     }
 }
@@ -143,7 +156,10 @@ private struct LensWindowActionButton: View {
     let action: LensAction
     let target: Destination?
     var body: some View {
-        Button { context.capture(action, destination: target).execute() } label: { Label(action.title(in: store, target: target), systemImage: LensSymbols.name(action.symbol(in: store, target: target))) }
+        // Explicit row/menu targets retain the window, root and source that
+        // supplied them. Toolbar commands continue to use the current selection.
+        let prepared = target != nil && action.scope == .selection ? context.capture(action, destination: target) : nil
+        Button { (prepared ?? context.capture(action, destination: target)).execute() } label: { Label(action.title(in: store, target: target), systemImage: LensSymbols.name(action.symbol(in: store, target: target))) }
             .disabled(!store.canPerform(action, target: target) || context.operationBusy)
     }
 }
@@ -194,6 +210,7 @@ struct LensCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button(LensGlobalAction.newWindow.title) { LensGlobalAction.newWindow.perform(newWindow: { openWindow(id: "session", value: UUID()) }) }.keyboardShortcut("n")
             Button(LensGlobalAction.openSession.title) { LensGlobalAction.openSession.perform(focusedStore: store, newWindow: { openWindow(id: "session", value: UUID()) }) }.keyboardShortcut("o")
+            command(.openInNewWindow)
             Menu(LensL10n.text("Ouvrir une session récente")) {
                 if application.recentIDs.isEmpty { Button(LensL10n.text("Aucune session récente")) {}.disabled(true) }
                 ForEach(application.recentIDs, id: \.self) { id in
@@ -294,6 +311,10 @@ struct LensCommands: Commands {
             Button(LensL10n.text("Onglet suivant")) { context?.cycleTab(forward: true) }
                 .keyboardShortcut(.tab, modifiers: [.control]).disabled(context?.canCycleTabs != true)
             Menu(LensL10n.text("Onglets de la fenêtre")) {
+                if let store, store.hasWorkspaceReturn {
+                    Toggle(LensL10n.display(store.workspaceSection.rawValue), isOn: Binding(get: { store.workspacePresented }, set: { selected in if selected { store.showWorkspace() } }))
+                        .disabled(context?.operationBusy == true)
+                }
                 if store?.tabs.isEmpty != false { Button(LensL10n.text("Aucun onglet ouvert")) {}.disabled(true) }
                 ForEach(store?.tabs ?? []) { tab in
                     Toggle(store?.label(tab.destination) ?? "", isOn: Binding(get: { store?.isTabPresented(tab) == true }, set: { selected in if selected { store?.selectTab(tab) } }))
@@ -321,6 +342,7 @@ struct LensCommands: Commands {
     }
     private func fallbackTitle(_ action: LensAction) -> String {
         switch action {
+        case .openInNewTab: return LensL10n.text("Ouvrir dans un onglet")
         case .openSession: return LensL10n.text("Ouvrir une session…")
         case .back: return LensL10n.text("Précédent")
         case .forward: return LensL10n.text("Suivant")
@@ -339,6 +361,7 @@ struct LensCommands: Commands {
         case .exportInvestigation: return LensL10n.text("Exporter l’enquête…")
         case .importArchive: return LensL10n.text("Importer une archive d’enquête…")
         case .conversation: return LensL10n.text("Conversation et orientations…")
+        case .openInNewWindow: return LensL10n.text("Ouvrir dans une nouvelle fenêtre")
         }
     }
 }

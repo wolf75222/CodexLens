@@ -28,15 +28,16 @@ struct LensWorkspaceTabs: View {
     private func row(_ tabs: [LensTab], titleWidth: CGFloat) -> some View {
         LensNavigationEffectGroup(spacing: 8) {
             HStack(spacing: 8) {
-                if store.liveTimelineVisible {
-                    Button { store.showLiveEventList() } label: {
-                        Label(LensL10n.text("Direct"), systemImage: LensSymbols.name("dot.radiowaves.left.and.right"))
+                if store.hasWorkspaceReturn {
+                    Button { store.showWorkspace() } label: {
+                        Label(LensL10n.display(store.workspaceSection.rawValue), systemImage: store.workspaceSection.symbol)
                             .frame(minHeight: 24)
                     }
                     .buttonStyle(.plain).padding(.horizontal, 10).padding(.vertical, 4)
-                    .lensNavigationItem(selected: store.selection == nil && store.section == .activity)
-                    .help(LensL10n.text("Retrouver la liste en gardant le direct visible"))
-                    .accessibilityIdentifier("lens-tabs-live")
+                    .lensNavigationItem(selected: store.workspacePresented)
+                    .accessibilityAddTraits(store.workspacePresented ? .isSelected : [])
+                    .help(LensL10n.text("Retrouver la vue et la position de lecture"))
+                    .accessibilityIdentifier("lens-tabs-workspace")
                 }
                 ForEach(tabs) { tab in tabItem(tab, titleWidth: titleWidth) }
                 if store.tabs.count > tabs.count {
@@ -71,6 +72,7 @@ struct LensWorkspaceTabs: View {
         .fixedSize(horizontal: true, vertical: false).padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 4)
         .lensNavigationItem(selected: store.isTabPresented(tab))
         .contextMenu {
+            LensActionButton(store: store, action: .openInNewWindow, target: tab.destination)
             Button(tab.pinned ? LensL10n.text("Désépingler") : LensL10n.text("Épingler cet onglet")) { store.pinTab(tab.id) }
             LensActionButton(store: store, action: .bookmark, target: tab.destination)
             LensActionButton(store: store, action: .copyLink, target: tab.destination)

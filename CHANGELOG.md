@@ -8,6 +8,7 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ### Added
 
+- Open a selected timeline event or reading tab in an independent inspection window using the same observed source.
 - Detailed feature catalogue with native macOS screenshots, entry points, keyboard commands and availability limits.
 - Preview-first release preparation that updates the app version, build number, changelog and release notes together without creating a tag or publishing.
 - CI checks for release metadata consistency, changelog structure and version/tag mismatches.
@@ -15,8 +16,20 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ### Changed
 
+- Keep the originating collection available beside reading tabs; ordinary row selection no longer replaces an explicitly opened tab.
+- Include the collection in keyboard tab cycling and the Window menu. Command-W closes the presented reader or window, never a background reader.
 - Separate public releases from private development history, and add dates and comparison links.
 - Document the contribution and release workflow, including change categories and GitHub labels.
+
+### Fixed
+
+- Restore the activity selection, list scroll anchor, timeline framing, filters and paused live state when returning from a reading tab.
+- Closing the last reading tab returns to the originating collection without clearing its selection.
+- Scope stored reading tabs and prepared context-menu commands to the observed source, preventing same-ID sessions in different source folders from sharing destinations.
+- Wait for presentation indexes before opening a selected item in another window, and reject stale window openings.
+- Closing a temporary live preview restores the reader it covered; closing a background reader leaves the preview visible.
+- Keep one shared session reader when a cache under an aliased directory is created after the first acquisition.
+- Give each session window a stable toolbar identity, preventing an AppKit toolbar-family exception when a loading child opens beside an idle parent.
 
 ## [0.41.0] - 2026-10-05
 

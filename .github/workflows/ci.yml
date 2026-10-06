@@ -67,6 +67,22 @@ jobs:
           mkdir -p dist/ui-validation
           cp "$renders/native-design-v07-receipt.json" dist/ui-validation/receipt.json
           cp "$renders/"*.png dist/ui-validation/
+      - name: Workspace navigation regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          navigation="/private/tmp/lens-ci-navigation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$navigation" --corpus "$corpus" --entrypoint WorkspaceNavigationV76Main.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/navigation
+          cp "$navigation/native-design-v07-receipt.json" dist/ui-validation/navigation/receipt.json
+          cp "$navigation/"*.png dist/ui-validation/navigation/
+      - name: SwiftUI window scene regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          scenes="/private/tmp/lens-ci-scenes-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$scenes" --corpus "$corpus" --entrypoint WorkspaceSceneV76Main.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/scenes
+          cp "$scenes/native-design-v07-receipt.json" dist/ui-validation/scenes/receipt.json
+          cp "$scenes/"*.png dist/ui-validation/scenes/
       - name: Package and verify installer
         run: bash scripts/package-release.sh --app "$LENS_APP_PATH" --output dist/release
       - name: Release version

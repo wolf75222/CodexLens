@@ -226,7 +226,7 @@ private struct EventTableView: NSViewRepresentable {
     let isCalls: Bool
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
+        let scroll = EventListScrollView()
         scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.drawsBackground = false
         let table = EventNativeTableView()
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("event"))
@@ -241,6 +241,7 @@ private struct EventTableView: NSViewRepresentable {
         table.setAccessibilityLabel(title)
         scroll.documentView = table
         context.coordinator.table = table; context.coordinator.scroll = scroll
+        context.coordinator.attachViewportTracking()
         context.coordinator.updateAccent(LensControlAccent(rawValue: controlAccent) ?? .lens)
         table.menuProvider = { [weak coordinator = context.coordinator] in coordinator?.menu(for: $0) }
         table.onReselect = { [weak coordinator = context.coordinator] in coordinator?.revealReselectedRow($0) }
@@ -254,6 +255,7 @@ private struct EventTableView: NSViewRepresentable {
         context.coordinator.update(store: store, events: events, isCalls: isCalls, title: title)
     }
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        coordinator.detachViewportTracking()
         coordinator.cancelPendingSelection()
         coordinator.table?.delegate = nil; coordinator.table?.dataSource = nil; coordinator.table?.menuProvider = nil
         coordinator.table?.target = nil; coordinator.table?.doubleAction = nil; coordinator.table?.onReselect = nil; coordinator.table?.onOpenRow = nil
@@ -267,6 +269,7 @@ private struct EventTableView: NSViewRepresentable {
         private var rowByID: [String: Int] = [:]
         private var version: UUID?
         private var rootID: String?
+        private var sourceHome: String?
         private var calls = false
         private var fontSize = 12.0
         private var codeFont: LensCodeFont = .system
@@ -279,6 +282,44 @@ private struct EventTableView: NSViewRepresentable {
         private var language = LensL10n.resolvedLanguage.rawValue
         private var selectedID: String?
         private var suppressSelection = false
+        private var restorationRevision: Int?
+        private var pendingViewport: LensEventListViewport?
+        private var applyingViewport = false
+        func attachViewportTracking() {
+            guard let scroll else { return }
+            scroll.contentView.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(self, selector: #selector(viewportChanged), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+            (scroll as? EventListScrollView)?.onLayout = { [weak self] in self?.restoreViewportIfReady() }
+        }
+        func detachViewportTracking() {
+            recordViewport()
+            NotificationCenter.default.removeObserver(self)
+            (scroll as? EventListScrollView)?.onLayout = nil
+            pendingViewport = nil
+        }
+        @objc private func viewportChanged() { recordViewport() }
+        private func recordViewport() {
+            guard !applyingViewport, pendingViewport == nil, !suppressSelection,
+                  let scroll, let table, let rootID, let store,
+                  scroll.contentSize.height > 1, !rows.isEmpty else { return }
+            let origin = scroll.contentView.bounds.origin
+            let row = table.row(at: NSPoint(x: 2, y: origin.y + 1))
+            guard rows.indices.contains(row) else { return }
+            store.recordEventListViewport(LensEventListViewport(rootID: rootID, anchorID: rows[row].id,
+                anchorOffset: origin.y - table.rect(ofRow: row).minY, origin: origin, sourceHome: sourceHome), calls: calls)
+        }
+        private func restoreViewportIfReady() {
+            guard !applyingViewport, let saved = pendingViewport, let scroll, let table,
+                  scroll.contentSize.width > 1, scroll.contentSize.height > 1,
+                  table.bounds.height > 0 else { return }
+            applyingViewport = true
+            var origin = saved.origin
+            if let id = saved.anchorID, let row = rowByID[id] { origin.y = table.rect(ofRow: row).minY + saved.anchorOffset }
+            origin.y = min(max(0, origin.y), max(0, table.bounds.height - scroll.contentSize.height))
+            scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView)
+            pendingViewport = nil; applyingViewport = false
+            recordViewport()
+        }
         private var selectionTask: Task<Void, Never>?
         private var pendingSelection: (rootID: String?, eventID: String, previousSelection: Destination?)?
         private let cellID = NSUserInterfaceItemIdentifier("recordedEventCell")
@@ -289,7 +330,8 @@ private struct EventTableView: NSViewRepresentable {
             self.store = store
             let nextVersion = store.presentation?.id, nextRoot = store.presentation?.rootID
             let nextFontSize = min(24, max(10, store.fontSize))
-            let rootChanged = rootID != nextRoot
+            let nextSourceHome = store.observedSourceHome.standardizedFileURL.path
+            let rootChanged = rootID != nextRoot || sourceHome != nextSourceHome
             let dataChanged = version != nextVersion || rootChanged || calls != isCalls || rows.count != events.count
             let fontChanged = fontSize != nextFontSize || codeFont != store.codeFont
             let nextLanguage = LensL10n.resolvedLanguage.rawValue
@@ -304,6 +346,9 @@ private struct EventTableView: NSViewRepresentable {
             // Keep the user's pending selection if it still belongs to these rows.
             let nextSelectedID = pendingSelection?.eventID ?? store.selectedEvent?.id
             let selectionChanged = selectedID != nextSelectedID
+            let restoring = restorationRevision != store.eventListRestoration
+            if restoring || rootChanged { pendingViewport = store.eventListViewport(calls: isCalls) }
+            restorationRevision = store.eventListRestoration
             var origin = scroll.contentView.bounds.origin
             var anchorID: String?, anchorOffset: CGFloat = 0
             if dataChanged || fontChanged || languageChanged, !rootChanged, !rows.isEmpty {
@@ -315,7 +360,7 @@ private struct EventTableView: NSViewRepresentable {
                 suppressSelection = true
                 rows = events // Copy-on-write values, never a scan or a new UI-side index.
                 rowByID = nextRowsByID
-                version = nextVersion; rootID = nextRoot; calls = isCalls; fontSize = nextFontSize; codeFont = store.codeFont; language = nextLanguage
+                version = nextVersion; rootID = nextRoot; sourceHome = nextSourceHome; calls = isCalls; fontSize = nextFontSize; codeFont = store.codeFont; language = nextLanguage
                 table.rowHeight = fontSize >= 18 ? CGFloat(fontSize + 6) * 5.5 : max(84, CGFloat(fontSize + 4) * 5)
                 table.reloadData()
                 applySelection(nextSelectedID, reveal: false)
@@ -325,12 +370,14 @@ private struct EventTableView: NSViewRepresentable {
                 scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView)
                 // An explicit cross-view selection takes precedence over a live
                 // viewport anchor; an unchanged selection never jumps the reader.
-                if selectionChanged { applySelection(nextSelectedID, reveal: true) }
+                if selectionChanged && pendingViewport == nil && !restoring { applySelection(nextSelectedID, reveal: true) }
                 suppressSelection = false
             } else if selectedID != nextSelectedID {
-                suppressSelection = true; applySelection(nextSelectedID, reveal: true); suppressSelection = false
+                suppressSelection = true; applySelection(nextSelectedID, reveal: pendingViewport == nil && !restoring); suppressSelection = false
             }
             selectedID = nextSelectedID
+            restoreViewportIfReady()
+            recordViewport()
         }
         private func applySelection(_ id: String?, reveal: Bool) {
             guard let table else { return }
@@ -387,6 +434,9 @@ private struct EventTableView: NSViewRepresentable {
             guard rows.indices.contains(row), let store else { return }
             let id = rows[row].id
             cancelPendingSelection()
+            // A double-click can finish before the deferred selection delegate.
+            // Preserve the row actually selected by AppKit as the workspace anchor.
+            if store.selection != .event(id) { store.navigate(.event(id)) }
             store.navigate(.event(id), newTab: true)
         }
         func menu(for row: Int) -> NSMenu? {
@@ -395,12 +445,17 @@ private struct EventTableView: NSViewRepresentable {
             menu.autoenablesItems = false
             func add(_ title: String, command: String, enabled: Bool = true) {
                 let item = NSMenuItem(title: title, action: #selector(menuAction(_:)), keyEquivalent: "")
-                item.target = self; item.representedObject = ["command": command, "id": event.id]
+                item.target = self; item.representedObject = ["command": command, "id": event.id, "root": store.snapshot?.root.id ?? "", "source": store.observedSourceHome.standardizedFileURL.path]
                 item.isEnabled = enabled; menu.addItem(item)
             }
             add(LensAction.investigate.title(in: store), command: "investigate", enabled: store.canPerform(.investigate, target: .event(event.id)))
             if event.isError { add(LensL10n.text("Expliquer cette erreur"), command: "explainError", enabled: store.canPerform(.investigate, target: .event(event.id))) }
             add(LensL10n.text("Ouvrir dans un onglet"), command: "tab")
+            if let context = LensApplicationCoordinator.shared.context(for: scroll?.window) {
+                let item = NSMenuItem(title: LensAction.openInNewWindow.title(in: store), action: #selector(menuAction(_:)), keyEquivalent: "")
+                item.target = self; item.representedObject = context.capture(.openInNewWindow, destination: .event(event.id))
+                item.isEnabled = store.canPerform(.openInNewWindow, target: .event(event.id)); menu.addItem(item)
+            }
             add(LensL10n.text("Afficher dans la chronologie"), command: "timeline")
             add(LensL10n.text("Voir l’agent"), command: "agent")
             if event.environmentID != nil { add(LensL10n.text("Voir l’environnement"), command: "environment") }
@@ -410,7 +465,9 @@ private struct EventTableView: NSViewRepresentable {
             return menu
         }
         @objc private func menuAction(_ item: NSMenuItem) {
+            if let command = item.representedObject as? LensCommandTarget { command.execute(); return }
             guard let payload = item.representedObject as? [String: String], let id = payload["id"], let store,
+                  payload["root"] == store.snapshot?.root.id, payload["source"] == store.observedSourceHome.standardizedFileURL.path,
                   let event = store.event(id) else { return }
             switch payload["command"] {
             case "investigate": store.perform(.investigate, target: .event(id))
@@ -425,6 +482,11 @@ private struct EventTableView: NSViewRepresentable {
             }
         }
     }
+}
+
+@MainActor private final class EventListScrollView: NSScrollView {
+    var onLayout: (() -> Void)?
+    override func layout() { super.layout(); onLayout?() }
 }
 
 @MainActor private final class EventNativeTableView: NSTableView {
@@ -643,6 +705,9 @@ struct TimelineView: NSViewRepresentable {
             isConfiguring = true; defer { isConfiguring = false }
             self.store = store; self.live = live
             if let animateLive { self.animateLive = animateLive }
+            // A remounted reader starts at zero size. Do not clamp the saved
+            // timeline origin or infer a zoom anchor until its viewport exists.
+            guard scroll.contentSize.width > 1, scroll.contentSize.height > 1 else { return }
             let rootChanged = rootID != store.snapshot?.root.id
             if rootChanged {
                 liveOrigin = .zero
@@ -1264,8 +1329,16 @@ struct TimelineView: NSViewRepresentable {
         let menu = NSMenu(); menu.autoenablesItems = false
         let select = NSMenuItem(title: LensL10n.text("Voir le contexte de l’événement"), action: #selector(selectMenuItem(_:)), keyEquivalent: "")
         select.target = self; select.representedObject = id; menu.addItem(select)
-        let tab = NSMenuItem(title: LensL10n.text("Ouvrir dans un onglet"), action: #selector(openTabMenuItem(_:)), keyEquivalent: "")
-        tab.target = self; tab.representedObject = id; menu.addItem(tab)
+        if let context = LensApplicationCoordinator.shared.context(for: window) {
+            for action in [LensAction.openInNewTab, .openInNewWindow] {
+                let item = NSMenuItem(title: action.title(in: context.store), action: #selector(openCapturedCommand(_:)), keyEquivalent: "")
+                item.target = self; item.representedObject = context.capture(action, destination: .event(id))
+                item.isEnabled = context.store.canPerform(action, target: .event(id)); menu.addItem(item)
+            }
+        } else {
+            let tab = NSMenuItem(title: LensL10n.text("Ouvrir dans un onglet"), action: #selector(openTabMenuItem(_:)), keyEquivalent: "")
+            tab.target = self; tab.representedObject = id; menu.addItem(tab)
+        }
         for change in changesLookup?(id) ?? [] {
             let diff = NSMenuItem(title: LensL10n.text("Aperçu du diff : {0}", URL(fileURLWithPath: change.path).lastPathComponent), action: #selector(changeMenuItem(_:)), keyEquivalent: "")
             diff.target = self; diff.representedObject = change.id; diff.toolTip = change.environmentID + "\n" + change.path; menu.addItem(diff)
@@ -1277,6 +1350,7 @@ struct TimelineView: NSViewRepresentable {
         return menu
     }
     @objc private func openTabMenuItem(_ sender: NSMenuItem) { if let id = sender.representedObject as? String { onOpenTab?(id) } }
+    @objc private func openCapturedCommand(_ sender: NSMenuItem) { (sender.representedObject as? LensCommandTarget)?.execute() }
     @objc private func changeMenuItem(_ sender: NSMenuItem) { if let id = sender.representedObject as? String { onChangeSelect?(id) } }
     @objc private func investigateMenuItem(_ sender: NSMenuItem) { if let id = sender.representedObject as? String, canInvestigate?(id) == true { onInvestigate?(id) } }
     override func keyDown(with event: NSEvent) {

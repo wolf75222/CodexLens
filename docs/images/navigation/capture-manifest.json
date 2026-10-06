@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "anonymousFixtures": true,
+  "captures": [
+    {
+      "file": "after-reader.jpg",
+      "sourceCapture": "02-reader-and-stable-activity-return.jpg",
+      "sha256": "f76596d64d526589ce6e140c40043edcc8bb7c5b16346f3ba042d326cd87bfbc",
+      "bytes": 265680,
+      "method": "CUA native-window compositor JPEG; original pixels unchanged",
+      "scope": "postfix activity/tab return replay before toolbar-family isolation"
+    },
+    {
+      "file": "after-return.jpg",
+      "sourceCapture": "07-close-preview-keeps-list-anchor.jpg",
+      "sha256": "805f41aebd1344ae49565a8e265f1ae9c5ed249367c4aeef630daa970c6dacdf",
+      "bytes": 385258,
+      "method": "CUA native-window compositor JPEG; original pixels unchanged",
+      "scope": "postfix activity/tab return replay before toolbar-family isolation"
+    },
+    {
+      "file": "after-narrow.jpg",
+      "sourceCapture": "16-protected-activity-light-narrow.jpg",
+      "sha256": "3da1e6e554aadeae99132046984bdbf5a3fc40bbb83a835fa9f6449dede69cf3",
+      "bytes": 301417,
+      "method": "CUA native-window compositor JPEG; original pixels unchanged",
+      "scope": "postfix activity/tab return replay before toolbar-family isolation"
+    }
+  ],
+  "excludedDiagnosticCaptures": [
+    "09-new-window-loads-wrong-session-source",
+    "11-protected-reader-dark"
+  ],
+  "excludedReason": "process/binding diagnostic or stale helper; not interface qualification"
+}

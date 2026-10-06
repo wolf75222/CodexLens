@@ -18,7 +18,9 @@ If a session is missing, check its source directory and local availability first
 
 ![Activity timeline and event list](images/activity.png)
 
-Select an event to highlight it in the timeline and list. Double-click it or press Return to read its contents. The inspector links the event to its agent, environment, resources, and related actions. Back and Forward return to earlier selections and filters.
+Select an event to highlight it in the timeline and list. Double-click it or press Return to read its contents. The inspector links the event to its agent, environment, resources, and related actions. Opening a reader keeps an **Activity** return item beside the reading tabs. It restores the selection, filters, timeline framing and list position you left. Ordinary list clicks keep explicitly opened tabs intact.
+
+**Back** and **Forward** also restore these positions. Closing the last reader returns to the originating collection. **Control-Tab** cycles between the collection and its readers, including when there is only one reader. Right-click a timeline event or a reading tab and choose **Open in a new window** to inspect it separately; the original window keeps its place. This command requires accessible session journals. Archived context remains readable in its current window when those journals are unavailable.
 
 At a wide time scale, nearby events form groups. Click a group to zoom in; zoom out to see groups again. The event list keeps the individual records accessible. Use search, event-type filters, and a selected time range to narrow the view.
 

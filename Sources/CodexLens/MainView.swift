@@ -114,7 +114,11 @@ struct MainView: View {
             savedChatVisible = value
             if value { windowContext?.focusPane(.chat, afterLayout: true) }
         }
-        .toolbar(id: "LensSessionToolbar") { navigationToolbar; inspectionToolbar }
+        // AppKit synchronizes toolbars with the same identifier as one family.
+        // A child loading a session has different transient items from its idle
+        // parent; that family insertion can throw while creating the window.
+        // Keep customization and state local to the stable scene identity.
+        .toolbar(id: windowContext?.toolbarIdentifier ?? "LensSessionToolbar-" + store.windowIdentity) { navigationToolbar; inspectionToolbar }
         .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
         .sheet(item: presentation) { sheet in
             switch sheet {
@@ -286,9 +290,9 @@ struct MainView: View {
             .accessibilityIdentifier("lens-section-" + section.rawValue)
     }
     @ViewBuilder private var tabs: some View {
-      if !store.tabs.isEmpty || store.liveTimelineVisible || (selectionNeedsOpenAction && store.selection != nil && !store.tabContentVisible) {
+      if store.hasWorkspaceReturn || (selectionNeedsOpenAction && store.selection != nil && !store.tabContentVisible) {
         HStack(spacing: 12) {
-            if !store.tabs.isEmpty || store.liveTimelineVisible {
+            if store.hasWorkspaceReturn {
                 LensWorkspaceTabs(store: store)
             } else { Spacer(minLength: 0) }
             if !store.tabContentVisible, let target = store.selection, store.presents(target), selectionNeedsOpenAction {
@@ -447,8 +451,6 @@ struct MainView: View {
     }
     @ViewBuilder private var liveCenter: some View {
         if let target = store.livePreview { LensLivePreviewView(destination: target) }
-        else if case .event = store.selection, store.section == .activity || store.section == .calls,
-                let target = store.selection { LensLivePreviewView(destination: target, temporary: false).accessibilityIdentifier("lens-event-tab-content") }
         else { center }
     }
     @ViewBuilder private var center: some View {

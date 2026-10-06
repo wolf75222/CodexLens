@@ -17,6 +17,14 @@ enum Destination: Hashable, Codable {
 }
 enum ActivityInspectionMode: String, CaseIterable { case chronology = "Chronologie", communications = "Échanges" }
 struct LensTab: Identifiable, Codable { var id = UUID(); var destination: Destination; var pinned = false }
+/// Viewport metadata only. No journal content or retained native reader views.
+struct LensEventListViewport: Equatable {
+    var rootID: String
+    var anchorID: String?
+    var anchorOffset: CGFloat
+    var origin: CGPoint
+    var sourceHome: String? = nil
+}
 struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String; let destination: Destination; let title: String }
 
 @MainActor final class LensStore: ObservableObject {
@@ -71,6 +79,22 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
     @Published var activeTab: UUID?
     /// Explicit tab inspection is distinct from selecting a row in a collection.
     @Published private(set) var tabContentVisible = false
+    var workspacePresented: Bool { !tabContentVisible && livePreview == nil }
+    var workspaceSection: LensSection { workspacePresented ? section : (workspaceCheckpoint?.section ?? .activity) }
+    var hasWorkspaceReturn: Bool { snapshot != nil && (!tabs.isEmpty || livePreview != nil) }
+    private var workspaceCheckpoint: Checkpoint?
+    private var readerCheckpoints: [UUID: Checkpoint] = [:]
+    private var eventListViewports: [String: LensEventListViewport] = [:]
+    @Published private(set) var eventListRestoration = 0
+    func recordEventListViewport(_ value: LensEventListViewport, calls: Bool) {
+        guard value.rootID == snapshot?.root.id,
+              value.sourceHome == nil || value.sourceHome == observedSourceHome.standardizedFileURL.path else { return }
+        eventListViewports[calls ? "calls" : "events"] = value
+    }
+    func eventListViewport(calls: Bool) -> LensEventListViewport? {
+        let value = eventListViewports[calls ? "calls" : "events"]
+        return value?.rootID == snapshot?.root.id ? value : nil
+    }
     var tabContentDestination: Destination? {
         guard tabContentVisible, let selection else { return nil }
         switch selection {
@@ -85,7 +109,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         let destination: Destination?
         if liveTimelineVisible {
             if let livePreview { destination = livePreview }
-            else if section == .activity || section == .calls, case .event = selection { destination = selection }
+            else if tabContentVisible, section == .activity || section == .calls, case .event = selection { destination = selection }
             else { destination = tabContentDestination }
         } else { destination = tabContentDestination }
         if case .event(let id) = destination { return id }
@@ -171,17 +195,28 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         previewLiveChange(change.id)
     }
     private func setLivePreview(_ target: Destination) {
+        if livePreview == nil {
+            retainCurrentWorkspace()
+            previewOrigin = PreviewOrigin(checkpoint(selection))
+        }
         if selection != target || livePreview != target {
             back.append(checkpoint(selection)); if back.count > 64 { back.removeFirst() }; forward = []
         }
         selection = target; livePreview = target
     }
-    func closeLivePreview() { livePreview = nil }
+    func closeLivePreview() {
+        guard livePreview != nil else { return }
+        back.append(checkpoint(selection)); if back.count > 64 { back.removeFirst() }; forward = []
+        if let saved = previewOrigin?.checkpoint ?? workspaceCheckpoint { restore(saved) }
+        else { livePreview = nil; previewOrigin = nil }
+    }
     func showLiveEventList() {
-        if selection != nil || section != .activity {
+        if !workspacePresented || section != .activity {
             back.append(checkpoint(selection)); if back.count > 64 { back.removeFirst() }; forward = []
         }
-        livePreview = nil; tabContentVisible = false; selection = nil; section = .activity; activityMode = .chronology
+        retainCurrentWorkspace()
+        if let saved = workspaceCheckpoint { restore(saved) }
+        livePreview = nil; tabContentVisible = false; section = .activity; activityMode = .chronology
         persistTabs()
     }
     func openLivePreviewInTab() {
@@ -261,15 +296,29 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         let timelineZoomLimit: Double
         let timelineOrigin: CGPoint
         let livePreview: Destination?
+        let previewOrigin: PreviewOrigin?
         let activeTab: UUID?
         let activeTabDestination: Destination?
         let tabContentVisible: Bool
+        let timelineVisible: Bool
+        let liveTimelineVisible: Bool
+        let follow: Bool
+        let liveState: TimelineLiveState
+        let listViewports: [String: LensEventListViewport]
     }
+    /// Immutable metadata for the reader/collection covered by a temporary preview.
+    private final class PreviewOrigin {
+        let checkpoint: Checkpoint
+        init(_ checkpoint: Checkpoint) { self.checkpoint = checkpoint }
+    }
+    private var previewOrigin: PreviewOrigin?
     private var back: [Checkpoint] = []
     private var forward: [Checkpoint] = []
     private var navigationScope = UUID().uuidString
     var windowIdentity: String { navigationScope }
     var observedSourceHome: URL { selectedSourceHome ?? sourceHome }
+    var windowReaderPool: SessionReaderPool { readerPool }
+    var windowCacheDirectory: URL? { cacheDirectory }
     var personalSessionHome: URL { CodexSourceLocation.personalHome() }
     var isObserving: Bool { started && !isStopped }
     private static let sharedArchive = InvestigationArchive(directory: ProcessInfo.processInfo.environment["LENS_ARCHIVE_DIRECTORY"].map { URL(fileURLWithPath: $0, isDirectory: true) })
@@ -334,10 +383,10 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
     func showInTimeline(_ id: String) {
         guard let selected = event(id) else { return }
         let canonical = presentation?.contextInspection.compactionByEventID[id]?.eventID ?? id
-        if selection == .event(canonical), activityMode != .chronology {
-            back.append(checkpoint(.event(canonical))); if back.count > 64 { back.removeFirst() }; forward = []
-        }
-        navigate(.event(canonical)); tabContentVisible = false; section = .activity; activityMode = .chronology; timelineVisible = true
+        back.append(checkpoint(selection)); if back.count > 64 { back.removeFirst() }; forward = []
+        retainCurrentWorkspace()
+        if !workspacePresented, let saved = workspaceCheckpoint { restore(saved) }
+        navigate(.event(canonical), record: false, updateTabs: false); tabContentVisible = false; section = .activity; activityMode = .chronology; timelineVisible = true
         // Explicit reveal may remove only conflicting filters. Streaming never changes them.
         if let filter = agentFilter, filter != selected.agentID { agentFilter = nil }
         if let filter = environmentFilter, filter != selected.environmentID { environmentFilter = nil }
@@ -351,11 +400,11 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
     }
     func setNavigationScope(_ value: String) { guard !started, UUID(uuidString: value) != nil else { return }; navigationScope = value }
     private var currentFilters: EventFilters { EventFilters(agentID: agentFilter, environmentID: environmentFilter, resourceID: resourceFilter, kind: kindFilter, period: period, query: query, sourceMatches: searchMatches, originInstructionID: originInstructionFilter) }
-    private func checkpoint(_ destination: Destination?) -> Checkpoint { Checkpoint(destination: destination, filters: currentFilters, agentFilters: AgentFilters(query: agentQuery, sourceMatches: agentSearchMatches), section: section, activityMode: activityMode, timelineWindow: timelineWindow, timelineZoom: timelineZoom, timelineZoomLimit: timelineZoomLimit, timelineOrigin: timelineOrigin, livePreview: livePreview, activeTab: activeTab, activeTabDestination: tabs.first(where: { $0.id == activeTab })?.destination, tabContentVisible: tabContentVisible) }
+    private func checkpoint(_ destination: Destination?) -> Checkpoint { Checkpoint(destination: destination, filters: currentFilters, agentFilters: AgentFilters(query: agentQuery, sourceMatches: agentSearchMatches), section: section, activityMode: activityMode, timelineWindow: timelineWindow, timelineZoom: timelineZoom, timelineZoomLimit: timelineZoomLimit, timelineOrigin: timelineOrigin, livePreview: livePreview, previewOrigin: previewOrigin, activeTab: activeTab, activeTabDestination: tabs.first(where: { $0.id == activeTab })?.destination, tabContentVisible: tabContentVisible, timelineVisible: timelineVisible, liveTimelineVisible: liveTimelineVisible, follow: follow, liveState: liveState, listViewports: eventListViewports) }
     private func restore(_ entry: Checkpoint) {
         timelineFocus = nil
         activeTab = tabs.contains(where: { $0.id == entry.activeTab }) ? entry.activeTab : nil
-        if let i = tabs.firstIndex(where: { $0.id == activeTab }), let destination = entry.activeTabDestination { tabs[i].destination = destination }
+        if entry.tabContentVisible, let i = tabs.firstIndex(where: { $0.id == activeTab }), let destination = entry.activeTabDestination { tabs[i].destination = destination }
         if let destination = entry.destination { navigate(destination, record: false, updateTabs: false) }
         else { selection = nil }
         query = entry.filters.query; agentFilter = entry.filters.agentID; environmentFilter = entry.filters.environmentID
@@ -363,7 +412,37 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         originInstructionFilter = entry.filters.originInstructionID
         agentQuery = entry.agentFilters.query; agentSearchMatches = entry.agentFilters.sourceMatches
         section = entry.section; activityMode = entry.activityMode; timelineWindow = entry.timelineWindow; timelineZoomLimit = entry.timelineZoomLimit; timelineZoom = entry.timelineZoom; timelineOrigin = entry.timelineOrigin; timelineReset &+= 1; livePreview = entry.livePreview; tabContentVisible = entry.tabContentVisible
+        timelineVisible = entry.timelineVisible; liveTimelineVisible = entry.liveTimelineVisible
+        follow = entry.follow; liveClock.restore(entry.liveState)
+        previewOrigin = entry.livePreview == nil ? nil : entry.previewOrigin
+        eventListViewports = entry.listViewports; eventListRestoration &+= 1
+        if tabContentVisible, livePreview == nil, activeTab == nil, let target = selection {
+            if let tab = tabs.first(where: { $0.destination == target }) { activeTab = tab.id }
+            else { let tab = LensTab(destination: target); tabs.append(tab); activeTab = tab.id }
+        }
         persistTabs()
+    }
+    private func retainCurrentWorkspace() {
+        if workspacePresented { workspaceCheckpoint = checkpoint(selection) }
+        else if livePreview == nil, tabContentVisible, let id = activeTab,
+                tabs.first(where: { $0.id == id })?.destination == selection { readerCheckpoints[id] = checkpoint(selection) }
+    }
+    /// Return to the collection that opened the readers, including its selection and viewport.
+    func showWorkspace() {
+        guard !isStopped, !workspacePresented, let saved = workspaceCheckpoint else { return }
+        back.append(checkpoint(selection)); if back.count > 64 { back.removeFirst() }; forward = []
+        retainCurrentWorkspace()
+        restore(saved)
+    }
+    func applyWindowSeedDestination(_ target: Destination, evidenceCapsule: EvidenceCapsule?) {
+        guard !isStopped, let rootID = snapshot?.root.id else { return }
+        if case .evidence(let capsuleID, let pieceID) = target {
+            guard let capsule = evidenceCapsule, capsule.id == capsuleID, capsule.rootThreadID == rootID,
+                  capsule.pieces.contains(where: { $0.id == pieceID }) else { error = LensL10n.text("Source indisponible dans cette session."); return }
+            inspectedEvidenceCapsule = capsule
+        }
+        guard targetBelongsToCurrentRoot(target) else { error = LensL10n.text("Source indisponible dans cette session."); return }
+        navigate(target, newTab: true)
     }
     private var projectionPublicationSequence: UInt64 = 0
     private func schedulePresentation(coalescingLiveUpdate: Bool = false) {
@@ -679,14 +758,16 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
                 await investigation.flushAndStop()
                 guard !Task.isCancelled, !isStopped, lifecycle == lifecycleGeneration, generation == openGeneration else { return }
             }
+            persistWindowRoot(); persistTabs()
             if let selectedReaderLease { releaseReader(selectedReaderLease) }
             selectedReaderLease = lease; selectedSourceHome = openingHome; pendingReaderLease = nil; candidate = nil; fallbackEngine = nil
             receivedReaderRevision = publication.revision
             let next = publication.snapshot
             loadTask = nil
-            persistWindowRoot(); persistTabs()
             snapshot = next; latest = next; selection = nil; tabs = []; activeTab = nil; tabContentVisible = false; back = []; forward = []
-            livePreview = nil; liveClock.reset()
+            workspaceCheckpoint = nil; readerCheckpoints = [:]; eventListViewports = [:]; eventListRestoration &+= 1
+            timelineWindow = nil; timelineZoom = 1; timelineZoomLimit = TimelineInteraction.zoomRange.upperBound; timelineOrigin = .zero; timelineFocus = nil; timelineReset &+= 1
+            livePreview = nil; previewOrigin = nil; liveClock.reset()
             resetFilters(); originCodeReferences = [:]; agentQuery = ""; follow = true; waitingEvents = 0; waitingUpdates = false; section = .activity
             if liveTimelineVisible { liveClock.resume(at: Date()) }
             showSessionPicker = false
@@ -799,6 +880,8 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         }
         guard !isStopped, value != section || tabContentVisible || livePreview != nil else { return }
         back.append(checkpoint(selection)); if back.count > 64 { back.removeFirst() }; forward = []
+        retainCurrentWorkspace()
+        if !workspacePresented, let saved = workspaceCheckpoint { restore(saved) }
         livePreview = nil; tabContentVisible = false; section = value; persistTabs()
     }
     /// Follow an object's activity without losing the pre-navigation filters or
@@ -807,6 +890,8 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         guard !isStopped, targetBelongsToCurrentRoot(target) else { return }
         switch target { case .agent, .environment, .resource: break; default: return }
         back.append(checkpoint(selection)); if back.count > 64 { back.removeFirst() }; forward = []
+        retainCurrentWorkspace()
+        if !workspacePresented, let saved = workspaceCheckpoint { restore(saved) }
         switch target {
         case .agent(let id): agentFilter = id
         case .environment(let id): environmentFilter = id
@@ -830,10 +915,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
     }
     func isTabPresented(_ tab: LensTab) -> Bool {
         guard tab.id == activeTab && selection == tab.destination && presents(tab.destination) else { return false }
-        switch tab.destination {
-        case .event, .agent: return tabContentVisible
-        default: return true
-        }
+        return tabContentVisible
     }
     func navigate(_ target: Destination, newTab: Bool = false, record: Bool = true, updateTabs: Bool = true) {
         guard !isStopped else { return }
@@ -842,14 +924,16 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         if case .investigation(let id) = target { rememberChat(id); showChat(); return }
         evidenceJSONVisible = false
         if record, selection != target || !presents(target) || (newTab && !tabContentVisible) { back.append(checkpoint(selection)); if back.count > 64 { back.removeFirst() }; forward = [] }
-        livePreview = nil
+        if record { retainCurrentWorkspace() }
+        let openingReader = newTab || tabContentVisible
+        livePreview = nil; previewOrigin = nil
         if newTab { tabContentVisible = true }
         selection = target
-        if updateTabs {
+        if updateTabs && openingReader {
             // Every route reuses an existing destination, including links back
             // to the timeline. Replacing a different tab would duplicate it.
             if let existing = tabs.first(where: { $0.destination == target }) { activeTab = existing.id }
-            else if !newTab, let i = tabs.firstIndex(where: { $0.id == activeTab }), !tabs[i].pinned { tabs[i].destination = target }
+            else if !newTab, let i = tabs.firstIndex(where: { $0.id == activeTab }), !tabs[i].pinned { tabs[i].destination = target; readerCheckpoints.removeValue(forKey: tabs[i].id) }
             else { let tab = LensTab(destination: target); tabs.append(tab); activeTab = tab.id }
         }
         switch target {
@@ -860,7 +944,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         case .change: section = .changes
         case .investigation, .evidence: section = .investigation
         }
-        if record, let event = selectedEvent { focusTimelineEvent(event.id, zoom: event.kind == .compaction) }
+        if record, !openingReader, let event = selectedEvent { focusTimelineEvent(event.id, zoom: event.kind == .compaction) }
         persistTabs()
         if case .evidence(let capsuleID, let pieceID) = target, displayedEvidenceCapsule == nil, let rootID = snapshot?.root.id {
             selectionTask?.cancel()
@@ -898,11 +982,28 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         if activeTab != existing.id || selection != existing.destination || !tabContentVisible || !presents(existing.destination) {
             back.append(checkpoint(selection)); if back.count > 64 { back.removeFirst() }; forward = []
         }
-        activeTab = existing.id; navigate(existing.destination, newTab: true, record: false, updateTabs: false)
+        retainCurrentWorkspace()
+        if let saved = readerCheckpoints[existing.id], saved.destination == existing.destination { restore(saved) }
+        else { activeTab = existing.id; navigate(existing.destination, newTab: true, record: false, updateTabs: false) }
     }
     func closeTab(_ id: UUID) {
-        tabs.removeAll { $0.id == id }
-        if activeTab == id { activeTab = tabs.last?.id; if let target = tabs.last?.destination { navigate(target, record: false, updateTabs: false) } else { selection = nil; tabContentVisible = false } }
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        let closingPresentedReader = livePreview == nil && activeTab == id && tabContentVisible
+        if closingPresentedReader { back.append(checkpoint(selection)); if back.count > 64 { back.removeFirst() }; forward = [] }
+        tabs.remove(at: index); readerCheckpoints.removeValue(forKey: id)
+        if livePreview != nil, previewOrigin?.checkpoint.activeTab == id {
+            previewOrigin = workspaceCheckpoint.map(PreviewOrigin.init)
+        }
+        if activeTab == id {
+            activeTab = tabs.isEmpty ? nil : tabs[min(index, tabs.count - 1)].id
+            if closingPresentedReader {
+                if let tab = tabs.first(where: { $0.id == activeTab }) {
+                    if let saved = readerCheckpoints[tab.id] { restore(saved) }
+                    else { navigate(tab.destination, newTab: true, record: false, updateTabs: false) }
+                } else if let saved = workspaceCheckpoint { restore(saved) }
+                else { tabContentVisible = false }
+            }
+        }
         persistTabs()
     }
     func pinTab(_ id: UUID) { if let i = tabs.firstIndex(where: { $0.id == id }) { tabs[i].pinned.toggle(); persistTabs() } }
@@ -926,7 +1027,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
     private func persistTabs() {
         guard let rootID = snapshot?.root.id else { return }
         var saved = UserDefaults.standard.dictionary(forKey: "lensTabsByRoot") as? [String: Data] ?? [:]
-        let storageKey = navigationScope + "|" + rootID
+        let storageKey = navigationScope + "|" + observedSourceHome.standardizedFileURL.path + "|" + rootID
         let retained = Array(tabs.suffix(24))
         saved[storageKey] = try? JSONEncoder().encode(WindowTabs(tabs: retained, activeTab: retained.contains(where: { $0.id == activeTab }) ? activeTab : retained.last?.id, tabContentVisible: tabContentVisible))
         if saved.count > 16 { for key in saved.keys.sorted() where key != storageKey { saved.removeValue(forKey: key); if saved.count <= 16 { break } } }
@@ -935,7 +1036,11 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
     private func restoreTabs(rootID: String) {
         restoredChatRecordID = (UserDefaults.standard.dictionary(forKey: "lensChatByRoot") as? [String: String])?[navigationScope + "|" + rootID]
         if restoredChatRecordID != nil { showChat() }
-        guard let data = (UserDefaults.standard.dictionary(forKey: "lensTabsByRoot") as? [String: Data])?[navigationScope + "|" + rootID], data.count <= 256 * 1024 else { return }
+        let savedTabs = UserDefaults.standard.dictionary(forKey: "lensTabsByRoot") as? [String: Data]
+        let qualifiedKey = navigationScope + "|" + observedSourceHome.standardizedFileURL.path + "|" + rootID
+        // Legacy entries have no source identity. Only migrate the default local source.
+        let legacyData = observedSourceHome.standardizedFileURL == CodexSourceLocation.observationHome().standardizedFileURL ? savedTabs?[navigationScope + "|" + rootID] : nil
+        guard let data = savedTabs?[qualifiedKey] ?? legacyData, data.count <= 256 * 1024 else { return }
         let saved: WindowTabs
         if let current = try? JSONDecoder().decode(WindowTabs.self, from: data) { saved = current }
         else if let legacy = try? JSONDecoder().decode([LensTab].self, from: data) { saved = WindowTabs(tabs: legacy, activeTab: legacy.last?.id) }
@@ -946,6 +1051,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         // Migrate legacy chat tabs without discarding ordinary pinned tabs.
         tabs = retained.filter { if case .investigation = $0.destination { return false }; return true }
         activeTab = tabs.contains(where: { $0.id == saved.activeTab }) ? saved.activeTab : tabs.last?.id
+        workspaceCheckpoint = checkpoint(selection)
         tabContentVisible = saved.tabContentVisible ?? false
         if let target = tabs.first(where: { $0.id == activeTab })?.destination { navigate(target, record: false, updateTabs: false) }
     }
@@ -953,10 +1059,12 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
     var canGoForward: Bool { !forward.isEmpty }
     func goBack() {
         guard let target = back.popLast() else { return }
+        retainCurrentWorkspace()
         forward.append(checkpoint(selection)); restore(target)
     }
     func goForward() {
         guard let target = forward.popLast() else { return }
+        retainCurrentWorkspace()
         back.append(checkpoint(selection)); restore(target)
     }
     var selectedEvent: LensEvent? {

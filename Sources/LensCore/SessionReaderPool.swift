@@ -118,7 +118,7 @@ public actor SessionReaderPool {
         let root = rootID?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard root != "" else { throw LensError.unavailable("ID de session vide.") }
         let sourceURL = home.standardizedFileURL.resolvingSymlinksInPath(), cacheURL = cache.standardizedFileURL.resolvingSymlinksInPath()
-        let key = SessionReaderKey(home: sourceURL.path, cache: cacheURL.path, rootID: root)
+        let key = SessionReaderKey(home: Self.canonicalKeyURL(home).path, cache: Self.canonicalKeyURL(cache).path, rootID: root)
         let reader: SessionReader
         if let entry = entries[key] { reader = entry.reader }
         else { reader = SessionReader(engine: SessionEngine(home: sourceURL, cacheDirectory: cacheURL), rootID: root) }
@@ -126,6 +126,26 @@ public actor SessionReaderPool {
         var subscribers = entries[key]?.subscribers ?? []; subscribers.insert(id)
         entries[key] = Entry(reader: reader, subscribers: subscribers)
         return SessionReaderLease(id: id, reader: reader, pool: self, key: key)
+    }
+
+    /// Foundation may leave an entire nonexistent path unresolved. Resolve its
+    /// existing ancestor first so creating the cache does not change pool identity.
+    /// This reads metadata only; the engine keeps its existing source/cache URLs
+    /// and remains responsible for reporting inaccessible cache locations.
+    private static func canonicalKeyURL(_ url: URL) -> URL {
+        var ancestor = url.standardizedFileURL
+        var missingComponents: [String] = []
+        while !FileManager.default.fileExists(atPath: ancestor.path) {
+            let parent = ancestor.deletingLastPathComponent()
+            guard parent.path != ancestor.path else { break }
+            missingComponents.append(ancestor.lastPathComponent)
+            ancestor = parent
+        }
+        var canonical = ancestor.resolvingSymlinksInPath()
+        for component in missingComponents.reversed() {
+            canonical.appendPathComponent(component)
+        }
+        return canonical.standardizedFileURL
     }
 
     fileprivate func release(id: UUID, key: SessionReaderKey) async {

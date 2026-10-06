@@ -8,6 +8,7 @@ import LensCore
     func resume(at date: Date) { state.resume(at: date) }
     func pause() { state.pause() }
     func reset() { state.reset() }
+    func restore(_ value: TimelineLiveState) { state = value }
     func advance(at date: Date) {
         var next = state; next.tick(at: date)
         if next != state { state = next }
