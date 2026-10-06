@@ -7,8 +7,8 @@ struct MainView: View {
     @Environment(\.lensWindowContext) private var windowContext
     @Environment(\.openSettings) private var openSettings
     @AppStorage("lensControlAccent") private var controlAccent = "lens"
-    @AppStorage("lensAppearance") private var appearance = "system"
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lensAppearance") private var appearance = "dark"
+    @AppStorage("lens.language") private var language = "en"
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @SceneStorage("lensSidebarVisible") private var sidebarVisible = true
     @SceneStorage("lensChatVisible") private var savedChatVisible = false

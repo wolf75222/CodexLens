@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main struct CodexLensApp: App {
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
     @NSApplicationDelegateAdaptor(LensApplicationDelegate.self) private var delegate
     var body: some Scene {
         WindowGroup("Codex Lens", id: "session", for: UUID.self) { request in

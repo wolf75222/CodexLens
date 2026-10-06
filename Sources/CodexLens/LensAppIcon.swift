@@ -27,7 +27,8 @@ import AppKit
     static func resolve(choice: String?, lensAppearance: String?, systemIsDark: Bool) -> String {
         if let choice, choice == "light" || choice == "dark" { return choice }
         guard choice == "appearance" else { return defaultAppearance }
-        if let lensAppearance, lensAppearance == "light" || lensAppearance == "dark" { return lensAppearance }
+        let effectiveAppearance = lensAppearance ?? "dark"
+        if effectiveAppearance == "light" || effectiveAppearance == "dark" { return effectiveAppearance }
         return systemIsDark ? "dark" : "light"
     }
 

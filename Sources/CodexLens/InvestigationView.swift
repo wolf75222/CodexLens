@@ -671,7 +671,7 @@ extension LensStore {
 /// The investigation is a persistent side conversation. Its store owns the draft,
 /// connection and in-flight request; hiding this view never stops that work.
 struct InvestigationView: View {
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
     @Environment(\.lensWindowContext) private var windowContext
     @EnvironmentObject var store: LensStore
     @ObservedObject var investigator: InvestigationStore

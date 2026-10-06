@@ -6,10 +6,10 @@ struct LensSettingsView: View {
     @ObservedObject private var reading = LensReadingPreferences.shared
     @ObservedObject private var guide = LensGuideCoordinator.shared
     @AppStorage("lensControlAccent") private var controlAccent = "lens"
-    @AppStorage("lensAppearance") private var appearance = "system"
+    @AppStorage("lensAppearance") private var appearance = "dark"
     @AppStorage("lensAppIconAppearance") private var iconAppearance = LensAppIconController.defaultAppearance
     @AppStorage("lensTabMaterial") private var tabMaterial = "system"
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
     var body: some View {
         TabView(selection: $guide.settingsPage) {
             generalSettings.tabItem { Label(LensL10n.text("Général"), systemImage: "gearshape") }.tag(LensSettingsPage.general)

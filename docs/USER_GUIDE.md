@@ -81,7 +81,7 @@ Investigation import/export preserves selected context and the chat archive in L
 
 Drag pane dividers to resize the sidebar, content, inspector, and chat. The **View** menu hides panels and adjusts the active pane; windows can be moved, resized, and used in full screen. Each window keeps its own navigation.
 
-**Settings → General** controls language, appearance, reading fonts, zoom increments, and pinch behavior. Content surfaces remain stable while macOS 26 can use Liquid Glass for navigation controls. Reduced-motion and transparency preferences are respected.
+**New installations open in English with Dark appearance.** Existing language and appearance choices are preserved. **Settings → General** controls language, appearance, reading fonts, zoom increments, and pinch behavior. Content surfaces remain stable while macOS 26 can use Liquid Glass for navigation controls. Reduced-motion and transparency preferences are respected.
 
 | Action | Shortcut |
 | --- | --- |

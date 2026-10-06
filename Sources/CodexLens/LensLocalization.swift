@@ -10,7 +10,7 @@ enum LensL10n {
     /// Synchronous lookup is also used by pure labels/default arguments. Only the mutable language is locked.
     private final class LanguageState: @unchecked Sendable {
         private let lock = NSLock()
-        private var selected = Language(rawValue: UserDefaults.standard.string(forKey: "lens.language") ?? "system") ?? .system
+        private var selected = Language(rawValue: UserDefaults.standard.string(forKey: "lens.language") ?? "en") ?? .system
         var language: Language {
             get { lock.lock(); defer { lock.unlock() }; return selected }
             set { lock.lock(); defer { lock.unlock() }; selected = newValue }

@@ -193,7 +193,7 @@ extension FocusedValues {
 }
 
 struct LensCommands: Commands {
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @ObservedObject private var application = LensApplicationCoordinator.shared

@@ -14,7 +14,7 @@ struct LensChatMarkdownView: View {
     var onCopyMessage: ((String) -> Void)? = nil
     var sources: [ChatContextSource] = []
     @State private var showsSource = false
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -153,7 +153,7 @@ struct LensChatMarkdownView: View {
 /// A question is visually distinct from the answer without using a second
 /// accent color. Native selectable text preserves exact copy and wrapping.
 struct LensChatQuestionBubble: View {
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
     let text: String
     let fontSize: Double
 
