@@ -102,7 +102,25 @@ import SwiftUI
                 return scroll
             }
             func settleScroll(_ scroll: NSScrollView) async throws {
-                for _ in 0..<4 { scroll.needsLayout = true; scroll.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 10_000_000) }
+                var previousSize: NSSize?, stableLayouts = 0
+                for _ in 0..<500 {
+                    // AppKit can deliver the initial preferred-style update
+                    // after construction. Apply this fixture's requested mode
+                    // and wait for its actual style AND geometry, rather than
+                    // taking a baseline after a fixed number of sleeps.
+                    if scroll.scrollerStyle != style { scroll.scrollerStyle = style; stableLayouts = 0 }
+                    scroll.needsLayout = true; scroll.layoutSubtreeIfNeeded()
+                    let size = scroll.contentSize
+                    let geometry = (scroll.documentView as? TimelineCanvas)?.geometry
+                    let coherent = scroll.scrollerStyle == style && geometry.map {
+                        abs($0.contentWidth - Double(max(500, size.width)) * store.timelineZoom) < 0.001
+                    } == true && distance(scroll.contentView.bounds.origin, store.timelineOrigin) < 0.001
+                    stableLayouts = coherent && previousSize == size ? stableLayouts + 1 : 0
+                    if stableLayouts >= 8 { return }
+                    previousSize = size
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+                throw LensError.unavailable("Scroller fixture did not reach coherent " + label + " layout")
             }
             var scroll = makeScroll(width: 1000), coordinator = TimelineView.Coordinator()
             store.timelineOrigin = CGPoint(x: 1600, y: 0); store.timelinePosition = nil; store.timelineReset &+= 1
@@ -111,6 +129,10 @@ import SwiftUI
             let expectedOrigin = store.timelineOrigin
             let expectedMidpoint = try require(store.timelinePosition?.midpoint, "qualified timeline midpoint")
             check("timeline-uses-requested-scroller-style-" + label, scroll.scrollerStyle == style)
+            observations.append(["scenario": "baseline-remount-" + label, "origin": NSStringFromPoint(expectedOrigin),
+                "clipSize": NSStringFromSize(scroll.contentSize),
+                "geometryWidth": (scroll.documentView as? TimelineCanvas)?.geometry?.contentWidth ?? 0,
+                "requestedScrollerStyle": label, "actualScrollerStyle": scroll.scrollerStyle == .legacy ? "legacy" : "overlay"])
             for iteration in 1...5 {
                 coordinator.detach()
                 // A new reader first lays out wider, then gains a scroller or
@@ -129,7 +151,8 @@ import SwiftUI
             observations.append(["scenario": "repeated-remount-" + label, "expectedOrigin": NSStringFromPoint(expectedOrigin),
                 "actualOrigin": NSStringFromPoint(store.timelineOrigin), "clipSize": NSStringFromSize(scroll.contentSize),
                 "geometryWidth": (scroll.documentView as? TimelineCanvas)?.geometry?.contentWidth ?? 0,
-                "scrollerStyle": label, "remounts": 5])
+                "requestedScrollerStyle": label, "actualScrollerStyle": scroll.scrollerStyle == .legacy ? "legacy" : "overlay",
+                "remounts": 5])
             let geometryBeforeZoom = try require((scroll.documentView as? TimelineCanvas)?.geometry, "pre-zoom geometry")
             let focalX: CGFloat = 220
             let focalDate = geometryBeforeZoom.date(atX: Double(store.timelineOrigin.x + focalX), clamped: false)
