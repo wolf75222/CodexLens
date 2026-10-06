@@ -18,6 +18,7 @@ bin_dir="$(swift build "${build_args[@]}" --show-bin-path)"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp "$bin_dir/CodexLens" "$app_dir/Contents/MacOS/CodexLens"
 cp "$project_dir/Support/Info.plist" "$app_dir/Contents/Info.plist"
+python3 "$project_dir/scripts/sparkle_bundle.py" embed --artifacts "$scratch_dir/artifacts" --app "$app_dir"
 cp "$project_dir/Assets/CodexLens.icns" "$app_dir/Contents/Resources/CodexLens.icns"
 cp "$project_dir/Assets/CodexLens.svg" "$app_dir/Contents/Resources/CodexLens.svg"
 for variant in Light Dark; do
@@ -47,10 +48,9 @@ data = {'schemaVersion': 1, 'version': info['CFBundleShortVersionString'],
 (app/'Contents/Resources/BuildInfo.json').write_text(json.dumps(data, indent=2)+'\n')
 PY
 xattr -cr "$app_dir"
-signing_args=(--force --sign "${LENS_SIGNING_IDENTITY:--}" --identifier fr.codexlens.inspector)
-if [[ "${LENS_SIGNING_IDENTITY:--}" != "-" ]]; then signing_args+=(--options runtime --timestamp); fi
-codesign "${signing_args[@]}" "$app_dir"
-codesign --verify --deep --strict "$app_dir"
+python3 "$project_dir/scripts/sparkle_bundle.py" runtime --app "$app_dir"
+python3 "$project_dir/scripts/sparkle_bundle.py" validate --app "$app_dir"
+python3 "$project_dir/scripts/sparkle_bundle.py" sign --app "$app_dir"
 if $profile; then
     dsymutil "$app_dir/Contents/MacOS/CodexLens" -o "$app_dir.dSYM"
     dwarfdump --uuid "$app_dir/Contents/MacOS/CodexLens" "$app_dir.dSYM"

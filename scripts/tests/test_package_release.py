@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import plistlib
+import sys
 import tempfile
 import unittest
 
@@ -12,7 +13,13 @@ ROOT = Path(__file__).resolve().parents[2]
 def module(name, file):
     spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / file)
     value = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(value)
+    # Direct spec loading must expose sibling script modules just like running
+    # `python3 scripts/validate-release.py` does.
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        spec.loader.exec_module(value)
+    finally:
+        sys.path.pop(0)
     return value
 
 

@@ -11,6 +11,7 @@ enum LensGlobalAction: String, CaseIterable, Identifiable {
     var scope: LensCommandScope { .global }
     var title: String { self == .newWindow ? LensL10n.text("Nouvelle fenêtre") : LensL10n.text("Ouvrir une session…") }
     @MainActor func perform(focusedStore: LensStore? = nil, newWindow: (() -> Void)? = nil) {
+        guard !LensApplicationCoordinator.shared.maintenanceInProgress else { return }
         switch self {
         case .newWindow: if let newWindow { newWindow() } else { LensApplicationCoordinator.shared.newWindow() }
         case .openSession:
@@ -412,6 +413,9 @@ struct LensWindowProbe: NSViewRepresentable {
     private final class Entry { weak var context: LensWindowContext?; init(_ context: LensWindowContext) { self.context = context } }
     private var windows: [Entry] = []
     private var closingFlushes: [UUID: Task<Void, Never>] = [:]
+    @Published private(set) var maintenanceInProgress = false
+    private var maintenancePools: [SessionReaderPool] = []
+    private var maintenanceCloseButtons: [(NSButton, Bool)] = []
     private weak var commandOwner: LensWindowContext?
     private var commandSubscriptions: Set<AnyCancellable> = []
     private var focusObservers: [NSObjectProtocol] = []
@@ -425,6 +429,7 @@ struct LensWindowProbe: NSViewRepresentable {
     @Published private(set) var recentIDs = (UserDefaults.standard.stringArray(forKey: "lensRecentSessionIDs") ?? []).filter { UUID(uuidString: $0) != nil }.prefix(12).map { $0 }
     @Published private(set) var recentTitles = UserDefaults.standard.dictionary(forKey: "lensRecentSessionTitles") as? [String: String] ?? [:]
     func register(_ context: LensWindowContext) {
+        guard !maintenanceInProgress || windows.contains(where: { $0.context === context }) else { context.window?.close(); return }
         windows.removeAll { $0.context == nil || $0.context === context }; windows.append(Entry(context))
         // The NSView probe can attach while SwiftUI is updating its view tree.
         Task { [weak self] in self?.refreshCommandFocus() }
@@ -489,6 +494,7 @@ struct LensWindowProbe: NSViewRepresentable {
         UserDefaults.standard.removeObject(forKey: "lensRecentSessionTitles")
     }
     func newWindow(requestID: UUID = UUID()) {
+        guard !maintenanceInProgress else { return }
         NSApp.unhide(nil)
         newWindowHandler?(requestID)
         NSApp.activate(ignoringOtherApps: true)
@@ -497,7 +503,7 @@ struct LensWindowProbe: NSViewRepresentable {
     /// existing window as the recent-session command does. No source state changes.
     @discardableResult
     func openInNewWindow(destination: Destination, from store: LensStore) -> Bool {
-        guard newWindowHandler != nil,
+        guard !maintenanceInProgress, newWindowHandler != nil,
               let seed = LensSessionWindowSeed(destination: destination, from: store) else { return false }
         let requestID = UUID()
         pendingWindowSeeds[requestID] = seed
@@ -510,6 +516,7 @@ struct LensWindowProbe: NSViewRepresentable {
         requestID.flatMap { pendingWindowSeeds[$0] }
     }
     func closeWindow(_ candidate: NSWindow?) {
+        guard !maintenanceInProgress else { return }
         guard let window = candidate?.sheetParent ?? candidate else { return }
         let context = context(for: window)
         context?.cancelOperation()
@@ -533,6 +540,7 @@ struct LensWindowProbe: NSViewRepresentable {
         for window in closing { closeWindow(window) }
     }
     func openSession(_ id: String? = nil) {
+        guard !maintenanceInProgress else { return }
         let available = windows.compactMap(\.context).filter { $0.window != nil && $0.store.isObserving }
         if let id {
             guard let identity = UUID(uuidString: id) else { return }
@@ -580,6 +588,7 @@ struct LensWindowProbe: NSViewRepresentable {
         }
     }
     func acceptPendingSession(in context: LensWindowContext) {
+        guard !maintenanceInProgress else { return }
         guard let requestID = context.sceneRequestID else { return }
         if let seed = pendingWindowSeeds.removeValue(forKey: requestID) {
             guard context.store.isObserving,
@@ -643,13 +652,53 @@ struct LensWindowProbe: NSViewRepresentable {
             self?.closingFlushes[identity] = nil
         }
     }
+    private var uninstallPrepared = false
+    private(set) var canFinishUninstall = false
+    func finishUninstall() { canFinishUninstall = true }
     func prepareToQuit() async {
+        guard !uninstallPrepared else { return }
         for context in windows.compactMap(\.context) {
             context.cancelOperation(); context.store.stopObserving()
             flushClosedInvestigation(context.store.investigation)
         }
         let pending = Array(closingFlushes.values)
         for flush in pending { await flush.value }
+        let pools = [SessionReaderPool.shared] + windows.compactMap(\.context).map(\.store.windowReaderPool)
+        for pool in pools { await pool.quiesce() }
+    }
+    var customStorageURLs: [URL] { windows.compactMap(\.context).compactMap(\.store.windowCacheDirectory) }
+    func storageURLsForUninstall() async -> [URL] {
+        var urls = customStorageURLs
+        for context in windows.compactMap(\.context) {
+            if let archive = context.store.windowCustomArchive { urls.append(await archive.directory) }
+        }
+        return urls
+    }
+    func beginMaintenance() async {
+        // Publish the gate synchronously before the first suspension point.
+        maintenanceInProgress = true
+        maintenanceCloseButtons = NSApp.windows.compactMap { $0.standardWindowButton(.closeButton) }.map { ($0, $0.isEnabled) }
+        for (button, _) in maintenanceCloseButtons { button.isEnabled = false }
+        maintenancePools = [SessionReaderPool.shared] + windows.compactMap(\.context).map(\.store.windowReaderPool)
+        for pool in maintenancePools { await pool.setAcquisitionsSuspended(true) }
+    }
+    func prepareForUninstall() async throws {
+        if !maintenanceInProgress { await beginMaintenance() }
+        let investigations = windows.compactMap(\.context).map(\.store.investigation)
+        await prepareToQuit()
+        if let unsaved = investigations.first(where: { $0.draftSaveState == .failed }) {
+            throw NSError(domain: "LensUninstall", code: 1, userInfo: [NSLocalizedDescriptionKey: unsaved.issue ?? LensL10n.text("Brouillon non sauvegardé")])
+        }
+        uninstallPrepared = true
+    }
+    func resumeAfterFailedUninstall() async {
+        uninstallPrepared = false
+        canFinishUninstall = false
+        for pool in maintenancePools { await pool.setAcquisitionsSuspended(false) }
+        maintenancePools = []; maintenanceInProgress = false
+        for (button, enabled) in maintenanceCloseButtons { button.isEnabled = enabled }
+        maintenanceCloseButtons = []
+        for context in windows.compactMap(\.context) { await context.store.start() }
     }
 }
 
@@ -669,6 +718,7 @@ struct LensWindowProbe: NSViewRepresentable {
     private var dockSessionActions: [LensDockSessionAction] = []
     func applicationDidFinishLaunching(_ notification: Notification) {
         LensAppIconController.shared.start()
+        LensUpdateController.shared.start()
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didUpdateNotification, object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.reconcileNativeTabCommands() } })
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in MainActor.assumeIsolated { LensApplicationCoordinator.shared.recoverVisibleFrames() } })
     }
@@ -706,9 +756,11 @@ struct LensWindowProbe: NSViewRepresentable {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     private var terminationPending = false
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if LensApplicationCoordinator.shared.maintenanceInProgress && !LensApplicationCoordinator.shared.canFinishUninstall { return .terminateCancel }
         guard !terminationPending else { return .terminateLater }; terminationPending = true
         Task { await LensApplicationCoordinator.shared.prepareToQuit(); finishTermination(sender) }
-        Task { try? await Task.sleep(nanoseconds: 2_000_000_000); finishTermination(sender) }
+        // Sparkle also quits through this delegate. Wait for owned draft writes
+        // rather than forcing a relaunch while a slow archive write is pending.
         return .terminateLater
     }
     func applicationWillTerminate(_ notification: Notification) { LensAppIconController.shared.stop() }

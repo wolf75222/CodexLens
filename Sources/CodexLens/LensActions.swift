@@ -74,6 +74,7 @@ enum LensAction: String, CaseIterable, Identifiable {
 }
 extension LensStore {
     func canPerform(_ action: LensAction, target: Destination? = nil) -> Bool {
+        guard !LensApplicationCoordinator.shared.maintenanceInProgress else { return false }
         if action.scope == .selection, !knownCommandDestination(target ?? selection) { return false }
         switch action {
         case .back: return canGoBack
@@ -197,6 +198,7 @@ struct LensCommands: Commands {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @ObservedObject private var application = LensApplicationCoordinator.shared
+    @State private var updater = LensUpdateController.shared
     @FocusedValue(\.lensSearchAction) private var focusedSearch
     private var context: LensWindowContext? { application.context(for: NSApp.keyWindow) }
     private var store: LensStore? { context?.store }
@@ -206,10 +208,12 @@ struct LensCommands: Commands {
             Button(LensL10n.text("À propos de Codex Lens")) {
                 NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "Codex Lens", .credits: NSAttributedString(string: LensL10n.text("Inspection locale des sessions Codex. Sources en lecture seule.\nLes enquêtes restent distinctes des traces observées."))])
             }
+            Button(LensL10n.text("Rechercher des mises à jour…")) { updater.check() }
+                .disabled(!updater.canCheck || application.maintenanceInProgress)
         }
         CommandGroup(replacing: .newItem) {
-            Button(LensGlobalAction.newWindow.title) { LensGlobalAction.newWindow.perform(newWindow: { openWindow(id: "session", value: UUID()) }) }.keyboardShortcut("n")
-            Button(LensGlobalAction.openSession.title) { LensGlobalAction.openSession.perform(focusedStore: store, newWindow: { openWindow(id: "session", value: UUID()) }) }.keyboardShortcut("o")
+            Button(LensGlobalAction.newWindow.title) { LensGlobalAction.newWindow.perform(newWindow: { openWindow(id: "session", value: UUID()) }) }.keyboardShortcut("n").disabled(application.maintenanceInProgress)
+            Button(LensGlobalAction.openSession.title) { LensGlobalAction.openSession.perform(focusedStore: store, newWindow: { openWindow(id: "session", value: UUID()) }) }.keyboardShortcut("o").disabled(application.maintenanceInProgress)
             command(.openInNewWindow)
             Menu(LensL10n.text("Ouvrir une session récente")) {
                 if application.recentIDs.isEmpty { Button(LensL10n.text("Aucune session récente")) {}.disabled(true) }
@@ -218,7 +222,7 @@ struct LensCommands: Commands {
                         .help(id).accessibilityLabel(application.recentTitle(for: id) + " · " + id)
                 }
                 Divider(); Button(LensL10n.text("Effacer le menu")) { application.clearRecents() }.disabled(application.recentIDs.isEmpty)
-            }
+            }.disabled(application.maintenanceInProgress)
         }
         // Apple's saveItem group owns Close as well as document saves. Lens
         // owns no editable source document, so supply its real tab/window

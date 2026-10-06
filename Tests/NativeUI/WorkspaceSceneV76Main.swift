@@ -172,6 +172,19 @@ import SwiftUI
             check("real-key-window-command-context-resolves", contexts.contains { $0 === keyContext }
                 && keyContext.store.canPerform(.openInNewWindow) && keyContext.store.canPerform(.conversation))
         } else { unqualified.append("No registered key document window was available; key-window menu routing was not qualified.") }
+        let coordinator = LensApplicationCoordinator.shared
+        let beforeMaintenance = signature(parent.store)
+        await coordinator.beginMaintenance()
+        var newSceneRequested = false
+        LensGlobalAction.newWindow.perform(newWindow: { newSceneRequested = true })
+        check("maintenance-blocks-direct-menu-new-window-closure", !newSceneRequested)
+        check("maintenance-blocks-inspection-window-request", !coordinator.openInNewWindow(destination: target, from: parent.store))
+        await parent.store.open(fixture.rootID)
+        check("maintenance-blocks-reopening-without-losing-scene-state", signature(parent.store) == beforeMaintenance)
+        check("maintenance-disables-selection-actions-and-native-close", !parent.store.canPerform(.openSession) && parentWindow.standardWindowButton(.closeButton)?.isEnabled == false)
+        check("maintenance-refuses-quit-before-trash-completes", LensApplicationDelegate().applicationShouldTerminate(NSApp) == .terminateCancel)
+        await coordinator.resumeAfterFailedUninstall()
+        check("maintenance-recovery-restores-actions-and-native-close", !coordinator.maintenanceInProgress && parent.store.canPerform(.openSession) && parentWindow.standardWindowButton(.closeButton)?.isEnabled == true)
         check("fixture-inputs-are-unchanged", fixture.unchanged())
     }
     private func toolbarID(_ window: NSWindow) throws -> String {

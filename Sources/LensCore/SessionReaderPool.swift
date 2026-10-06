@@ -15,6 +15,7 @@ public actor SessionReader {
     private var flight: Flight?
     private var waiters: [UUID: CheckedContinuation<SessionReaderUpdate, Error>] = [:]
     private var closed = false
+    private var closingTask: Task<Void, Never>?
     internal private(set) var startedCollections = 0
 
     fileprivate init(engine: SessionEngine, rootID: String?) { self.engine = engine; self.rootID = rootID }
@@ -74,10 +75,14 @@ public actor SessionReader {
 
     private func cancelWaiter(_ id: UUID) { waiters.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
 
-    fileprivate func close() {
-        closed = true; flight?.task.cancel(); flight = nil; latest = nil
+    fileprivate func close() async {
+        if closed { await closingTask?.value; return }
+        closed = true; closingTask = flight?.task; closingTask?.cancel(); flight = nil; latest = nil
         let pending = waiters; waiters = [:]
         for continuation in pending.values { continuation.resume(throwing: CancellationError()) }
+        // Cancellation alone doesn't wait for an already-running cache write.
+        await closingTask?.value
+        closingTask = nil
     }
 }
 
@@ -108,11 +113,28 @@ public actor SessionReaderPool {
     public static let shared = SessionReaderPool()
     private struct Entry { let reader: SessionReader; var subscribers: Set<UUID> }
     private var entries: [SessionReaderKey: Entry] = [:]
+    private var closingReaders: [UUID: SessionReader] = [:]
+    private var acquisitionsSuspended = false
     public init() {}
     internal var activeReaderCount: Int { entries.count }
+    public func setAcquisitionsSuspended(_ value: Bool) { acquisitionsSuspended = value }
+
+    /// Drain existing readers, including a last-lease release already in progress.
+    /// A later user-requested acquisition can create a fresh reader after recovery.
+    public func quiesce() async {
+        let readers = entries.values.map(\.reader) + Array(closingReaders.values)
+        entries.removeAll()
+        for reader in readers { await closeReader(reader) }
+    }
+    private func closeReader(_ reader: SessionReader) async {
+        let id = UUID(); closingReaders[id] = reader
+        await reader.close()
+        closingReaders[id] = nil
+    }
 
     public func acquire(home: URL, cacheDirectory: URL? = nil, rootID: String? = nil) throws -> SessionReaderLease {
         try Task.checkCancellation()
+        guard !acquisitionsSuspended else { throw CancellationError() }
         let cache = cacheDirectory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("CodexLens/Index-v1")
         guard home.isFileURL, cache.isFileURL else { throw LensError.unsupported("Les lecteurs utilisent des sources et caches locaux.") }
         let root = rootID?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -150,7 +172,7 @@ public actor SessionReaderPool {
 
     fileprivate func release(id: UUID, key: SessionReaderKey) async {
         guard var entry = entries[key], entry.subscribers.remove(id) != nil else { return }
-        if entry.subscribers.isEmpty { entries.removeValue(forKey: key); await entry.reader.close() }
+        if entry.subscribers.isEmpty { entries.removeValue(forKey: key); await closeReader(entry.reader) }
         else { entries[key] = entry }
     }
 }

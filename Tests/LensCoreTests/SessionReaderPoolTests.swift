@@ -4,6 +4,42 @@ import XCTest
 
 /// These readers consume only invented histories in /private/tmp, never the user's Codex home.
 final class SessionReaderPoolTests: XCTestCase {
+    func testSuspendedAcquisitionsRejectNewReadersUntilExplicitRecovery() async throws {
+        let f = try ReaderFixture(); defer { f.remove() }
+        let pool = SessionReaderPool()
+        await pool.setAcquisitionsSuspended(true)
+        do { _ = try await pool.acquire(home: f.home, cacheDirectory: f.cache, rootID: ReaderFixture.a); XCTFail("Maintenance must reject new acquisitions") }
+        catch is CancellationError { }
+        let count = await pool.activeReaderCount
+        XCTAssertEqual(count, 0)
+        await pool.setAcquisitionsSuspended(false)
+        let lease = try await pool.acquire(home: f.home, cacheDirectory: f.cache, rootID: ReaderFixture.a)
+        await lease.release()
+    }
+    func testMaintenanceDrainsReadersDuringLastLeaseReleaseAndCanRecover() async throws {
+        let f = try ReaderFixture(); defer { f.remove() }
+        let log = try f.write(id: ReaderFixture.a, count: 1000)
+        let original = try Data(contentsOf: log)
+        let pool = SessionReaderPool()
+        let lease = try await pool.acquire(home: f.home, cacheDirectory: f.cache, rootID: ReaderFixture.a)
+        let flight = Task { try await lease.reader.load() }
+        while await lease.reader.startedCollections == 0 { await Task.yield() }
+        async let release: Void = lease.release()
+        await pool.quiesce()
+        await release
+        _ = await flight.result
+        let count = await pool.activeReaderCount
+        XCTAssertEqual(count, 0)
+        do { _ = try await lease.reader.load(); XCTFail("A drained reader must not resume writing its cache") }
+        catch LensError.unavailable(_) { }
+        XCTAssertEqual(try Data(contentsOf: log), original)
+        let restored = try await pool.acquire(home: f.home, cacheDirectory: f.cache, rootID: ReaderFixture.a)
+        XCTAssertFalse(restored.reader === lease.reader)
+        let result = try await restored.reader.load()
+        XCTAssertEqual(result.snapshot.root.id, ReaderFixture.a)
+        XCTAssertEqual(try Data(contentsOf: log), original)
+        await restored.release()
+    }
     func testSameCanonicalSourceCacheAndRootShareReaderButOtherKeysDoNot() async throws {
         let f = try ReaderFixture(); defer { f.remove() }
         let pool = SessionReaderPool()

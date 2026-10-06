@@ -46,6 +46,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
     private var selectedSourceHome: URL?
     private let cacheDirectory: URL?
     private let readerPool: SessionReaderPool
+    let windowCustomArchive: InvestigationArchive?
     private var catalogueLease: SessionReaderLease?
     private var selectedReaderLease: SessionReaderLease?
     var hasSessionReader: Bool { selectedReaderLease != nil }
@@ -584,6 +585,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         self.readingPreferences = readingPreferences ?? .shared
         self.sourceHome = sourceHome ?? CodexSourceLocation.observationHome()
         self.cacheDirectory = cacheDirectory ?? ProcessInfo.processInfo.environment["LENS_CACHE_DIRECTORY"].map { URL(fileURLWithPath: $0, isDirectory: true) }; self.readerPool = readerPool
+        windowCustomArchive = investigationArchive === Self.sharedArchive ? nil : investigationArchive
         investigation = InvestigationStore(archive: investigationArchive ?? Self.sharedArchive)
         readingDefaultSize = self.readingPreferences.configuration.defaultSize
         fontSize = readingDefaultSize
@@ -599,6 +601,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         if let data = UserDefaults.standard.data(forKey: "lensBookmarks"), data.count <= 256 * 1024 { bookmarks = (try? JSONDecoder().decode([LensBookmark].self, from: data)) ?? [] }
     }
     func start() async {
+        guard !LensApplicationCoordinator.shared.maintenanceInProgress else { return }
         guard !started else { return }; started = true; isStopped = false; lifecycleGeneration = UUID()
         let lifecycle = lifecycleGeneration
         await refreshCatalog()
@@ -730,7 +733,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         sourceHome = next; catalog = []; error = nil; fallbackEngine = nil
         await refreshCatalog()
     }
-    func open(_ id: String) async { await open(id, generation: UUID()) }
+    func open(_ id: String) async { guard !LensApplicationCoordinator.shared.maintenanceInProgress else { return }; await open(id, generation: UUID()) }
     func cancelSessionOpening() {
         openGeneration = UUID(); loadTask?.cancel(); loadTask = nil
         if let pendingReaderLease { releaseReader(pendingReaderLease); self.pendingReaderLease = nil }

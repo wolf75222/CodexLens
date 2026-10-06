@@ -103,6 +103,12 @@ jobs:
           mkdir -p dist/ui-validation/scenes
           cp "$scenes/native-design-v07-receipt.json" dist/ui-validation/scenes/receipt.json
           cp "$scenes/"*.png dist/ui-validation/scenes/
+      - name: Signed update regression
+        run: |
+          updates="/private/tmp/lens-ci-updates-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          bash scripts/verify-updates.sh --artifacts "$LENS_BUILD_DIR/artifacts" --output "$updates"
+          mkdir -p dist/ui-validation/updates
+          cp "$updates/receipt.json" dist/ui-validation/updates/receipt.json
       - name: Package and verify installer
         run: bash scripts/package-release.sh --app "$LENS_APP_PATH" --output dist/release
       - name: Release version

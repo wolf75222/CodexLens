@@ -13,6 +13,8 @@ import subprocess
 import tempfile
 import zipfile
 
+from sparkle_bundle import validate_embedded
+
 
 def run(args: list[str]) -> bytes:
     result = subprocess.run(args, capture_output=True)
@@ -64,11 +66,12 @@ def bundle_checks(app: Path, metadata: dict) -> dict:
     if metadata["uuid"] not in run(["xcrun", "dwarfdump", "--uuid", str(exe)]).decode():
         raise ValueError("Release executable UUID differs.")
     run(["codesign", "--verify", "--deep", "--strict", str(app)])
+    validate_embedded(app)
     build = json.loads((app / "Contents/Resources/BuildInfo.json").read_text())
     if build.get("sourceCommit") != metadata["sourceCommit"] or build.get("dirty") != metadata["dirty"]:
         raise ValueError("Bundle build provenance differs.")
     resources = app / "Contents/Resources"
-    required = ["CodexLens.icns", "CodexLens-Dark.icns", "CodexLens-Light.icns", "Localizations/en.json", "THIRD_PARTY_NOTICES.txt"]
+    required = ["CodexLens.icns", "CodexLens-Dark.icns", "CodexLens-Light.icns", "Localizations/en.json", "THIRD_PARTY_NOTICES.txt", "Sparkle-LICENSE.txt"]
     if not all((resources / name).is_file() for name in required):
         raise ValueError("Release resources are missing.")
     return {str(p.relative_to(app)): digest(p) for p in sorted(app.rglob("*")) if p.is_file()}

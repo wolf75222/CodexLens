@@ -30,6 +30,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Sparkle updater
+
+Codex Lens embeds [Sparkle 2.10.0](https://github.com/sparkle-project/Sparkle/releases/tag/2.10.0), pinned through Swift Package Manager. Sparkle uses the MIT license, with additional upstream component notices included in its distribution. The complete upstream license is copied to `Contents/Resources/Sparkle-LICENSE.txt` in the app. The pinned binary archive checksum is `17e28312b8e18ab7cdbbe09a6fb28cc55a5479ec6c371dbc07cdecd2a14fd959`.
+
 ## Build-only packaging tools
 
 The release tooling uses dmgbuild 1.6.7, ds-store 1.3.3 and mac-alias 2.2.3. These MIT-licensed tools are installed in the build environment, not linked to or shipped inside the application. Their exact wheel hashes are pinned in `scripts/requirements-release.txt`.

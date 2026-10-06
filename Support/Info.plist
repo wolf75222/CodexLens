@@ -64,5 +64,25 @@
 			</dict>
 		</dict>
 	</array>
+	<key>SUPublicEDKey</key>
+	<string>TMo69IBfGgLHsHxWAJYJccenbv0eWrCU82Q4ososSgQ=</string>
+	<key>SUFeedURL</key>
+	<string>https://github.com/wolf75222/CodexLens/releases/latest/download/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
+	<key>SUEnableSystemProfiling</key>
+	<false/>
+	<key>SUShowReleaseNotes</key>
+	<false/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUSignedFeedFailureExpirationInterval</key>
+	<integer>0</integer>
 </dict>
 </plist>

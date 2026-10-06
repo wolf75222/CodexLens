@@ -8,6 +8,9 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ### Added
 
+- Native signed updates from GitHub releases, with manual checks and optional automatic checks. Updates replace the current installed app and preserve its data.
+- A review-first uninstall flow in Settings, keeping local data by default and offering recoverable, narrowly scoped cleanup.
+
 - Session curves in Activity: recorded events, tool/MCP calls, requested file changes, reported errors, waits and identified compactions, with interval/cumulative counts, keyboard-accessible values and linked period inspection.
 - Open a selected timeline event or reading tab in an independent inspection window using the same observed source.
 - Detailed feature catalogue with native macOS screenshots, entry points, keyboard commands and availability limits.

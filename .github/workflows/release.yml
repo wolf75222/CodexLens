@@ -36,16 +36,22 @@ jobs:
   publish:
     name: Publish verified artifacts
     needs: verify
-    runs-on: ubuntu-24.04
+    # Sparkle's official signing tools and public-key verifier run on macOS.
+    runs-on: macos-26
+    timeout-minutes: 15
     permissions:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.verify.outputs.version }}
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: codex-lens-${{ github.sha }}
@@ -55,7 +61,30 @@ jobs:
           test "$GITHUB_REF_NAME" = "v$VERSION"
           python3 -c 'import json,os; m=json.load(open("dist/release/release-metadata.json")); assert m["sourceCommit"]==os.environ["GITHUB_SHA"] and m["version"]==os.environ["VERSION"] and m["dirty"] is False'
           cd dist/release
-          sha256sum --check CHECKSUMS.sha256
+          shasum -a 256 --check CHECKSUMS.sha256
+      - name: Download pinned Sparkle release tools
+        run: |
+          mkdir -p "$RUNNER_TEMP/sparkle-tools"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/Sparkle-2.10.0.tar.xz" \
+            https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-2.10.0.tar.xz
+          printf '%s  %s\n' \
+            c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c \
+            "$RUNNER_TEMP/Sparkle-2.10.0.tar.xz" | shasum -a 256 --check
+          tar -xJf "$RUNNER_TEMP/Sparkle-2.10.0.tar.xz" -C "$RUNNER_TEMP/sparkle-tools"
+      - name: Sign and verify update feed and archive
+        env:
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+        run: |
+          python3 scripts/update_appcast.py release \
+            --artifacts dist/release --tag "$GITHUB_REF_NAME" \
+            --tools "$RUNNER_TEMP/sparkle-tools/bin"
+      - name: Recheck exact signed artifacts before publication
+        run: |
+          python3 scripts/update_appcast.py validate \
+            --artifacts dist/release --tag "$GITHUB_REF_NAME"
+          cd dist/release
+          shasum -a 256 --check CHECKSUMS.sha256
       - name: Publish after successful verification
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then

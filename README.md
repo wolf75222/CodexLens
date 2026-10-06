@@ -16,6 +16,8 @@ Open an existing session, including one still running in Codex, and follow its r
 2. Open the `.dmg` and drag **Codex Lens** into **Applications**.
 3. Launch Codex Lens and choose a session, paste its ID, or paste a `codex://threads/<thread-id>` link.
 
+Updater-enabled builds offer **Codex Lens → Check for Updates…** and update preferences in **Settings → General**. Future signed releases replace the installed app in place. Older builds need one manual replacement. [Updates and removal](docs/UPDATES.md) describes automatic checks and the optional uninstall/data-cleanup flow.
+
 Release assets include SHA-256 checksums. Current community builds are locally signed, not Developer ID notarized; macOS may require confirmation in **System Settings → Privacy & Security**. Do not disable Gatekeeper.
 
 ## Explore, then ask
