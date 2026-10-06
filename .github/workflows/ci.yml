@@ -88,6 +88,24 @@ jobs:
       - name: Release version
         id: version
         run: python3 -c 'import plistlib,os; d=plistlib.load(open("Support/Info.plist","rb")); open(os.environ["GITHUB_OUTPUT"],"a").write("version="+d["CFBundleShortVersionString"]+"\n")'
+      - name: Collect native diagnostics
+        if: always()
+        run: |
+          mkdir -p dist/native-diagnostics
+          for kind in ui navigation scenes; do
+            probe="/private/tmp/lens-ci-${kind}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            mkdir -p "dist/native-diagnostics/$kind"
+            for file in native-design-v07-receipt.json process-receipt.json phase.json scene-phase.json runtime.log build.log toolchain.log; do
+              if [ -f "$probe/$file" ]; then cp "$probe/$file" "dist/native-diagnostics/$kind/"; fi
+            done
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: native-diagnostics-${{ github.sha }}
+          path: dist/native-diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: codex-lens-${{ github.sha }}
