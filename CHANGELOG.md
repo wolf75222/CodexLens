@@ -6,6 +6,8 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+## [0.42.2] - 2026-10-06
+
 ### Added
 
 - Agent information in the existing inspector and context menu: recorded role, available descriptions, model/effort configuration, requested spawn settings and links to original tasks/instructions. Missing fields stay unavailable; request settings require an explicit child link.
@@ -116,7 +118,8 @@ These versions were local deliveries, not published GitHub releases. Their dates
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
 
-[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.1...main
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.2...main
+[0.42.2]: https://github.com/wolf75222/CodexLens/compare/v0.42.1...v0.42.2
 [0.42.1]: https://github.com/wolf75222/CodexLens/compare/v0.42.0...v0.42.1
 [0.42.0]: https://github.com/wolf75222/CodexLens/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/wolf75222/CodexLens/releases/tag/v0.41.0
