@@ -1060,7 +1060,10 @@ struct TimelineView: NSViewRepresentable {
         densityQueryCount &+= 1
         var estimate = 128 + plan.details.count * 192 + plan.clusters.count * 192
         for item in plan.details { estimate += item.id.utf8.count + item.agentID.utf8.count }
-        for cluster in plan.clusters { estimate += cluster.id.utf8.count + cluster.sampleEventIDs.reduce(0) { $0 + $1.utf8.count + 24 } }
+        for cluster in plan.clusters {
+            estimate += cluster.id.utf8.count + cluster.kindCounts.count * 48
+                + cluster.sampleEventIDs.reduce(0) { $0 + $1.utf8.count + 24 }
+        }
         if estimate <= densityCacheBudget {
             if densityPlans.count >= 24 || densityCacheBytes + estimate > densityCacheBudget { densityPlans = [:]; densityCacheBytes = 0 }
             densityPlans[lane] = plan; densityCacheBytes += estimate
@@ -1107,6 +1110,7 @@ struct TimelineView: NSViewRepresentable {
                         + " · " + cluster.window.start.lensFormatted(date: .omitted, time: .standard)
                         + " – " + cluster.window.end.lensFormatted(date: .omitted, time: .standard))
                     element.setAccessibilityHelp(LensL10n.text("Zoomer sur ce groupe"))
+                    element.setAccessibilityValue(clusterComposition(cluster))
                     element.localFrame = clusterRect(cluster, geometry: geometry)
                     element.onPress = { [weak self] in
                         guard let self, self.projection?.fingerprintSHA256 == fingerprint,
@@ -1185,10 +1189,6 @@ struct TimelineView: NSViewRepresentable {
                 drawSelection(selected, geometry: geometry, clip: plotClip)
             }
             NSGraphicsContext.restoreGraphicsState()
-            if !result.clusters.isEmpty {
-                let message = LensL10n.text("Groupes · cliquer pour zoomer")
-                (message as NSString).draw(in: NSRect(x: plot.minX + 8, y: row.maxY - 15, width: max(0, plot.width - 16), height: 14), withAttributes: [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: NSColor.secondaryLabelColor])
-            }
             NSColor.windowBackgroundColor.setFill(); NSRect(x: visible.minX, y: row.minY, width: labelWidth - 5, height: laneHeight).fill()
             let paragraph = NSMutableParagraphStyle(); paragraph.lineBreakMode = .byTruncatingTail
             (lane.name as NSString).draw(in: NSRect(x: visible.minX + 12, y: row.minY + 10, width: labelWidth - 22, height: 16), withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph])
@@ -1210,20 +1210,32 @@ struct TimelineView: NSViewRepresentable {
     }
     private func clusterRect(_ cluster: TimelineDensityCluster, geometry: TimelineGeometry) -> NSRect {
         let x = geometry.x(for: cluster.window.start), end = geometry.x(for: cluster.window.end)
-        let height = min(geometry.barHeight, 8 + log2(Double(cluster.count) + 1) * 2)
+        let height = min(geometry.barHeight * 0.65, 8 + log2(Double(cluster.count) + 1) * 0.7)
         return NSRect(x: x + 1.5, y: geometry.rulerHeight + Double(cluster.laneIndex) * geometry.laneHeight + geometry.barInset + geometry.barHeight - height,
                       width: max(1, end - x - 3), height: height)
     }
     private func draw(_ cluster: TimelineDensityCluster, geometry: TimelineGeometry, clip: NSRect) {
-        let rect = clusterRect(cluster, geometry: geometry).intersection(clip)
-        guard !rect.isEmpty else { return }
-        LensControlAccent.current.nsColor.withAlphaComponent(hoverClusterID == cluster.id ? 0.25 : 0.15).setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
-        if rect.width >= 24 {
-            let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
-            (String(cluster.count) as NSString).draw(in: NSRect(x: rect.minX + 1, y: rect.midY - 6, width: rect.width - 2, height: 13),
-                withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 9.5, weight: .medium), .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph])
+        let rect = clusterRect(cluster, geometry: geometry)
+        guard rect.intersects(clip) else { return }
+        let shape = NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3)
+        NSGraphicsContext.saveGraphicsState(); shape.addClip()
+        // These portions describe the bin's exact type composition, not the
+        // temporal positions of individual actions. Clip after placement so
+        // panning or a partial redraw cannot change their proportions.
+        var x = rect.minX
+        for kind in EventKind.allCases {
+            let count = cluster.kindCounts[kind, default: 0]
+            guard count > 0 else { continue }
+            let width = rect.width * CGFloat(count) / CGFloat(cluster.count)
+            LensBrand.eventNSColor(kind).withAlphaComponent(hoverClusterID == cluster.id ? 0.95 : 0.88).setFill()
+            NSRect(x: x, y: rect.minY, width: width, height: rect.height).fill()
+            if x > rect.minX {
+                NSColor.textBackgroundColor.withAlphaComponent(0.6).setFill()
+                NSRect(x: x, y: rect.minY, width: 0.75, height: rect.height).fill()
+            }
+            x += width
         }
+        NSGraphicsContext.restoreGraphicsState()
         if cluster.errorCount > 0 {
             ("!" as NSString).draw(at: NSPoint(x: rect.minX + 1, y: rect.minY - 1),
                 withAttributes: [.font: NSFont.systemFont(ofSize: 10, weight: .bold), .foregroundColor: LensAppearance.error])
@@ -1234,17 +1246,13 @@ struct TimelineView: NSViewRepresentable {
         }
     }
     private func drawSelection(_ item: TimelineItem, geometry: TimelineGeometry, clip: NSRect) {
-        let rect = nativeRect(item, geometry: geometry).intersection(clip)
-        guard !rect.isEmpty else { return }
-        LensControlAccent.current.nsColor.setStroke()
-        let outline = NSBezierPath(roundedRect: rect.insetBy(dx: -1, dy: -1), xRadius: 3, yRadius: 3)
-        outline.lineWidth = 2; outline.stroke()
+        draw(item, geometry: geometry, clip: clip)
     }
     private func draw(_ item: TimelineItem, geometry: TimelineGeometry, clip: NSRect) {
         // Clip before constructing a path: a years-long recorded interval can extend far outside the viewport.
         let rect = nativeRect(item, geometry: geometry).intersection(clip)
         guard !rect.isEmpty else { return }
-        color(item).withAlphaComponent(item.id == selectedID ? 1 : 0.72).setFill()
+        color(item).withAlphaComponent(item.id == selectedID ? 1 : 0.88).setFill()
         NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
         if item.id == hoverID && item.id != selectedID {
             NSColor.labelColor.setStroke()
@@ -1451,7 +1459,7 @@ struct TimelineView: NSViewRepresentable {
             if hoverClusterID != cluster.id || hoverID != nil { hoverClusterID = cluster.id; hoverID = nil; needsDisplay = true }
             toolTip = LensL10n.text("{0} événements dans ce groupe · cliquer pour zoomer", String(cluster.count))
                 + "\n" + cluster.window.start.lensFormatted(date: .omitted, time: .standard) + " – " + cluster.window.end.lensFormatted(date: .omitted, time: .standard)
-                + "\n" + LensL10n.text("{0} erreurs · {1} compactages", String(cluster.errorCount), String(cluster.compactionCount))
+                + "\n" + clusterComposition(cluster)
                 + "\n" + LensL10n.text("Un intervalle long peut apparaître dans plusieurs groupes. Les marqueurs proches des limites sont inclus.")
             return
         }
@@ -1469,6 +1477,12 @@ struct TimelineView: NSViewRepresentable {
         guard let hits, let id = hits.eventIDs.first, let record = eventLookup?(id) else { toolTip = nil; return }
         let ambiguity = hits.requiresDisambiguation ? LensL10n.text("\nPlusieurs événements se superposent ; cliquer pour choisir.") : ""
         toolTip = record.title + " · " + record.timestamp.lensFormatted(date: .abbreviated, time: .standard) + "\n" + String(record.preview.prefix(1800)) + ambiguity
+    }
+    private func clusterComposition(_ cluster: TimelineDensityCluster) -> String {
+        EventKind.allCases.compactMap { kind in
+            let count = cluster.kindCounts[kind, default: 0]
+            return count > 0 ? "\(kind.label) : \(count.formatted(.number.locale(Locale(identifier: LensL10n.resolvedLanguage.rawValue))))" : nil
+        }.joined(separator: " · ")
     }
     override func mouseExited(with event: NSEvent) {
         if hoverClusterID != nil { hoverClusterID = nil; needsDisplay = true }

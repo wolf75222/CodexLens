@@ -58,6 +58,15 @@ jobs:
         run: bash scripts/build.sh --profile
       - name: Native AppKit icon tests
         run: bash scripts/test-app-icon.sh "$RUNNER_TEMP/icon-receipt.json"
+      - name: Timeline appearance regression
+        run: |
+          corpus="/private/tmp/lens-ci-timeline-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          timeline="/private/tmp/lens-ci-timeline-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python3 scripts/create-curves-corpus-v77.py --output "$corpus" --events 600
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$timeline" --corpus "$corpus" --entrypoint TimelineAppearanceV78Main.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/timeline
+          cp "$timeline/native-design-v07-receipt.json" dist/ui-validation/timeline/receipt.json
+          cp "$timeline/"*.png dist/ui-validation/timeline/
       - name: Session curves regression
         env:
           LENS_CURVES_COMPACT_LAYOUT: "1"
@@ -103,7 +112,7 @@ jobs:
         if: always()
         run: |
           mkdir -p dist/native-diagnostics
-          for kind in ui navigation scenes curves; do
+          for kind in ui navigation scenes curves timeline; do
             probe="/private/tmp/lens-ci-${kind}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             mkdir -p "dist/native-diagnostics/$kind"
             for file in native-design-v07-receipt.json process-receipt.json phase.json scene-phase.json runtime.log build.log toolchain.log; do

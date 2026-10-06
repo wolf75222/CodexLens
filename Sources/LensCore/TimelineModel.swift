@@ -38,6 +38,7 @@ public struct TimelineItem: Sendable, Identifiable, Equatable {
     public let recordedEnd: Date?
     public let kind: EventKind
     public let isError: Bool
+    public var effectiveKind: EventKind { isError ? .error : kind }
     public var effectiveEnd: Date { recordedEnd.map { max(start, $0) } ?? start }
     public var recordedDuration: TimeInterval? { guard let end = recordedEnd, end >= start else { return nil }; return end.timeIntervalSince(start) }
     public var hasInvalidRecordedDuration: Bool { recordedEnd.map { $0 < start } ?? false }
@@ -76,6 +77,9 @@ public struct TimelineDensityCluster: Sendable, Identifiable {
     public let count: Int
     public let errorCount: Int
     public let compactionCount: Int
+    /// Exact display-type composition of all intersecting items. Failed items
+    /// contribute to .error, matching individual marks; samples are not used.
+    public let kindCounts: [EventKind: Int]
     /// A bounded, deterministic sample in the projection's temporal order.
     public let sampleEventIDs: [String]
 }
@@ -218,9 +222,9 @@ public struct TimelineProjection: Sendable {
     }
     /// Scale-dependent representation from the prepared interval index. No source events are
     /// read, parsed or sorted here. Counts include the minimum display width of markers.
-    /// Counts use sorted start/end indexes. Only the small marker-padding fringe may need
-    /// additional tree visits; those and the bounded sample search appear in `visitedNodes`.
-    public func density(lane: Int, geometry: TimelineGeometry, xRange: ClosedRange<Double>, bucketWidth: Double = 44, detailLimit: Int = 2, maximumBuckets: Int = 256) -> TimelineDensityResult {
+    /// Counts use sorted start/end indexes. Marker-padding fringes, bounded samples
+    /// and readable-mark overlap checks are reflected in `visitedNodes`.
+    public func density(lane: Int, geometry: TimelineGeometry, xRange: ClosedRange<Double>, bucketWidth: Double = 32, detailLimit: Int = 12, maximumBuckets: Int = 256) -> TimelineDensityResult {
         let empty = TimelineDensityResult(details: [], clusters: [], totalMatches: 0, visitedNodes: 0)
         guard laneIndexes.indices.contains(lane), xRange.lowerBound.isFinite,
               xRange.upperBound.isFinite, bucketWidth.isFinite, bucketWidth > 0,
@@ -233,7 +237,7 @@ public struct TimelineProjection: Sendable {
         // Algebraically equivalent to max(recorded width, minimum marker width) in rect(for:).
         // Infinite padding for an extreme but valid marker width is meaningful: it spans the axis.
         let markerPadding = geometry.window.duration * (geometry.minimumMarkerWidth / geometry.timeWidth)
-        let total = laneIndex.densityMatches(window: fullWindow, markerPadding: markerPadding, limit: 0, items: items)
+        let total = laneIndex.densityMatches(window: fullWindow, markerPadding: markerPadding, limit: 0, items: items, includeKinds: false)
         guard total.count > 0 else { return TimelineDensityResult(details: [], clusters: [], totalMatches: 0, visitedNodes: total.visitedNodes) }
         let width = upperX - lowerX
         let bucketCap = min(256, maximumBuckets)
@@ -244,17 +248,43 @@ public struct TimelineProjection: Sendable {
         let queryLimit = max(appliedDetailLimit, sampleLimit)
         var details: [TimelineItem] = [], clusters: [TimelineDensityCluster] = []
         var detailIDs = Set<String>(), visited = total.visitedNodes
+        var isolated: [String: Bool] = [:]
         clusters.reserveCapacity(bucketCount)
         for bucket in 0..<bucketCount {
             let lo = lowerX + width * (Double(bucket) / Double(bucketCount))
             let hi = bucket == bucketCount - 1 ? upperX : lowerX + width * (Double(bucket + 1) / Double(bucketCount))
             guard let window = try? geometry.window(forXRange: lo...hi, includingMarkerPadding: false) else { continue }
-            let result = laneIndex.densityMatches(window: window, markerPadding: markerPadding, limit: queryLimit, items: items)
+            let result = laneIndex.densityMatches(window: window, markerPadding: markerPadding, limit: queryLimit,
+                                                  items: items, detailThreshold: appliedDetailLimit)
             visited += result.visitedNodes
             guard result.count > 0 else { continue }
             if result.count <= appliedDetailLimit {
+                // A bin can contain several distinct marks. Its count alone
+                // must not replace readable details with a uniform block.
+                var separable = true
+                for item in result.items {
+                    if let cached = isolated[item.id] { if !cached { separable = false; break }; continue }
+                    let rect = geometry.rect(for: item)
+                    // Subpixel tolerance avoids treating an exact one-pixel
+                    // gap as an intersection after date/coordinate round trips.
+                    let probeLo = max(lowerX, rect.x - 0.9999), probeHi = min(upperX, rect.maxX + 0.9999)
+                    guard probeLo.isFinite, probeHi.isFinite, probeLo <= probeHi else { separable = false; break }
+                    let range = probeLo...probeHi
+                    guard let probeWindow = try? geometry.window(forXRange: range, includingMarkerPadding: false) else { separable = false; break }
+                    let neighbors = laneIndex.densityMatches(window: probeWindow, markerPadding: markerPadding,
+                        limit: min(2, maxQueryItems), items: items, includeKinds: false)
+                    visited += neighbors.visitedNodes
+                    let containsItem = neighbors.items.contains { $0.id == item.id }
+                    let separate = containsItem && (neighbors.count == 1 || (neighbors.count == 2 && neighbors.items.count == 2 && neighbors.items.allSatisfy { other in
+                        guard other.id != item.id else { return true }
+                        let otherRect = geometry.rect(for: other)
+                        return otherRect.maxX + 1 <= rect.x || rect.maxX + 1 <= otherRect.x
+                    }))
+                    isolated[item.id] = separate
+                    if !separate { separable = false; break }
+                }
                 let additional = result.items.filter { !detailIDs.contains($0.id) }
-                if details.count + additional.count <= maxQueryItems {
+                if separable, details.count + additional.count <= maxQueryItems {
                     for item in additional { detailIDs.insert(item.id); details.append(item) }
                     continue
                 }
@@ -265,6 +295,7 @@ public struct TimelineProjection: Sendable {
             let clusterID = "density:\(lanes[lane].id.utf8.count):\(lanes[lane].id):\(startBits):\(endBits)"
             clusters.append(TimelineDensityCluster(id: clusterID, laneIndex: lane, window: window,
                 count: result.count, errorCount: result.errorCount, compactionCount: result.compactionCount,
+                kindCounts: result.kindCounts,
                 sampleEventIDs: Array(result.items.prefix(sampleLimit).map(\.id))))
         }
         return TimelineDensityResult(details: details, clusters: clusters, totalMatches: total.count, visitedNodes: visited)
@@ -334,7 +365,7 @@ public actor TimelineModel {
         }
         for (offset, event) in events.enumerated() {
             if offset.isMultiple(of: 4096) { try Task.checkCancellation() }
-            guard add(448), add(event.id.utf8.count, copies: 4), add(event.agentID.utf8.count, copies: 3), add(event.source.path.utf8.count, copies: 2) else { return total }
+            guard add(480), add(event.id.utf8.count, copies: 4), add(event.agentID.utf8.count, copies: 3), add(event.source.path.utf8.count, copies: 2) else { return total }
         }
         for agent in agents {
             guard add(1024), add(agent.id.utf8.count, copies: 4), add(agent.name.utf8.count, copies: 4) else { return total }
@@ -372,18 +403,24 @@ private struct TimelineLaneIndex: Sendable {
     let sortedEnds: [Double]
     let endErrorPrefixCounts: [Int]
     let endCompactionPrefixCounts: [Int]
+    // Each event occupies one start rank and one end value across all kinds,
+    // not a full-size prefix vector for every EventKind.
+    let kindStartPositions: [EventKind: [Int]]
+    let kindSortedEnds: [EventKind: [Double]]
     init(globalIndices: [Int], items: [TimelineItem]) throws {
         self.globalIndices = globalIndices
         self.starts = globalIndices.map { items[$0].start.timeIntervalSince1970 }
         var base = 1; while base < globalIndices.count { base *= 2 }; self.base = base
         var maxima = Array(repeating: -Double.infinity, count: base * 2), minima = Array(repeating: Double.infinity, count: base * 2)
         var errors = [Int](repeating: 0, count: globalIndices.count + 1), compactions = errors
+        var kindPositions: [EventKind: [Int]] = [:]
         for (offset, index) in globalIndices.enumerated() {
             if offset.isMultiple(of: 4096) { try Task.checkCancellation() }
             let item = items[index], end = item.effectiveEnd.timeIntervalSince1970
             maxima[base + offset] = end; minima[base + offset] = end
             errors[offset + 1] = errors[offset] + (item.isError || item.kind == .error ? 1 : 0)
             compactions[offset + 1] = compactions[offset] + (item.kind == .compaction ? 1 : 0)
+            kindPositions[item.effectiveKind, default: []].append(offset)
         }
         if base > 1 { for node in stride(from: base - 1, through: 1, by: -1) { if node.isMultiple(of: 4096) { try Task.checkCancellation() }; maxima[node] = max(maxima[node * 2], maxima[node * 2 + 1]); minima[node] = min(minima[node * 2], minima[node * 2 + 1]) } }
         self.maximumEnds = maxima; self.minimumEnds = minima
@@ -398,20 +435,52 @@ private struct TimelineLaneIndex: Sendable {
         }
         try Task.checkCancellation()
         var ends: [Double] = [], endErrors = [Int](repeating: 0, count: globalIndices.count + 1), endCompactions = endErrors
+        var kindEnds: [EventKind: [Double]] = [:]
         ends.reserveCapacity(globalIndices.count)
         for (position, localIndex) in endOrder.enumerated() {
             if position.isMultiple(of: 4096) { try Task.checkCancellation() }
             ends.append(maxima[base + localIndex])
             endErrors[position + 1] = endErrors[position] + errors[localIndex + 1] - errors[localIndex]
             endCompactions[position + 1] = endCompactions[position] + compactions[localIndex + 1] - compactions[localIndex]
+            kindEnds[items[globalIndices[localIndex]].effectiveKind, default: []].append(maxima[base + localIndex])
         }
         self.sortedEnds = ends; self.endErrorPrefixCounts = endErrors; self.endCompactionPrefixCounts = endCompactions
+        self.kindStartPositions = kindPositions; self.kindSortedEnds = kindEnds
     }
     func visible(window: TimelineWindow, limit: Int, items: [TimelineItem]) -> TimelineVisibleResult {
         let result = matches(window: window, markerPadding: 0, limit: limit, items: items)
         return TimelineVisibleResult(items: result.items, totalMatches: result.count, limitApplied: limit, visitedNodes: result.visitedNodes)
     }
-    func densityMatches(window: TimelineWindow, markerPadding: Double, limit: Int, items: [TimelineItem]) -> TimelineLaneMatches {
+    private func prefixCount<T: Comparable>(_ values: [T], before target: T, visited: inout Int) -> Int {
+        guard let first = values.first, let last = values.last else { return 0 }
+        visited += 1; if first >= target { return 0 }
+        visited += 1; if last < target { return values.count }
+        var lo = 0, hi = values.count
+        while lo < hi {
+            visited += 1
+            let middle = lo + (hi - lo) / 2
+            if values[middle] < target { lo = middle + 1 } else { hi = middle }
+        }
+        return lo
+    }
+    private func composition(startLimit: Int, removingEndsBefore lower: Double?, visited: inout Int) -> [EventKind: Int] {
+        var counts: [EventKind: Int] = [:]
+        for (kind, positions) in kindStartPositions {
+            let began = prefixCount(positions, before: startLimit, visited: &visited)
+            let ended = lower.map { prefixCount(kindSortedEnds[kind] ?? [], before: $0, visited: &visited) } ?? 0
+            if began > ended { counts[kind] = began - ended }
+        }
+        return counts
+    }
+    private func addComposition(_ range: Range<Int>, to counts: inout [EventKind: Int], visited: inout Int) {
+        for (kind, positions) in kindStartPositions {
+            let count = prefixCount(positions, before: range.upperBound, visited: &visited)
+                - prefixCount(positions, before: range.lowerBound, visited: &visited)
+            if count > 0 { counts[kind, default: 0] += count }
+        }
+    }
+    func densityMatches(window: TimelineWindow, markerPadding: Double, limit: Int, items: [TimelineItem],
+                        detailThreshold: Int? = nil, includeKinds: Bool = true) -> TimelineLaneMatches {
         guard !globalIndices.isEmpty else { return TimelineLaneMatches(items: [], count: 0, errorCount: 0, compactionCount: 0, visitedNodes: 0) }
         let lower = window.start.timeIntervalSince1970, upper = window.end.timeIntervalSince1970
         var visited = 0
@@ -434,9 +503,11 @@ private struct TimelineLaneIndex: Sendable {
             return TimelineLaneMatches(items: [], count: 0, errorCount: 0, compactionCount: 0, visitedNodes: visited)
         }
         var count: Int, errorCount: Int, compactionCount: Int
+        var kindCounts: [EventKind: Int] = [:]
         if starts[0] + markerPadding >= lower {
             // Every candidate reaches this bin through its minimum marker width.
             count = startLimit; errorCount = errorPrefixCounts[startLimit]; compactionCount = compactionPrefixCounts[startLimit]
+            if includeKinds { kindCounts = composition(startLimit: startLimit, removingEndsBefore: nil, visited: &visited) }
         } else {
             // Effective ends are never earlier than starts. Therefore every end < lower
             // also has start <= upper and may be subtracted without an intersection scan.
@@ -444,6 +515,7 @@ private struct TimelineLaneIndex: Sendable {
             count = startLimit - endLimit
             errorCount = errorPrefixCounts[startLimit] - endErrorPrefixCounts[endLimit]
             compactionCount = compactionPrefixCounts[startLimit] - endCompactionPrefixCounts[endLimit]
+            if includeKinds { kindCounts = composition(startLimit: startLimit, removingEndsBefore: lower, visited: &visited) }
             if markerPadding > 0 {
                 let fringeStart = boundary(starts, lower - markerPadding, includingEqual: false)
                 let fringeEnd = min(startLimit, boundary(starts, lower, includingEqual: false))
@@ -459,11 +531,13 @@ private struct TimelineLaneIndex: Sendable {
                         count += actualHi - lo
                         errorCount += errorPrefixCounts[actualHi] - errorPrefixCounts[lo]
                         compactionCount += compactionPrefixCounts[actualHi] - compactionPrefixCounts[lo]
+                        if includeKinds { addComposition(lo..<actualHi, to: &kindCounts, visited: &visited) }
                         return
                     }
                     if hi - lo == 1 {
                         count += 1; errorCount += errorPrefixCounts[actualHi] - errorPrefixCounts[lo]
                         compactionCount += compactionPrefixCounts[actualHi] - compactionPrefixCounts[lo]
+                        if includeKinds { addComposition(lo..<actualHi, to: &kindCounts, visited: &visited) }
                         return
                     }
                     let middle = lo + (hi - lo) / 2
@@ -472,12 +546,13 @@ private struct TimelineLaneIndex: Sendable {
                 if fringeStart < fringeEnd { restoreMarkers(1, 0, base) }
             }
         }
+        let collectionLimit = detailThreshold.map { count > $0 ? min(limit, 4) : limit } ?? limit
         var selected: [TimelineItem] = []
-        selected.reserveCapacity(min(limit, count))
+        selected.reserveCapacity(min(collectionLimit, count))
         // Collection is independent of counting and stops as soon as the bounded sample
         // is complete, including for alternating very long intervals and point events.
         func collect(_ node: Int, _ lo: Int, _ hi: Int) {
-            guard selected.count < limit else { return }
+            guard selected.count < collectionLimit else { return }
             visited += 1
             guard lo < globalIndices.count else { return }
             let actualHi = min(hi, globalIndices.count)
@@ -485,7 +560,7 @@ private struct TimelineLaneIndex: Sendable {
                   max(maximumEnds[node], starts[actualHi - 1] + markerPadding) >= lower else { return }
             if starts[actualHi - 1] <= upper,
                max(minimumEnds[node], starts[lo] + markerPadding) >= lower {
-                let retained = min(actualHi - lo, limit - selected.count)
+                let retained = min(actualHi - lo, collectionLimit - selected.count)
                 for local in lo..<(lo + retained) { selected.append(items[globalIndices[local]]) }
                 return
             }
@@ -493,8 +568,8 @@ private struct TimelineLaneIndex: Sendable {
             let middle = lo + (hi - lo) / 2
             collect(node * 2, lo, middle); collect(node * 2 + 1, middle, hi)
         }
-        if count > 0, limit > 0 { collect(1, 0, base) }
-        return TimelineLaneMatches(items: selected, count: count, errorCount: errorCount, compactionCount: compactionCount, visitedNodes: visited)
+        if count > 0, collectionLimit > 0 { collect(1, 0, base) }
+        return TimelineLaneMatches(items: selected, count: count, errorCount: errorCount, compactionCount: compactionCount, visitedNodes: visited, kindCounts: kindCounts)
     }
     func matches(window: TimelineWindow, markerPadding: Double, limit: Int, items: [TimelineItem]) -> TimelineLaneMatches {
         var selected: [TimelineItem] = [], count = 0, errorCount = 0, compactionCount = 0, visited = 0
@@ -532,4 +607,10 @@ private struct TimelineLaneMatches {
     let errorCount: Int
     let compactionCount: Int
     let visitedNodes: Int
+    let kindCounts: [EventKind: Int]
+    init(items: [TimelineItem], count: Int, errorCount: Int, compactionCount: Int, visitedNodes: Int,
+         kindCounts: [EventKind: Int] = [:]) {
+        self.items = items; self.count = count; self.errorCount = errorCount
+        self.compactionCount = compactionCount; self.visitedNodes = visitedNodes; self.kindCounts = kindCounts
+    }
 }

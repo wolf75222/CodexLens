@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "title": "Colored timeline marks: native bitmap-cache renders",
+  "documentedOn": "2026-10-06",
+  "method": {
+    "api": [
+      "NSView.bitmapImageRepForCachingDisplay(in:)",
+      "NSView.cacheDisplay(in:to:)"
+    ],
+    "scope": "Production TimelineCanvas component in an owned native probe window",
+    "appearanceResolvedDuringCaching": true,
+    "productionCompositorCapture": false,
+    "croppedOrRetouched": false
+  },
+  "source": {
+    "baselineCommit": "033b2ace8dd8791c1283a20125c57760481c53a9",
+    "branchAtCapture": "fix/timeline-density-colors",
+    "workingTreeAtCapture": "Frozen dirty source with pending timeline-color and density corrections",
+    "cleanCommitCapture": false,
+    "probeEntrypoint": "Tests/NativeUI/TimelineAppearanceV78Main.swift",
+    "productionEntrypointReplaced": true,
+    "copiedAppSourcesModified": false,
+    "probeExecutableUUID": "56B45C50-6C47-38CB-BA52-524B3C35D766",
+    "architecture": "arm64",
+    "verifiedSourceRecords": 108,
+    "sourceManifestSha256": "42ed783d53d47c4cfe797d3ff7f5842bbffc3706037b82ddd2aa030d7e88bba4"
+  },
+  "fixture": {
+    "origin": "Deterministic anonymous in-memory V78 fixture",
+    "rootEventCount": 1200,
+    "descendantLaneEventCounts": [
+      40,
+      12
+    ],
+    "personalSessionsOpened": false,
+    "language": "French fixture labels retained"
+  },
+  "localValidation": {
+    "nativeProbe": {
+      "phase": "V78-3",
+      "completed": true,
+      "checksPassed": 34,
+      "checksExecuted": 34,
+      "processExit": 0,
+      "receiptSha256": "fae20d01e2feb0eceaceb6bedb44413495961bcdea48aed121e6990dab4181d5",
+      "renderCount": 8,
+      "inputScope": "Local NSEvent and accessibility action dispatch; not physical input"
+    },
+    "releaseLogicSuite": {
+      "testsExecuted": 564,
+      "testsSkipped": 5,
+      "failures": 0,
+      "logSha256": "0bb77e10e9827de5cc5339ecc44a97f3c37c94cf037f614da5f304eda24f01a7"
+    },
+    "pixelChecker": {
+      "scope": "Coarse presence of color families, not exact-pixel or contrast qualification",
+      "normalization": "Bitmap-tagged pixel colors and appearance-resolved palette converted to sRGB",
+      "acceptanceThresholdsLowered": false
+    },
+    "githubCIQualified": false
+  },
+  "publishedRenders": [
+    {
+      "file": "overview-light.png",
+      "scale": "overview",
+      "appearance": "Light",
+      "fixtureWindowSeconds": {
+        "start": 0,
+        "end": 600
+      },
+      "bytes": 64982,
+      "sha256": "231f7ac0e5625be72763ee753810ccf9ca062d21ee87f5f801c1039461da96b6",
+      "pixels": [
+        2320,
+        460
+      ],
+      "altered": false
+    },
+    {
+      "file": "intermediate-light.png",
+      "scale": "intermediate",
+      "appearance": "Light",
+      "fixtureWindowSeconds": {
+        "start": 98,
+        "end": 128
+      },
+      "bytes": 64222,
+      "sha256": "c61f3c17b7f37c0b1e01c0827972d938fd905266ddd740c115199ddb55feb323",
+      "pixels": [
+        2320,
+        460
+      ],
+      "altered": false
+    },
+    {
+      "file": "intermediate-dark.png",
+      "scale": "intermediate",
+      "appearance": "Dark",
+      "fixtureWindowSeconds": {
+        "start": 98,
+        "end": 128
+      },
+      "bytes": 65513,
+      "sha256": "88fdd6a49991fbac4eb93688acac0969e132079dbfced449a5553872742236c9",
+      "pixels": [
+        2320,
+        460
+      ],
+      "altered": false
+    }
+  ],
+  "unpublishedRenderNames": [
+    "overview-dark.png",
+    "detail-light.png",
+    "detail-dark.png",
+    "dezoom-selected-light.png",
+    "overview-narrow-light.png"
+  ],
+  "qualificationLimits": [
+    "No production-compositor or full-app-scene qualification.",
+    "No physical pointer, trackpad or VoiceOver session qualified.",
+    "The append updates an in-memory projection, not live collector ingestion.",
+    "No measured CPU, RAM, latency or contrast result.",
+    "Cache budgets and index estimates are not measured process-memory gains.",
+    "No baseline comparison to older V38 renders.",
+    "Local checks do not establish final-head GitHub CI success."
+  ]
+}

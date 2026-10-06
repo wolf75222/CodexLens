@@ -93,7 +93,7 @@ Entry point: **Activity** in the sidebar or **Command-1**. The timeline, list, a
 | Event selection | Click selects. Timeline double-click/Return frames; event-list double-click/Return opens a tab; Command-Return opens a timeline event in a tab | Overlapping marks may need disambiguation |
 | Event context menu | Open in Tab, open agent/environment, copy event ID/internal link, or prepare a question | Actions capture the selected event identity |
 | Timeline/list linking | An event opened elsewhere can be shown and framed in the timeline | Framing is a reading/navigation action, not evidence of causality |
-| Density grouping | Nearby events are grouped at wide time scales | Individual records remain accessible through the event list |
+| Density grouping | Separated events keep individual colored marks; dense groups retain their event-type colors | Colored group portions describe exact type counts, not a sequence of actions; individual records stay available in the event list |
 | Group zoom | Clicking a group narrows the time scale; zooming out restores grouping | Grouping changes presentation, not source records |
 | Zoom and pan | Timeline keyboard zoom, pinch when enabled, and horizontal movement | Zoom shortcuts follow focus and the configured behavior |
 | Frame selection | Timeline menu → Frame | Requires an event selection |
