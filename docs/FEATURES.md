@@ -352,7 +352,7 @@ Entry point: **Changes** or **Command-6**, a recorded call's changes, or a live-
 | Feature | Available behavior | Boundary |
 | --- | --- | --- |
 | Change collection | Inspect/filter changes by file, agent, environment, period, and trace kind | The collector creates requested-patch and recorded-result rows; current filesystem/Git changes remain separate |
-| Native diff | Unified or side-by-side presentation | Before/after columns are version coordinates, not duplicate copies of one line number |
+| Native diff | More (…) menu → Unified or Side by side | Before/after columns are version coordinates, not duplicate copies of one line number |
 | File/hunk navigation | Select a file/fragment and move through recorded hunks | Partial patches can only offer fragment-local coordinates |
 | Version header | Worktree, repository, compared references, trace kind, and known availability | The missing full version is not guessed from its patch |
 | Multiple diff sources | Select the recorded diff representation | A result lacking a diff is not silently filled using request text |

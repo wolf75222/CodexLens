@@ -43,7 +43,7 @@ MCP curves count explicitly named MCP calls, not mentions inside scripts. Reques
 
 The app distinguishes a requested patch, its recorded tool result, available historical content, and the current Git diff. A reported successful patch does not establish a complete historical file version. The current worktree diff is not automatically attributed to Codex.
 
-**Before**, **After**, and **Compare** are available when their content can be read or verifiably reconstructed. When complete versions are unavailable, patch fragments retain local coordinates rather than pretending to be full files. The two unified-diff gutters refer to the before and after versions.
+**Before**, **After**, and **Compare** are available when their content can be read or verifiably reconstructed. When complete versions are unavailable, patch fragments retain local coordinates rather than pretending to be full files. The two unified-diff gutters refer to the before and after versions. Choose **Unified** or **Side by side** from the diff header's **More (…)** menu.
 
 Use a file's context menu to reveal its current location in Finder or open it with another app. These actions refer to the **current** file; they do not change the historical content displayed in Lens. Editing in an external app is outside Lens's read-only inspection boundary.
 

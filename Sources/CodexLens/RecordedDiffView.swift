@@ -223,17 +223,10 @@ struct RecordedDiffView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) {
-                        diffTitle
-                        Spacer(minLength: 8)
-                        secondaryActions
-                        presentationPicker
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 8) { diffTitle; Spacer(minLength: 8); secondaryActions }
-                        presentationPicker.frame(maxWidth: .infinity, alignment: .trailing)
-                    }
+                HStack(spacing: 8) {
+                    diffTitle
+                    Spacer(minLength: 8)
+                    secondaryActions
                 }.fixedSize(horizontal: false, vertical: true)
                 metadataRow(LensL10n.text("Worktree"), environment?.path ?? document.provenance.environmentID)
                 ViewThatFits(in: .horizontal) {
@@ -360,10 +353,12 @@ struct RecordedDiffView: View {
     private var presentationPicker: some View {
         Picker(LensL10n.text("Présentation du diff"), selection: $sideBySide) {
             Text(LensL10n.text("Unifié")).tag(false); Text(LensL10n.text("Côte à côte")).tag(true)
-        }.pickerStyle(.segmented).lensFilledControlAccent().labelsHidden().frame(width: 190)
+        }.pickerStyle(.inline)
     }
     private var secondaryActions: some View {
         Menu {
+            presentationPicker
+            Divider()
             if document.files.count == 1, let file = document.files.first {
                 openWithAction(file)
                 revealFileAction(file)
