@@ -1421,7 +1421,8 @@ struct TimelineView: NSViewRepresentable {
         else if rect.minX > visible.maxX - 12 { origin.x = max(0, rect.minX - visible.width + 24) }
         if rect.minY < visible.minY + 8 { origin.y = max(0, rect.minY - 8) }
         else if rect.maxY > visible.maxY - 8 { origin.y = rect.maxY - visible.height + 8 }
-        origin.x = min(origin.x, max(0, bounds.width - visible.width)); origin.y = min(origin.y, max(0, bounds.height - visible.height))
+        origin.x = min(max(0, origin.x), max(0, bounds.width - visible.width))
+        origin.y = min(max(0, origin.y), max(0, bounds.height - visible.height))
         scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView)
     }
     override func updateTrackingAreas() {

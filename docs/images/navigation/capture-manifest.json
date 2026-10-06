@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "anonymousFixtures": true,
   "captures": [
     {
@@ -25,11 +25,110 @@
       "bytes": 301417,
       "method": "CUA native-window compositor JPEG; original pixels unchanged",
       "scope": "postfix activity/tab return replay before toolbar-family isolation"
+    },
+    {
+      "file": "final-first-user-before-edge-clamp.jpg",
+      "sourceCapture": "01-selected-user-message.jpg",
+      "sha256": "156c4cb1f0c9562658ac6da3374c91f832a0ef607cc9295f0496c9340e543709",
+      "bytes": 352093,
+      "sourceCommit": "75ba2478c011d91c11760a841f40fbfdd4abb71d",
+      "sourceBuildUUID": "8D7703F7-9807-364B-9266-0A832EF8DC10",
+      "appVersion": "0.41.0",
+      "appBuild": "75",
+      "scope": "toolbar-isolated production-source replay; before earliest-event lower-bound fix",
+      "method": "CUA native-window compositor JPEG; original bytes unchanged"
+    },
+    {
+      "file": "final-reader-before-edge-clamp.jpg",
+      "sourceCapture": "03-opened-reader.jpg",
+      "sha256": "7573dcc9d14dc1ac99af3a263e1d1c0e08045d2e61143095e8902aa157478536",
+      "bytes": 264174,
+      "sourceCommit": "75ba2478c011d91c11760a841f40fbfdd4abb71d",
+      "sourceBuildUUID": "8D7703F7-9807-364B-9266-0A832EF8DC10",
+      "appVersion": "0.41.0",
+      "appBuild": "75",
+      "scope": "toolbar-isolated production-source replay; before earliest-event lower-bound fix",
+      "method": "CUA native-window compositor JPEG; original bytes unchanged"
+    },
+    {
+      "file": "final-back-before-edge-clamp.jpg",
+      "sourceCapture": "04-back-preserves-reading-anchor.jpg",
+      "sha256": "abf9bc28bf69eb2b0c91b27d0c7d893603257081391ad7ab4a0a946190a2de81",
+      "bytes": 378329,
+      "sourceCommit": "75ba2478c011d91c11760a841f40fbfdd4abb71d",
+      "sourceBuildUUID": "8D7703F7-9807-364B-9266-0A832EF8DC10",
+      "appVersion": "0.41.0",
+      "appBuild": "75",
+      "scope": "toolbar-isolated production-source replay; before earliest-event lower-bound fix",
+      "method": "CUA native-window compositor JPEG; original bytes unchanged"
+    },
+    {
+      "file": "final-child-user-message-before-edge-clamp.jpg",
+      "sourceCapture": "06-child-user-message.jpg",
+      "sha256": "7348bf3f7c0bc5ef613cab952305cc557bece396551bae3faf7c9126365c3fd1",
+      "bytes": 265421,
+      "sourceCommit": "75ba2478c011d91c11760a841f40fbfdd4abb71d",
+      "sourceBuildUUID": "8D7703F7-9807-364B-9266-0A832EF8DC10",
+      "appVersion": "0.41.0",
+      "appBuild": "75",
+      "scope": "toolbar-isolated production-source replay; before earliest-event lower-bound fix",
+      "method": "CUA native-window compositor JPEG; original bytes unchanged"
+    },
+    {
+      "file": "first-edge-focus-before-clamp.svg",
+      "sourceCapture": "01-selected-user-message-annotated.svg",
+      "sha256": "e6a6be70e281666240bd2c84fd9917bdb6288d45339003d8d1052551c77b1a2e",
+      "bytes": 470253,
+      "sourceCommit": "75ba2478c011d91c11760a841f40fbfdd4abb71d",
+      "sourceBuildUUID": "8D7703F7-9807-364B-9266-0A832EF8DC10",
+      "appVersion": "0.41.0",
+      "appBuild": "75",
+      "scope": "toolbar-isolated production-source replay; before earliest-event lower-bound fix",
+      "method": "SVG annotations over unchanged embedded CUA compositor JPEG bytes",
+      "embeddedJPEGsha256": "156c4cb1f0c9562658ac6da3374c91f832a0ef607cc9295f0496c9340e543709"
+    },
+    {
+      "file": "first-edge-focus-back-before-clamp.svg",
+      "sourceCapture": "04-back-preserves-reading-anchor-annotated.svg",
+      "sha256": "524cc55be84ad9a07abf5788e66e3c3e615fbf75d64a6942da18d7fa4542f4eb",
+      "bytes": 505221,
+      "sourceCommit": "75ba2478c011d91c11760a841f40fbfdd4abb71d",
+      "sourceBuildUUID": "8D7703F7-9807-364B-9266-0A832EF8DC10",
+      "appVersion": "0.41.0",
+      "appBuild": "75",
+      "scope": "toolbar-isolated production-source replay; before earliest-event lower-bound fix",
+      "method": "SVG annotations over unchanged embedded CUA compositor JPEG bytes",
+      "embeddedJPEGsha256": "abf9bc28bf69eb2b0c91b27d0c7d893603257081391ad7ab4a0a946190a2de81"
     }
   ],
   "excludedDiagnosticCaptures": [
     "09-new-window-loads-wrong-session-source",
     "11-protected-reader-dark"
   ],
-  "excludedReason": "process/binding diagnostic or stale helper; not interface qualification"
+  "excludedReason": "process/binding diagnostic or stale helper; not interface qualification",
+  "finalSameProcessReplay": {
+    "sourceCommit": "75ba2478c011d91c11760a841f40fbfdd4abb71d",
+    "sourceBuildUUID": "8D7703F7-9807-364B-9266-0A832EF8DC10",
+    "appVersion": "0.41.0",
+    "appBuild": "75",
+    "pid": 29452,
+    "sameProcessNewWindowVerified": true,
+    "nativeWindowCount": 2,
+    "selectedChildMessage": "qa-user-supplied",
+    "rootThread": "11111111-1111-4111-8111-111111111111",
+    "parentSelectionPreserved": true,
+    "parentTimelineZoom": 19.6,
+    "parentVisibleListRange": [
+      3,
+      7
+    ],
+    "childIndependentAssistantSelectionVerified": true,
+    "childCloseVerified": false,
+    "inspectionStoppedBecause": "Mac locked during child-close step",
+    "earliestEventLowerBoundDefectObserved": true,
+    "postEdgeFixCompositorReplayVerified": false,
+    "AIRequests": false,
+    "personalSessionsOpened": false,
+    "ownedQAProcessStoppedAfterInspectionByPrimary": true
+  }
 }

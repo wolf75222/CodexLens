@@ -163,6 +163,16 @@ import SwiftUI
             check("noncentral-anchored-zoom-does-not-jump-on-reconfigure-" + label, zoomApplied
                 && distance(store.timelineOrigin, zoomedOrigin) < 1
                 && abs(CGFloat(geometryAfterZoom.x(for: focalDate)) - zoomedOrigin.x - focalX) < 1)
+            let canvas = try require(scroll.documentView as? TimelineCanvas, "timeline canvas for edge focus")
+            for (edge, id) in [("first", store.timelineProjection?.orderedEventIDs.first),
+                               ("last", store.timelineProjection?.orderedEventIDs.last)] {
+                canvas.reveal(try require(id, "edge event"), centered: true)
+                let origin = scroll.contentView.bounds.origin
+                check("centered-edge-event-stays-inside-timeline-" + label + "-" + edge,
+                    origin.x >= 0 && origin.y >= 0
+                    && origin.x <= max(0, canvas.bounds.width - scroll.contentView.bounds.width)
+                    && origin.y <= max(0, canvas.bounds.height - scroll.contentView.bounds.height))
+            }
             coordinator.detach()
             store.timelineZoom = 19.6
         }
