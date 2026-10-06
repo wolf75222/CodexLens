@@ -15,7 +15,7 @@ enum Destination: Hashable, Codable {
     case investigation(String)
     case evidence(capsule: String, piece: String)
 }
-enum ActivityInspectionMode: String, CaseIterable { case chronology = "Chronologie", communications = "Échanges" }
+enum ActivityInspectionMode: String, CaseIterable { case chronology = "Chronologie", communications = "Échanges", trends = "Courbes" }
 struct LensTab: Identifiable, Codable { var id = UUID(); var destination: Destination; var pinned = false }
 /// Viewport metadata only. No journal content or retained native reader views.
 struct LensEventListViewport: Equatable {
@@ -71,6 +71,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
             if oldValue?.root.id != snapshot?.root.id {
                 presentation = nil; timelineProjection = nil; timelineWindow = nil; timelineOrigin = .zero; timelinePosition = nil; timelineFocus = nil
                 timelineZoomLimit = TimelineInteraction.zoomRange.upperBound; timelineZoom = 1
+                trendMetric = .toolCalls; trendCumulative = false; trendSelectedDate = nil; trendValuesVisible = false
             }
             schedulePresentation(coalescingLiveUpdate: oldValue?.root.id == snapshot?.root.id)
             if !query.isEmpty { search() }
@@ -79,6 +80,10 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
     }
     @Published var section: LensSection = .activity
     @Published var activityMode: ActivityInspectionMode = .chronology
+    @Published var trendMetric: SessionTrendMetric = .toolCalls
+    @Published var trendCumulative = false
+    @Published var trendSelectedDate: Date?
+    @Published var trendValuesVisible = false
     @Published var selection: Destination? {
         didSet {
             if oldValue != selection {
@@ -305,6 +310,10 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         let agentFilters: AgentFilters
         let section: LensSection
         let activityMode: ActivityInspectionMode
+        let trendMetric: SessionTrendMetric
+        let trendCumulative: Bool
+        let trendSelectedDate: Date?
+        let trendValuesVisible: Bool
         let timelineWindow: ClosedRange<Date>?
         let timelineZoom: Double
         let timelineZoomLimit: Double
@@ -416,7 +425,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
     }
     func setNavigationScope(_ value: String) { guard !started, UUID(uuidString: value) != nil else { return }; navigationScope = value }
     private var currentFilters: EventFilters { EventFilters(agentID: agentFilter, environmentID: environmentFilter, resourceID: resourceFilter, kind: kindFilter, period: period, query: query, sourceMatches: searchMatches, originInstructionID: originInstructionFilter) }
-    private func checkpoint(_ destination: Destination?) -> Checkpoint { Checkpoint(destination: destination, filters: currentFilters, agentFilters: AgentFilters(query: agentQuery, sourceMatches: agentSearchMatches), section: section, activityMode: activityMode, timelineWindow: timelineWindow, timelineZoom: timelineZoom, timelineZoomLimit: timelineZoomLimit, timelineOrigin: timelineOrigin, timelinePosition: timelinePosition, livePreview: livePreview, previewOrigin: previewOrigin, activeTab: activeTab, activeTabDestination: tabs.first(where: { $0.id == activeTab })?.destination, tabContentVisible: tabContentVisible, timelineVisible: timelineVisible, liveTimelineVisible: liveTimelineVisible, follow: follow, liveState: liveState, listViewports: eventListViewports) }
+    private func checkpoint(_ destination: Destination?) -> Checkpoint { Checkpoint(destination: destination, filters: currentFilters, agentFilters: AgentFilters(query: agentQuery, sourceMatches: agentSearchMatches), section: section, activityMode: activityMode, trendMetric: trendMetric, trendCumulative: trendCumulative, trendSelectedDate: trendSelectedDate, trendValuesVisible: trendValuesVisible, timelineWindow: timelineWindow, timelineZoom: timelineZoom, timelineZoomLimit: timelineZoomLimit, timelineOrigin: timelineOrigin, timelinePosition: timelinePosition, livePreview: livePreview, previewOrigin: previewOrigin, activeTab: activeTab, activeTabDestination: tabs.first(where: { $0.id == activeTab })?.destination, tabContentVisible: tabContentVisible, timelineVisible: timelineVisible, liveTimelineVisible: liveTimelineVisible, follow: follow, liveState: liveState, listViewports: eventListViewports) }
     private func restore(_ entry: Checkpoint) {
         timelineFocus = nil
         activeTab = tabs.contains(where: { $0.id == entry.activeTab }) ? entry.activeTab : nil
@@ -428,6 +437,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         originInstructionFilter = entry.filters.originInstructionID
         agentQuery = entry.agentFilters.query; agentSearchMatches = entry.agentFilters.sourceMatches
         section = entry.section; activityMode = entry.activityMode; timelineWindow = entry.timelineWindow; timelineZoomLimit = entry.timelineZoomLimit; timelineZoom = entry.timelineZoom; timelineOrigin = entry.timelineOrigin; timelinePosition = entry.timelinePosition; timelineReset &+= 1; livePreview = entry.livePreview; tabContentVisible = entry.tabContentVisible
+        trendMetric = entry.trendMetric; trendCumulative = entry.trendCumulative; trendSelectedDate = entry.trendSelectedDate; trendValuesVisible = entry.trendValuesVisible
         timelineVisible = entry.timelineVisible; liveTimelineVisible = entry.liveTimelineVisible
         follow = entry.follow; liveClock.restore(entry.liveState)
         previewOrigin = entry.livePreview == nil ? nil : entry.previewOrigin
@@ -494,9 +504,12 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
                 publishSpan.end()
                 await presentationBuilder.didPublish(next, sequence: publicationSequence)
                 guard !Task.isCancelled, self?.acceptsProjection(generation, lifecycle: lifecycle) == true else { return }
-                let timeline = try await timelineBuilder.prepare(events: next.filteredEvents, agents: snapshot.agents)
+                let timeline = try await timelineBuilder.prepare(events: next.timelineEvents, agents: snapshot.agents)
                 guard !Task.isCancelled, self?.acceptsProjection(generation, lifecycle: lifecycle) == true else { return }
-                self?.timelineProjection = timeline; self?.timelineIssue = nil; self?.timelinePreparing = false
+                self?.timelineProjection = timeline
+                self?.timelineIssue = next.trends.unknownTimestampCount > 0
+                    ? LensL10n.text("{0} événements sans horodatage restent disponibles dans la liste.", String(next.trends.unknownTimestampCount)) : nil
+                self?.timelinePreparing = false
                 if self?.timelineWindow == nil, let bounds = timeline.bounds { self?.timelineWindow = bounds.start...bounds.end }
             } catch is CancellationError { }
             catch {
@@ -783,6 +796,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
             snapshot = next; latest = next; selection = nil; tabs = []; activeTab = nil; tabContentVisible = false; back = []; forward = []
             workspaceCheckpoint = nil; readerCheckpoints = [:]; eventListViewports = [:]; eventListRestoration &+= 1
             timelineWindow = nil; timelineZoom = 1; timelineZoomLimit = TimelineInteraction.zoomRange.upperBound; timelineOrigin = .zero; timelinePosition = nil; timelineFocus = nil; timelineReset &+= 1
+            trendMetric = .toolCalls; trendCumulative = false; trendSelectedDate = nil; trendValuesVisible = false
             livePreview = nil; previewOrigin = nil; liveClock.reset()
             resetFilters(); originCodeReferences = [:]; agentQuery = ""; follow = true; waitingEvents = 0; waitingUpdates = false; section = .activity
             if liveTimelineVisible { liveClock.resume(at: Date()) }
@@ -899,6 +913,20 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         retainCurrentWorkspace()
         if !workspacePresented, let saved = workspaceCheckpoint { restore(saved) }
         livePreview = nil; tabContentVisible = false; section = value; persistTabs()
+    }
+    /// Open the context of a plotted interval through the ordinary activity
+    /// history. Back restores the curve's metric, selection and values panel.
+    func inspectTrendPeriod(_ bucket: SessionTrendBucket, rootID: String, sourceHome: URL, openingID: UUID) {
+        guard !isStopped, workspacePresented, section == .activity, activityMode == .trends,
+              snapshot?.root.id == rootID, observedSourceHome == sourceHome, openGeneration == openingID,
+              presentation?.trends.bucket(id: bucket.id) != nil else { return }
+        back.append(checkpoint(selection)); if back.count > 64 { back.removeFirst() }; forward = []
+        retainCurrentWorkspace()
+        livePreview = nil; tabContentVisible = false; activityMode = .chronology
+        period = bucket.period; timelineVisible = true
+        timelineFocus = nil; timelineWindow = bucket.period; timelineZoom = 1
+        timelineOrigin = .zero; timelinePosition = nil; timelineReset &+= 1
+        persistTabs()
     }
     /// Follow an object's activity without losing the pre-navigation filters or
     /// leaving a reading tab over the filtered collection.

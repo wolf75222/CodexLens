@@ -45,6 +45,7 @@ __pycache__/
 !/scripts/create-version-corpus-v18.py
 !/scripts/create-context-corpus-v20.py
 !/scripts/create-origin-corpus-v21.py
+!/scripts/create-curves-corpus-v77.py
 !/scripts/verify-design-v07.sh
 !/scripts/qualify-production-v06.py
 !/scripts/package-release.sh

@@ -34,6 +34,8 @@ public struct SessionPresentation: Sendable {
     public let rootID: String
     public let filteredEvents: [LensEvent]
     public let filteredCalls: [LensEvent]
+    /// Undated records remain in the list; they must not stretch the time axis to year one.
+    public let timelineEvents: [LensEvent]
     public let callCount: Int
     public let filteredEventRowIndices: [String: Int]
     public let filteredCallRowIndices: [String: Int]
@@ -57,6 +59,7 @@ public struct SessionPresentation: Sendable {
     public let sequence: CommunicationSequenceProjection
     public let activityEvidence: ActivityEvidenceIndex
     public let originInspection: OriginInspectionIndex
+    public let trends: SessionTrendProjection
 }
 
 /// One builder per window. Filter changes reuse indexes; all preparation is on
@@ -91,6 +94,10 @@ public actor SessionPresentationBuilder {
         if self.revision == revision, lastPrepared?.rootID == snapshot.root.id, lastFilters == filters, lastAgentFilters == agentFilters, let lastPrepared {
             return lastPrepared
         }
+        // Agent-tree search does not change the event scope. Reuse its curves,
+        // rather than aggregating the same metadata for each graph query.
+        let cachedTrends = self.revision == revision && lastPrepared?.rootID == snapshot.root.id && lastFilters == filters
+            ? lastPrepared?.trends : nil
         if self.revision != revision || indexed?.rootID != snapshot.root.id {
             var events: [String: LensEvent] = [:]
             var eventIDsByAgent: [String: [String]] = [:]
@@ -117,7 +124,7 @@ public actor SessionPresentationBuilder {
             let originInspection = { let span = LensSignposts.begin("OriginInspectionIndex"); defer { span.end() }; return OriginInspectionIndex(snapshot: snapshot, communication: communicationInspection, activity: activityEvidence) }()
             let changesByID = Dictionary(snapshot.changes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             let recentRecordedChanges = try recentChanges(changesByID: changesByID, eventsByID: events)
-            indexed = SessionPresentation(id: UUID(), rootID: snapshot.root.id, filteredEvents: [], filteredCalls: [], callCount: callCount, filteredEventRowIndices: [:], filteredCallRowIndices: [:], eventsByID: events,
+            indexed = SessionPresentation(id: UUID(), rootID: snapshot.root.id, filteredEvents: [], filteredCalls: [], timelineEvents: [], callCount: callCount, filteredEventRowIndices: [:], filteredCallRowIndices: [:], eventsByID: events,
                 agentsByID: agentsByID, eventIDsByAgent: eventIDsByAgent, eventCountByAgent: eventCountByAgent, agentRows: agentRows,
                 changesByEvent: Dictionary(grouping: snapshot.changes, by: \.eventID),
                 changesByID: changesByID, recentRecordedChanges: recentRecordedChanges,
@@ -126,7 +133,8 @@ public actor SessionPresentationBuilder {
                 communicationInspection: communicationInspection, filteredCommunications: [],
                 changesByAgent: Dictionary(grouping: snapshot.changes, by: \.agentID),
                 sequence: CommunicationSequenceProjection(communications: [], agents: snapshot.agents),
-                activityEvidence: activityEvidence, originInspection: originInspection)
+                activityEvidence: activityEvidence, originInspection: originInspection,
+                trends: try SessionTrendProjection(events: [], coverage: snapshot.coverage))
             self.revision = revision
         }
         let index = indexed!
@@ -159,7 +167,16 @@ public actor SessionPresentationBuilder {
         }
         let visibleIDs = Set(filtered.map(\.id))
         let communications = index.communicationInspection.communications.filter { !$0.eventIDs.allSatisfy { !visibleIDs.contains($0) } }
-        let result = SessionPresentation(id: UUID(), rootID: index.rootID, filteredEvents: filtered, filteredCalls: calls, callCount: index.callCount, filteredEventRowIndices: eventRows, filteredCallRowIndices: callRows, eventsByID: index.eventsByID, agentsByID: index.agentsByID, eventIDsByAgent: index.eventIDsByAgent, eventCountByAgent: index.eventCountByAgent, agentRows: agentRows, changesByEvent: index.changesByEvent, changesByID: index.changesByID, recentRecordedChanges: index.recentRecordedChanges, resourcesByID: index.resourcesByID, contextInspection: index.contextInspection, communicationInspection: index.communicationInspection, filteredCommunications: communications, changesByAgent: index.changesByAgent, sequence: CommunicationSequenceProjection(communications: communications, agents: snapshot.agents), activityEvidence: index.activityEvidence, originInspection: index.originInspection)
+        let trends: SessionTrendProjection
+        if let cachedTrends { trends = cachedTrends }
+        else {
+            let span = LensSignposts.begin("SessionTrends"); defer { span.end() }
+            trends = try SessionTrendProjection(events: filtered, changesByEvent: index.changesByEvent,
+                contextInspection: index.contextInspection, coverage: snapshot.coverage)
+        }
+        let unplottable = Set(trends.excludedTimestampEventIDs)
+        let timelineEvents = unplottable.isEmpty ? filtered : filtered.filter { !unplottable.contains($0.id) }
+        let result = SessionPresentation(id: UUID(), rootID: index.rootID, filteredEvents: filtered, filteredCalls: calls, timelineEvents: timelineEvents, callCount: index.callCount, filteredEventRowIndices: eventRows, filteredCallRowIndices: callRows, eventsByID: index.eventsByID, agentsByID: index.agentsByID, eventIDsByAgent: index.eventIDsByAgent, eventCountByAgent: index.eventCountByAgent, agentRows: agentRows, changesByEvent: index.changesByEvent, changesByID: index.changesByID, recentRecordedChanges: index.recentRecordedChanges, resourcesByID: index.resourcesByID, contextInspection: index.contextInspection, communicationInspection: index.communicationInspection, filteredCommunications: communications, changesByAgent: index.changesByAgent, sequence: CommunicationSequenceProjection(communications: communications, agents: snapshot.agents), activityEvidence: index.activityEvidence, originInspection: index.originInspection, trends: trends)
         lastFilters = filters; lastAgentFilters = agentFilters; lastPrepared = result
         return result
     }

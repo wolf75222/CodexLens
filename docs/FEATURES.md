@@ -4,6 +4,8 @@ This is the detailed catalogue of the existing Codex Lens app, reviewed on **202
 
 The navigation section also includes the current unreleased workspace-return fixes. Their baseline, verification and separate captures are documented in the [navigation audit](QA/WORKSPACE_NAVIGATION.md).
 
+The current unreleased **session curves** are described separately below and in their [model and verification notes](QA/SESSION_CURVES.md).
+
 The images show native macOS windows from an isolated QA app with anonymous session data. New captures in `images/features/` use CUA's native-window screenshot API; earlier images retain their documented capture methods. See the [capture notes](images/features/README.md) for methods and provenance. Recorded fixture text keeps its original language; some macOS-owned menus may be French. The chat image shows a prepared, unsent question. No personal account identity or live model answer is shown.
 
 For a shorter walkthrough, see the [User guide](USER_GUIDE.md). For module and data-flow details, see [Architecture](ARCHITECTURE.md).
@@ -13,6 +15,7 @@ For a shorter walkthrough, see the [User guide](USER_GUIDE.md). For module and d
 - [Platform and operating model](#platform-and-operating-model)
 - [First use and opening sessions](#first-use-and-opening-sessions)
 - [Activity timeline, event list, and filters](#activity-timeline-event-list-and-filters)
+- [Session curves](#session-curves)
 - [Live following and previews](#live-following-and-previews)
 - [Agents and their instructions](#agents-and-their-instructions)
 - [Tool-call inspection and long output](#tool-call-inspection-and-long-output)
@@ -110,6 +113,23 @@ Entry point: **Activity** in the sidebar or **Command-1**. The timeline, list, a
 *The lanes expose parallel activity, while the list gives each message or call an individual opening target. Selection links those two representations to the inspector.*
 
 Source: [activity views and native timeline](../Sources/CodexLens/ActivityView.swift), [timeline model](../Sources/LensCore/TimelineModel.swift), [filter/search area](../Sources/CodexLens/MainView.swift).
+
+## Session curves
+
+Entry point: **Activity → Charts**, in the shared activity view picker. This is another view of the session's recorded history, with the existing filters.
+
+| Feature | Available behavior | Boundary |
+| --- | --- | --- |
+| Metrics | Events, tool calls, MCP calls, requested file changes, reported errors, recorded waits and identified compactions | Counts describe recorded items, not productivity or causal influence |
+| Per-interval and cumulative counts | Native Swift Charts bars or cumulative steps, with UTC-aligned intervals and local-time labels | Cumulative counts include the filtered, dated records only |
+| MCP classification | Count explicit qualified MCP tool names | A mention in a shell command or JavaScript source is not another captured call |
+| Requested file changes | A file counts per patch call and environment | Same relative paths in two worktrees stay distinct; a request does not prove application |
+| Period inspection | Select a point or table row, then View activity; Back restores the chart state | The timeline opens the period's context, including overlapping recorded calls |
+| Values table | Resizable native table, shared selection, arrow-key chart selection and Return/double-click inspection | Physical VoiceOver and trackpad qualification are reported separately |
+| Bounded rendering | At most 240 plotted intervals; metadata aggregation runs in the presentation actor | Every associated source ID stays available; a bounded graph is not source truncation |
+| Missing data | Undated items are counted separately; coverage remains accessible | Empty intervals do not prove inactivity or complete observation |
+
+Source: [curve model](../Sources/LensCore/SessionTrends.swift), [native chart and table](../Sources/CodexLens/SessionTrendsView.swift), [presentation preparation](../Sources/LensCore/SessionPresentation.swift).
 
 ## Live following and previews
 

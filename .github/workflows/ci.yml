@@ -83,6 +83,15 @@ jobs:
           mkdir -p dist/ui-validation/scenes
           cp "$scenes/native-design-v07-receipt.json" dist/ui-validation/scenes/receipt.json
           cp "$scenes/"*.png dist/ui-validation/scenes/
+      - name: Session curves regression
+        run: |
+          corpus="/private/tmp/lens-ci-curves-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curves="/private/tmp/lens-ci-curves-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python3 scripts/create-curves-corpus-v77.py --output "$corpus" --events 600
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$curves" --corpus "$corpus" --entrypoint SessionCurvesV77Main.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/curves
+          cp "$curves/native-design-v07-receipt.json" dist/ui-validation/curves/receipt.json
+          cp "$curves/"*.png dist/ui-validation/curves/
       - name: Package and verify installer
         run: bash scripts/package-release.sh --app "$LENS_APP_PATH" --output dist/release
       - name: Release version
@@ -92,7 +101,7 @@ jobs:
         if: always()
         run: |
           mkdir -p dist/native-diagnostics
-          for kind in ui navigation scenes; do
+          for kind in ui navigation scenes curves; do
             probe="/private/tmp/lens-ci-${kind}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             mkdir -p "dist/native-diagnostics/$kind"
             for file in native-design-v07-receipt.json process-receipt.json phase.json scene-phase.json runtime.log build.log toolchain.log; do

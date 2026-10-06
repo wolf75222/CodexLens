@@ -8,6 +8,7 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ### Added
 
+- Session curves in Activity: recorded events, tool/MCP calls, requested file changes, reported errors, waits and identified compactions, with interval/cumulative counts, keyboard-accessible values and linked period inspection.
 - Open a selected timeline event or reading tab in an independent inspection window using the same observed source.
 - Detailed feature catalogue with native macOS screenshots, entry points, keyboard commands and availability limits.
 - Preview-first release preparation that updates the app version, build number, changelog and release notes together without creating a tag or publishing.

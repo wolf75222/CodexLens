@@ -28,6 +28,10 @@ At a wide time scale, nearby events form groups. Click a group to zoom in; zoom 
 
 Recorded compaction events and inter-agent communications appear when supported data exists. A sent message, a known receipt, and confirmed inclusion in a request are separate states. An opaque compaction is not replaced with an invented summary.
 
+Choose **Activity → Charts** to examine recorded activity over time. Select a metric, switch between per-interval and cumulative counts, then select a period and choose **View activity**. **Back** restores the chart's metric, selected period and values panel. The table button exposes the same values for keyboard navigation. Existing agent, environment, search and time filters apply.
+
+MCP curves count explicitly named MCP calls, not mentions inside scripts. Requested changes count files targeted by patches per call and environment; they do not establish the current file state. Undated records remain in the activity history but are excluded from the plot. An empty interval does not establish that a partially observed session was inactive.
+
 ## Follow an action to its files
 
 1. Open a call and inspect its arguments, result, and recorded source data.

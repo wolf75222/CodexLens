@@ -7,10 +7,23 @@ struct ActivityView: View {
     @State private var periodEditorVisible = false
     @State private var timelineGuideVisible = false
     var body: some View {
-      GeometryReader { geometry in
-        if store.activityMode == .chronology { chronology(width: geometry.size.width) }
-        else { CommunicationSequenceView() }
-      }
+        VStack(spacing: 0) {
+            HStack {
+                Picker(LensL10n.text("Vue de l’activité"), selection: $store.activityMode) {
+                    ForEach(ActivityInspectionMode.allCases, id: \.self) { Text(LensL10n.text($0.rawValue)).tag($0) }
+                }.pickerStyle(.segmented).fixedSize().controlSize(.small)
+                    .accessibilityIdentifier("lens-activity-mode")
+                Spacer(minLength: 0)
+            }.padding(.horizontal, 16).padding(.vertical, 8)
+            Divider()
+            GeometryReader { geometry in
+                switch store.activityMode {
+                case .chronology: chronology(width: geometry.size.width)
+                case .communications: CommunicationSequenceView()
+                case .trends: SessionTrendsView()
+                }
+            }
+        }
     }
     private func chronology(width: CGFloat) -> some View {
         VSplitView {
@@ -553,12 +566,13 @@ private struct EventTableView: NSViewRepresentable {
     required init?(coder: NSCoder) { return nil }
     func configure(event: LensEvent, agentLabel: String, fontSize: Double, codeFont: LensCodeFont = .system) {
         baseFontSize = fontSize
-        timeField.stringValue = event.timestamp.lensFormatted(date: .omitted, time: .standard)
-        dateField.stringValue = event.timestamp.lensFormatted(date: .abbreviated, time: .omitted)
+        let dated = event.timestamp != .distantPast && event.timestamp.timeIntervalSince1970.isFinite
+        timeField.stringValue = dated ? event.timestamp.lensFormatted(date: .omitted, time: .standard) : LensL10n.text("Non daté")
+        dateField.stringValue = dated ? event.timestamp.lensFormatted(date: .abbreviated, time: .omitted) : LensL10n.text("Horodatage indisponible")
         kindField.stringValue = event.kind.label
         titleField.stringValue = event.title.nonempty ?? event.kind.label
         var identity = agentLabel
-        if let end = event.endTime, end >= event.timestamp { identity += " · " + LensUI.duration(end.timeIntervalSince(event.timestamp)) }
+        if dated, let end = event.endTime, end >= event.timestamp { identity += " · " + LensUI.duration(end.timeIntervalSince(event.timestamp)) }
         else if event.endTime != nil { identity += LensL10n.text(" · durée incohérente") }
         agentField.stringValue = identity
         previewField.stringValue = event.preview
