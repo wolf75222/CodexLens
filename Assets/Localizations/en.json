@@ -2220,6 +2220,7 @@
     "Un emplacement est inaccessible, remplacé ou contient un lien symbolique. Rien n’a été déplacé.": "A location is inaccessible, has changed or contains a symbolic link. Nothing was moved.",
     "Brouillon non sauvegardé": "Draft not saved",
     "Maintenance": "Maintenance",
-    "Fermez la fenêtre de mise à jour avant de désinstaller Lens.": "Close the update window before uninstalling Lens."
+    "Fermez la fenêtre de mise à jour avant de désinstaller Lens.": "Close the update window before uninstalling Lens.",
+    "Afficher dans le Finder": "Show in Finder"
   }
 }

@@ -73,6 +73,7 @@ import LensCore
         }
         .padding(24).frame(width: 570)
         .interactiveDismissDisabled(working)
+        .onExitCommand { if !working { dismiss() } }
         .task(id: removeLocalData) { await review() }
         .confirmationDialog(LensL10n.text("Désinstaller Codex Lens ?"), isPresented: $confirming, titleVisibility: .visible) {
             Button(LensL10n.text("Déplacer dans la Corbeille"), role: .destructive) { Task { await uninstall() } }

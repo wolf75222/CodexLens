@@ -14,6 +14,7 @@ import Sparkle
     private(set) var automaticChecks = false
     private(set) var lastChecked: Date?
     private(set) var status = ""
+    private(set) var availableVersion: String?
     private(set) var unavailableReason: String?
     @ObservationIgnored private var started = false
     #if canImport(Sparkle)
@@ -53,6 +54,7 @@ import Sparkle
         start()
         guard canCheck, !LensApplicationCoordinator.shared.maintenanceInProgress else { return }
         status = "Recherche de mises à jour…"
+        availableVersion = nil
         #if canImport(Sparkle)
         controller?.checkForUpdates(nil)
         #endif
@@ -87,11 +89,12 @@ extension LensUpdateController: SPUUpdaterDelegate {
     }
     func updater(_ updater: SPUUpdater, shouldDownloadReleaseNotesForUpdate updateItem: SUAppcastItem) -> Bool { false }
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
-        status = LensL10n.text("Version {0} disponible", item.displayVersionString)
+        availableVersion = item.displayVersionString; status = ""
     }
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
         refreshProperties()
         if let error = error as NSError? {
+            availableVersion = nil
             if error.domain == SUSparkleErrorDomain && error.code == Int(SUError.noUpdateError.rawValue) { status = "Lens est à jour." }
             else if error.domain == SUSparkleErrorDomain && error.code == Int(SUError.installationCanceledError.rawValue) { status = "Installation annulée." }
             else { status = error.localizedDescription }
@@ -102,23 +105,30 @@ extension LensUpdateController: SPUUpdaterDelegate {
 
 struct LensUpdateSettingsView: View {
     @State private var updater = LensUpdateController.shared
+    @AppStorage("lens.language") private var language = "en"
+    private func label(_ french: String, _ values: String...) -> String {
+        var result = LensL10n.text(french, in: LensL10n.Language(rawValue: language) ?? .system)
+        for (index, value) in values.enumerated() { result = result.replacingOccurrences(of: "{\(index)}", with: value) }
+        return result
+    }
     var body: some View {
-        LabeledContent(LensL10n.text("Version installée")) {
+        LabeledContent(label("Version installée")) {
             Text("\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"))")
                 .monospacedDigit().textSelection(.enabled)
         }
-        Toggle(LensL10n.text("Rechercher automatiquement les mises à jour"), isOn: Binding(get: { updater.automaticChecks }, set: updater.setAutomaticChecks))
+        Toggle(label("Rechercher automatiquement les mises à jour"), isOn: Binding(get: { updater.automaticChecks }, set: updater.setAutomaticChecks))
             .disabled(updater.unavailableReason != nil)
         HStack {
-            Button(LensL10n.text("Rechercher des mises à jour…")) { updater.check() }.disabled(!updater.canCheck)
+            Button(label("Rechercher des mises à jour…")) { updater.check() }.disabled(!updater.canCheck)
                 .accessibilityIdentifier("lens-check-updates")
-            if !updater.status.isEmpty { Text(LensL10n.display(updater.status)).foregroundStyle(.secondary) }
+            if let version = updater.availableVersion { Text(label("Version {0} disponible", version)).foregroundStyle(.secondary) }
+            else if !updater.status.isEmpty { Text(label(updater.status)).foregroundStyle(.secondary) }
         }
-        if let reason = updater.unavailableReason { Text(LensL10n.display(reason)).font(.caption).foregroundStyle(.secondary) }
+        if let reason = updater.unavailableReason { Text(label(reason)).font(.caption).foregroundStyle(.secondary) }
         else if let date = updater.lastChecked {
-            Text(LensL10n.text("Dernière vérification : {0}", date.formatted(date: .abbreviated, time: .shortened))).font(.caption).foregroundStyle(.secondary)
+            Text(label("Dernière vérification : {0}", date.formatted(date: .abbreviated, time: .shortened))).font(.caption).foregroundStyle(.secondary)
         }
-        Text(LensL10n.text("Les mises à jour signées proviennent des releases GitHub de Codex Lens. Vous confirmez l’installation ; votre application est remplacée au même emplacement et vos données sont conservées."))
+        Text(label("Les mises à jour signées proviennent des releases GitHub de Codex Lens. Vous confirmez l’installation ; votre application est remplacée au même emplacement et vos données sont conservées."))
             .font(.caption).foregroundStyle(.secondary)
         .task { updater.start() }
     }

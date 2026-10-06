@@ -60,7 +60,7 @@ struct LensSettingsView: View {
     }
     private var generalSettings: some View {
         Form {
-            Section(LensL10n.text("Mises à jour")) { LensUpdateSettingsView() }
+            Section(LensL10n.text("Mises à jour")) { LensUpdateSettingsView().id(language) }
             Section(LensL10n.text("Langue")) {
                 Picker(LensL10n.text("Langue de l’interface"), selection: $language) {
                     Text(LensL10n.text("Système")).tag("system"); Text(LensL10n.text("Français")).tag("fr"); Text(LensL10n.text("English")).tag("en")
