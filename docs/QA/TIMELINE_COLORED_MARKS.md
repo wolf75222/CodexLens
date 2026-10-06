@@ -50,6 +50,24 @@ The pixel checker was corrected to respect the bitmap's tagged color space, incl
 
 The source-manifest SHA-256 is `42ed783d53d47c4cfe797d3ff7f5842bbffc3706037b82ddd2aa030d7e88bba4`. Native receipt and Release-log digests are retained in the public render manifest without publishing machine paths or raw logs.
 
+## Viewport correction found by CI
+
+The first [PR #3 CI run](https://github.com/wolf75222/CodexLens/actions/runs/37465659881), associated with head `2fa27ac`, passed the logic, app build and icon stages. Its native timeline probe completed with **32/34 checks**: the two visible-ID comparisons failed. The checkout was integration commit `2011a31fa0a49ffdf4264c2b542458df7afb5dbf`, distinct from the local delivery commit.
+
+AppKit constrained the runner's canvas to **1,024 points**, while the probe kept a **1,160-point logical geometry**. The test expected records from the entire logical period, including its off-screen tail. The corrected test enumerates expected source IDs over the actual clipped plot and retains exact set equality. An additional deliberately clipped case verifies both visible IDs and retention of every original source ID. Bounds, time ranges, counts and missing/unexpected IDs are recorded in the receipt. Production code, event caps and acceptance thresholds were not changed for this correction.
+
+The final local **V78-5 probe passed 35/35 checks**, exited with status 0 and quit. All three recorded ID comparisons have empty missing/unexpected sets and no clusters:
+
+| Scenario | Actual viewport | Expected / displayed / total matches |
+| --- | --- | --- |
+| Intermediate | 1,160 × 230 points | 121 / 121 / 121 |
+| Deliberately clipped | 620 × 230 points | 58 / 58 / 58 |
+| Detail | 1,160 × 230 points | 8 / 8 / 8 |
+
+The clipped period is **98 → 112.321608 seconds** relative to the fixture epoch; all **1,252 original source IDs** remain available. The 108 copied production source records and the final entrypoint hash matched the frozen checkout. V78-4 was stopped before execution after its copy preceded the last diagnostic-only edit; it is not treated as final qualification. The three published images above remain unchanged V78-3 renders.
+
+The CI job budget is now **45 minutes** for five separately compiled native probes and packaging. In the failed run, the timeline setup/copy/build took about **5 minutes 33 seconds**, followed by about **2.4 seconds** before the check failure. This separates compilation capacity from the probe's unchanged **120-second execution limit**; it does not measure application responsiveness. Final CI status must still be checked on the current PR head.
+
 ## Storage and performance boundaries
 
 The additional type-composition index partitions start ranks and end values by event type. Every event contributes one `Int` start rank and one `Double` end value across those partitions: roughly **16 bytes per event on a 64-bit target**, plus array and dictionary storage. It does not allocate a full-size prefix vector for every type. The retention estimate adds a conservative **32 bytes per event** for this change; neither figure is a measured process-memory delta.

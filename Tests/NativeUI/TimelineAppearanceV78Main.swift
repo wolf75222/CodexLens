@@ -114,7 +114,8 @@ import LensCore
         stage = "separable-small-marks"
         canvas.geometry = intermediate
         let medium = try unwrap(canvas.densityPlan(for: 0))
-        let expectedMedium = expectedIDs(geometry: intermediate, events: events, agent: "alpha")
+        let expectedMedium = expectedIDs(geometry: intermediate, viewport: canvas.visibleRect.intersection(canvas.bounds), events: events, agent: "alpha")
+        observeCoverage("intermediate", plan: medium, expected: expectedMedium, canvas: canvas, geometry: intermediate, observations: &observations)
         check("intermediate-scale-reveals-many-separable-individual-marks", medium.clusters.isEmpty && medium.details.count > 100)
         check("intermediate-marks-retain-every-visible-source-id", Set(medium.details.map(\.id)) == expectedMedium
             && medium.totalMatches == expectedMedium.count)
@@ -125,10 +126,26 @@ import LensCore
         check("individual-small-marks-have-accessible-actions", mediumAX.count <= 512
             && mediumAX.contains { $0.accessibilityLabel()?.contains("User message 400") == true && $0.accessibilityRole() == .button })
 
+        // AppKit can constrain a window to the runner's screen. Explicitly
+        // exercise a clipped canvas as well; off-screen IDs are still retained
+        // in the projection, but are not part of the visible drawing plan.
+        let originalFrame = canvas.frame
+        canvas.frame.size.width = min(620, originalFrame.width * 0.6)
+        let clipped = try unwrap(canvas.densityPlan(for: 0))
+        let expectedClipped = expectedIDs(geometry: intermediate, viewport: canvas.visibleRect.intersection(canvas.bounds), events: events, agent: "alpha")
+        check("clipped-viewport-retains-exact-visible-ids-and-all-source-records", !expectedClipped.isEmpty
+            && expectedClipped.count < expectedMedium.count && clipped.clusters.isEmpty
+            && Set(clipped.details.map(\.id)) == expectedClipped && clipped.totalMatches == expectedClipped.count
+            && Set(projection.orderedEventIDs) == Set(events.map(\.id)))
+        observeCoverage("explicit-clipped", plan: clipped, expected: expectedClipped, canvas: canvas, geometry: intermediate, observations: &observations)
+        canvas.frame = originalFrame
+
         stage = "individual-selection"
         canvas.geometry = detail
         let detailed = try unwrap(canvas.densityPlan(for: 0))
-        check("detail-reveals-original-event-identities", detailed.clusters.isEmpty && Set(detailed.details.map(\.id)) == expectedIDs(geometry: detail, events: events, agent: "alpha"))
+        let expectedDetail = expectedIDs(geometry: detail, viewport: canvas.visibleRect.intersection(canvas.bounds), events: events, agent: "alpha")
+        observeCoverage("detail", plan: detailed, expected: expectedDetail, canvas: canvas, geometry: detail, observations: &observations)
+        check("detail-reveals-original-event-identities", detailed.clusters.isEmpty && Set(detailed.details.map(\.id)) == expectedDetail)
         let event = try unwrap(projection.item(id: "root-400")), rect = detail.rect(for: event)
         let point = NSPoint(x: rect.x + rect.width / 2, y: rect.y + rect.height / 2)
         canvas.mouseUp(with: try mouse(.leftMouseUp, point: point, canvas: canvas, window: window))
@@ -185,12 +202,30 @@ import LensCore
     private static func unwrap<T>(_ value: T?) throws -> T {
         guard let value else { throw LensError.unavailable("Required native timeline value is absent.") }; return value
     }
-    private static func expectedIDs(geometry: TimelineGeometry, events: [LensEvent], agent: String) -> Set<String> {
+    private static func expectedIDs(geometry: TimelineGeometry, viewport: NSRect, events: [LensEvent], agent: String) -> Set<String> {
+        let lowerX = max(geometry.labelWidth, Double(viewport.minX) + geometry.labelWidth)
+        let upperX = min(geometry.contentWidth - geometry.rightInset, Double(viewport.maxX))
+        guard lowerX <= upperX else { return [] }
+        let lower = geometry.date(atX: lowerX, clamped: false), upper = geometry.date(atX: upperX, clamped: false)
         let padding = geometry.window.duration * geometry.minimumMarkerWidth / geometry.timeWidth
         return Set(events.filter { event in
-            event.agentID == agent && event.timestamp <= geometry.window.end
-                && max(event.endTime ?? event.timestamp, event.timestamp.addingTimeInterval(padding)) >= geometry.window.start
+            event.agentID == agent && event.timestamp <= upper
+                && max(event.endTime ?? event.timestamp, event.timestamp.addingTimeInterval(padding)) >= lower
         }.map(\.id))
+    }
+    @MainActor private static func observeCoverage(_ scenario: String, plan: TimelineDensityResult, expected: Set<String>, canvas: NSView,
+        geometry: TimelineGeometry, observations: inout [[String: Any]]) {
+        let actual = Set(plan.details.map(\.id)), viewport = canvas.visibleRect.intersection(canvas.bounds)
+        let lowerX = max(geometry.labelWidth, Double(viewport.minX) + geometry.labelWidth)
+        let upperX = min(geometry.contentWidth - geometry.rightInset, Double(viewport.maxX))
+        observations.append(["scenario": scenario, "method": "Exact source ID set against the actual clipped viewport",
+            "frame": NSStringFromRect(canvas.frame), "bounds": NSStringFromRect(canvas.bounds), "visibleRect": NSStringFromRect(viewport),
+            "logicalContentWidth": geometry.contentWidth, "timeWidth": geometry.timeWidth, "rightInset": geometry.rightInset,
+            "plotXRange": [lowerX, upperX], "logicalTimeWindow": [geometry.window.start.timeIntervalSince1970, geometry.window.end.timeIntervalSince1970],
+            "visibleTimeWindow": [geometry.date(atX: lowerX, clamped: false).timeIntervalSince1970, geometry.date(atX: upperX, clamped: false).timeIntervalSince1970],
+            "expectedCount": expected.count, "actualDetailCount": actual.count, "totalMatches": plan.totalMatches,
+            "clusterCount": plan.clusters.count,
+            "missingIDs": expected.subtracting(actual).sorted(), "unexpectedIDs": actual.subtracting(expected).sorted()])
     }
     private static func exactComposition(_ plan: TimelineDensityResult, geometry: TimelineGeometry, events: [LensEvent], agent: String) -> Bool {
         let padding = geometry.window.duration * geometry.minimumMarkerWidth / geometry.timeWidth
