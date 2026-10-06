@@ -25,6 +25,7 @@ Compatibility and test coverage are documented in each release's notes. A listed
 ### Fixed
 
 - Keep separated timeline events visible at intermediate zoom and preserve event-type colors inside dense groups.
+- Redraw viewport-dependent timeline content after restoring a reader's browsing position, while preserving zoom, selection and scroll anchors.
 - Retire prepared activity and timeline data before switching to another source with the same session ID.
 - Restore the visible curve-table period after Back and preserve manual reading position when updates change interval resolution.
 - Restore the activity selection, list scroll anchor, timeline framing, filters and paused live state when returning from a reading tab.

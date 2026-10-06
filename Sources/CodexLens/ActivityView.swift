@@ -710,10 +710,15 @@ struct TimelineView: NSViewRepresentable {
         }
         private func resize() { if let store, !isConfiguring { configure(store: store, live: live) } }
         @objc private func boundsChanged() {
+            guard let scroll else { return }
+            // Sticky labels and the density plan depend on the visible rect.
+            // Layout/restoration notifications must repaint even when they
+            // cannot yet publish a user scroll position to the store.
+            scroll.documentView?.needsDisplay = true
             // AppKit emits bounds notifications while a reader is remounted,
             // before configure can apply the restored origin. Those layout
             // notifications are not user scrolling and must not replace it.
-            guard !isConfiguring, let scroll, let store,
+            guard !isConfiguring, let store,
                   previousViewport != nil, rootID == store.snapshot?.root.id,
                   previousReset == store.timelineReset,
                   previousClipSize == scroll.contentSize else { return }
@@ -722,7 +727,6 @@ struct TimelineView: NSViewRepresentable {
                 store.timelineOrigin = scroll.contentView.bounds.origin
                 rememberTimelinePosition()
             }
-            scroll.documentView?.needsDisplay = true
         }
         private func rememberTimelinePosition(midpoint: Date? = nil) {
             guard !live, let store, let rootID, let range = axisRange, let viewport = previousViewport,
@@ -835,6 +839,9 @@ struct TimelineView: NSViewRepresentable {
             origin.x = min(max(0, origin.x), max(0, width - scroll.contentSize.width))
             origin.y = min(max(0, origin.y), max(0, height - scroll.contentSize.height))
             if scroll.contentView.bounds.origin != origin { scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView) }
+            // Scrolling can consume/copy a previously invalidated display.
+            // Invalidate after the final frame and clip origin are restored.
+            canvas.needsDisplay = true
             if live { liveOrigin = scroll.contentView.bounds.origin } else { store.timelineOrigin = scroll.contentView.bounds.origin }
             previousReset = store.timelineReset; previousZoom = zoom; previousViewport = viewport; previousClipSize = clipSize; axisRange = extent
             let retainedMidpoint = anchor.flatMap { anchor -> Date? in

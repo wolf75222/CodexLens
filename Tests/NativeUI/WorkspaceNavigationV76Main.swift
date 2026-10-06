@@ -202,6 +202,26 @@ import SwiftUI
         try await settle(host)
         let baseline = try viewport(in: host, store: store)
         let timelineOrigin = store.timelineOrigin, timelineZoom = store.timelineZoom
+        func timelineGeometry(_ scenario: String) -> Bool {
+            guard let timeline = descendants(host).compactMap({ $0 as? TimelineScrollView }).first(where: { !$0.isHiddenOrHasHiddenAncestor }),
+                  let canvas = timeline.documentView as? TimelineCanvas else { return false }
+            let clip = timeline.contentView, visible = canvas.visibleRect.intersection(canvas.bounds)
+            let actualLeft = canvas.convert(visible.origin, to: timeline)
+            let expectedLeft = clip.convert(clip.bounds.origin, to: timeline)
+            let laneLabel = canvas.convert(NSPoint(x: visible.minX + 12, y: visible.minY), to: host)
+            let expectedLabel = clip.convert(NSPoint(x: clip.bounds.minX + 12, y: clip.bounds.minY), to: host)
+            observations.append(["scenario": scenario, "method": "Native coordinate conversions before cacheDisplay",
+                "scrollFrame": NSStringFromRect(timeline.frame), "scrollBounds": NSStringFromRect(timeline.bounds),
+                "clipFrame": NSStringFromRect(clip.frame), "clipBounds": NSStringFromRect(clip.bounds),
+                "canvasFrame": NSStringFromRect(canvas.frame), "canvasBounds": NSStringFromRect(canvas.bounds),
+                "canvasVisibleRect": NSStringFromRect(visible), "visibleLeftInScroll": NSStringFromPoint(actualLeft),
+                "clipLeftInScroll": NSStringFromPoint(expectedLeft), "laneLabelInHost": NSStringFromPoint(laneLabel),
+                "expectedLaneLabelInHost": NSStringFromPoint(expectedLabel), "scrollInHost": NSStringFromRect(timeline.convert(timeline.bounds, to: host)),
+                "parentBounds": NSStringFromRect(timeline.superview?.bounds ?? .zero)])
+            return !visible.isEmpty && abs(actualLeft.x - expectedLeft.x) < 1
+                && abs(visible.width - clip.bounds.width) < 1 && abs(laneLabel.x - expectedLabel.x) < 1
+        }
+        check("initial-timeline-render-covers-native-viewport", timelineGeometry("before-reader-rendered-geometry"))
         func temporalReceipt(_ scenario: String) -> [String: Any] {
             var result: [String: Any] = ["scenario": scenario, "expectedZoom": timelineZoom, "actualZoom": store.timelineZoom,
              "expectedOrigin": NSStringFromPoint(timelineOrigin), "actualOrigin": NSStringFromPoint(store.timelineOrigin)]
@@ -246,6 +266,7 @@ import SwiftUI
         check("back-restores-native-list-anchor-and-offset", try viewport(in: host, store: store).matches(baseline))
         check("back-restores-time-zoom-and-pan", abs(store.timelineZoom - timelineZoom) < 0.001
             && distance(store.timelineOrigin, timelineOrigin) < 1)
+        check("back-timeline-render-covers-native-viewport-without-left-gap", timelineGeometry("after-back-rendered-geometry"))
         observations.append(try viewport(in: host, store: store).receipt("after-back"))
         observations.append(temporalReceipt("after-back-temporal"))
         renders.append(try capture(host, path: output.appendingPathComponent("component-cache-workspace-after-back.png")))
@@ -261,6 +282,7 @@ import SwiftUI
             && returnedViewport.matches(baseline))
         check("workspace-return-restores-time-place", abs(store.timelineZoom - timelineZoom) < 0.001
             && distance(store.timelineOrigin, timelineOrigin) < 1)
+        check("workspace-return-timeline-render-covers-native-viewport-without-left-gap", timelineGeometry("after-workspace-return-rendered-geometry"))
         observations.append(temporalReceipt("after-workspace-return-temporal"))
         for route in ["workspace", "back"] {
             store.navigate(a, newTab: true)
