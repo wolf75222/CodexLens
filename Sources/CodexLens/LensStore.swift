@@ -25,6 +25,20 @@ struct LensEventListViewport: Equatable {
     var origin: CGPoint
     var sourceHome: String? = nil
 }
+/// A time coordinate, qualified by the geometry that produced its pixel origin.
+/// Native remounts can temporarily use a different width or scrollbar layout.
+struct LensTimelinePosition {
+    let rootID: String
+    let sourceHome: String
+    let range: ClosedRange<Date>
+    let zoom: Double
+    let origin: CGPoint
+    let midpoint: Date
+    func matches(rootID: String?, sourceHome: String, range: ClosedRange<Date>?, zoom: Double, origin: CGPoint) -> Bool {
+        self.rootID == rootID && self.sourceHome == sourceHome && self.range == range
+            && self.zoom == zoom && self.origin == origin
+    }
+}
 struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String; let destination: Destination; let title: String }
 
 @MainActor final class LensStore: ObservableObject {
@@ -55,7 +69,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         didSet {
             snapshotRevision &+= 1
             if oldValue?.root.id != snapshot?.root.id {
-                presentation = nil; timelineProjection = nil; timelineWindow = nil; timelineOrigin = .zero; timelineFocus = nil
+                presentation = nil; timelineProjection = nil; timelineWindow = nil; timelineOrigin = .zero; timelinePosition = nil; timelineFocus = nil
                 timelineZoomLimit = TimelineInteraction.zoomRange.upperBound; timelineZoom = 1
             }
             schedulePresentation(coalescingLiveUpdate: oldValue?.root.id == snapshot?.root.id)
@@ -295,6 +309,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         let timelineZoom: Double
         let timelineZoomLimit: Double
         let timelineOrigin: CGPoint
+        let timelinePosition: LensTimelinePosition?
         let livePreview: Destination?
         let previewOrigin: PreviewOrigin?
         let activeTab: UUID?
@@ -350,6 +365,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
     @Published private(set) var timelineZoomLimit = TimelineInteraction.zoomRange.upperBound
     var timelineWindow: ClosedRange<Date>?
     var timelineOrigin = CGPoint.zero
+    var timelinePosition: LensTimelinePosition?
     @Published var timelineReset = 0
 
     func focusTimelineEvent(_ id: String, zoom: Bool = false) {
@@ -400,7 +416,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
     }
     func setNavigationScope(_ value: String) { guard !started, UUID(uuidString: value) != nil else { return }; navigationScope = value }
     private var currentFilters: EventFilters { EventFilters(agentID: agentFilter, environmentID: environmentFilter, resourceID: resourceFilter, kind: kindFilter, period: period, query: query, sourceMatches: searchMatches, originInstructionID: originInstructionFilter) }
-    private func checkpoint(_ destination: Destination?) -> Checkpoint { Checkpoint(destination: destination, filters: currentFilters, agentFilters: AgentFilters(query: agentQuery, sourceMatches: agentSearchMatches), section: section, activityMode: activityMode, timelineWindow: timelineWindow, timelineZoom: timelineZoom, timelineZoomLimit: timelineZoomLimit, timelineOrigin: timelineOrigin, livePreview: livePreview, previewOrigin: previewOrigin, activeTab: activeTab, activeTabDestination: tabs.first(where: { $0.id == activeTab })?.destination, tabContentVisible: tabContentVisible, timelineVisible: timelineVisible, liveTimelineVisible: liveTimelineVisible, follow: follow, liveState: liveState, listViewports: eventListViewports) }
+    private func checkpoint(_ destination: Destination?) -> Checkpoint { Checkpoint(destination: destination, filters: currentFilters, agentFilters: AgentFilters(query: agentQuery, sourceMatches: agentSearchMatches), section: section, activityMode: activityMode, timelineWindow: timelineWindow, timelineZoom: timelineZoom, timelineZoomLimit: timelineZoomLimit, timelineOrigin: timelineOrigin, timelinePosition: timelinePosition, livePreview: livePreview, previewOrigin: previewOrigin, activeTab: activeTab, activeTabDestination: tabs.first(where: { $0.id == activeTab })?.destination, tabContentVisible: tabContentVisible, timelineVisible: timelineVisible, liveTimelineVisible: liveTimelineVisible, follow: follow, liveState: liveState, listViewports: eventListViewports) }
     private func restore(_ entry: Checkpoint) {
         timelineFocus = nil
         activeTab = tabs.contains(where: { $0.id == entry.activeTab }) ? entry.activeTab : nil
@@ -411,7 +427,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         resourceFilter = entry.filters.resourceID; kindFilter = entry.filters.kind; period = entry.filters.period; searchMatches = entry.filters.sourceMatches
         originInstructionFilter = entry.filters.originInstructionID
         agentQuery = entry.agentFilters.query; agentSearchMatches = entry.agentFilters.sourceMatches
-        section = entry.section; activityMode = entry.activityMode; timelineWindow = entry.timelineWindow; timelineZoomLimit = entry.timelineZoomLimit; timelineZoom = entry.timelineZoom; timelineOrigin = entry.timelineOrigin; timelineReset &+= 1; livePreview = entry.livePreview; tabContentVisible = entry.tabContentVisible
+        section = entry.section; activityMode = entry.activityMode; timelineWindow = entry.timelineWindow; timelineZoomLimit = entry.timelineZoomLimit; timelineZoom = entry.timelineZoom; timelineOrigin = entry.timelineOrigin; timelinePosition = entry.timelinePosition; timelineReset &+= 1; livePreview = entry.livePreview; tabContentVisible = entry.tabContentVisible
         timelineVisible = entry.timelineVisible; liveTimelineVisible = entry.liveTimelineVisible
         follow = entry.follow; liveClock.restore(entry.liveState)
         previewOrigin = entry.livePreview == nil ? nil : entry.previewOrigin
@@ -540,7 +556,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
         timelineFocus = nil
         if let bounds = timelineProjection?.bounds { timelineWindow = bounds.start...bounds.end }
         timelineZoomLimit = TimelineInteraction.zoomRange.upperBound
-        timelineZoom = 1; timelineOrigin = .zero; timelineReset &+= 1
+        timelineZoom = 1; timelineOrigin = .zero; timelinePosition = nil; timelineReset &+= 1
     }
     func event(_ id: String) -> LensEvent? { presentation?.eventsByID[id] }
     func change(_ id: String) -> ChangeRecord? { presentation?.changesByID[id] }
@@ -766,7 +782,7 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
             loadTask = nil
             snapshot = next; latest = next; selection = nil; tabs = []; activeTab = nil; tabContentVisible = false; back = []; forward = []
             workspaceCheckpoint = nil; readerCheckpoints = [:]; eventListViewports = [:]; eventListRestoration &+= 1
-            timelineWindow = nil; timelineZoom = 1; timelineZoomLimit = TimelineInteraction.zoomRange.upperBound; timelineOrigin = .zero; timelineFocus = nil; timelineReset &+= 1
+            timelineWindow = nil; timelineZoom = 1; timelineZoomLimit = TimelineInteraction.zoomRange.upperBound; timelineOrigin = .zero; timelinePosition = nil; timelineFocus = nil; timelineReset &+= 1
             livePreview = nil; previewOrigin = nil; liveClock.reset()
             resetFilters(); originCodeReferences = [:]; agentQuery = ""; follow = true; waitingEvents = 0; waitingUpdates = false; section = .activity
             if liveTimelineVisible { liveClock.resume(at: Date()) }

@@ -35,7 +35,7 @@ The annotations are vector overlays on unchanged compositor JPEGs, embedded in t
 
 ## Design and implementation
 
-The app retains navigation metadata rather than keeping every native reader and its full text in memory. Back/Forward and the collection return item restore the selected object, activity filters, timeline period/zoom/pan, event-list anchor and paused-live state. Native list updates continue to preserve their anchor during collection.
+The app retains navigation metadata rather than keeping every native reader and its full text in memory. Back/Forward and the collection return item restore the selected object, activity filters, timeline period/zoom/pan, event-list anchor and paused-live state. A qualified temporal midpoint retains the coordinate reference across temporary viewport and scrollbar layouts. Native list updates continue to preserve their anchor during collection.
 
 Control-Tab cycles between the originating collection and reading tabs, including a single reader. Command-W closes the presented reader or preview, then the window when no reader is presented; it does not close an inactive tab.
 
@@ -47,9 +47,11 @@ Tab persistence includes the observed source path. Legacy entries without a sour
 
 ## Validation
 
-The Release logic run executed **536 tests, four optional skips, zero failures**. The final source-matched native regression entrypoint executed **58 assertions, zero failures**, and exits nonzero if an assertion or setup/layout flow fails. Its actual AppKit event-list top row and offset remained exact through Back and both changed-filter restoration routes: offset 7, vertical origin 10217. The recorded timeline zoom remained 19.6 and the origin remained (1600, 0). These pixel values are fixture observations, not performance goals.
+The Release logic run executed **536 tests, four optional skips, zero failures**. The final source-matched native regression entrypoint executed **72 assertions, zero failures**, and exits nonzero if an assertion or setup/layout flow fails. Its actual AppKit event-list top row and offset remained exact through Back and both changed-filter restoration routes: offset 7, vertical origin 10217. The recorded timeline zoom remained 19.6 and horizontal origin stayed within one point of 1600. These pixel values are fixture observations, not performance goals.
 
-The first remote runs exposed four failed temporal-restoration assertions on macOS 26.6.2. AppKit could publish a new clip's temporary zero origin before its first usable layout. The bounds callback now accepts updates only after a matching root and restoration revision have been configured. Four deterministic checks cover notifications before layout, a pending restoration, applying the saved native clip origin and ordinary user scrolling. Expected and actual temporal values are retained in receipts, and CI retains failure diagnostics even when a native probe fails.
+Remote runs exposed four failed temporal-restoration assertions on macOS 26.6.2: zoom remained 19.6, while X drifted from 1600 to 1567, 1534, 1502 and 1471 after successive returns. Restoring raw pixels against a temporary remount width let later layout reinterpret that coordinate. Checkpoints now include a temporal midpoint qualified by source, root, extent, zoom and origin. The bounds callback accepts updates only after a matching root/restoration revision and applied clip size have been configured.
+
+Four deterministic checks cover notifications before layout, a pending restoration, applying the saved native clip origin and ordinary user scrolling. Additional AppKit scenarios repeat five wider-to-original remounts with both overlay and legacy scrollers, and check noncentral anchored zoom followed by unchanged layout. Receipts retain expected/actual temporal values, clip sizes, geometry width and scrollbar style; CI retains failure diagnostics even when a probe fails. No global scrollbar preference is changed, and the app does not force overlay scrollers to hide the problem.
 
 The harness also verified paused Live state, closing a preview back to its originating reader, closing a background reader without hiding the preview, captured-target window acceptance, distinct window navigation scopes, shared source-engine identity, surviving source reads after another observer closes, and unchanged fixture journals/worktree files. Three Core regressions cover cold aliased caches, source folders created later and blocked cache locations.
 

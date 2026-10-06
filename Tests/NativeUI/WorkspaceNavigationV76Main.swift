@@ -68,6 +68,7 @@ import SwiftUI
         check("source-matched-workspace-entrypoint", manifest?["entrypoint"] as? String == "WorkspaceNavigationV76Main.swift"
             && manifest?["productionEntryPointReplaced"] as? Bool == true
             && manifest?["copiedAppSourcesModified"] as? Bool == false)
+        try await waitUntil(store: store, stage: "initial-timeline-projection") { store.timelineProjection != nil }
 
         // Exercise the pre-layout notification ordering without relying on
         // one WindowServer's timing when remounting the SwiftUI hierarchy.
@@ -91,6 +92,57 @@ import SwiftUI
         NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: pendingScroll.contentView)
         check("configured-user-scroll-updates-timeline-origin", abs(store.timelineOrigin.x - 1300) < 1)
         pendingCoordinator.detach()
+
+        for style: NSScroller.Style in [.overlay, .legacy] {
+            let label = style == .legacy ? "legacy" : "overlay"
+            func makeScroll(width: CGFloat) -> TimelineScrollView {
+                let scroll = TimelineScrollView(frame: NSRect(x: 0, y: 0, width: width, height: 180))
+                scroll.hasHorizontalScroller = true; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
+                scroll.scrollerStyle = style; scroll.documentView = TimelineCanvas(frame: .zero)
+                return scroll
+            }
+            func settleScroll(_ scroll: NSScrollView) async throws {
+                for _ in 0..<4 { scroll.needsLayout = true; scroll.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 10_000_000) }
+            }
+            var scroll = makeScroll(width: 1000), coordinator = TimelineView.Coordinator()
+            store.timelineOrigin = CGPoint(x: 1600, y: 0); store.timelinePosition = nil; store.timelineReset &+= 1
+            coordinator.attach(scroll, store: store); coordinator.configure(store: store)
+            try await settleScroll(scroll)
+            let expectedOrigin = store.timelineOrigin
+            let expectedMidpoint = try require(store.timelinePosition?.midpoint, "qualified timeline midpoint")
+            check("timeline-uses-requested-scroller-style-" + label, scroll.scrollerStyle == style)
+            for iteration in 1...5 {
+                coordinator.detach()
+                // A new reader first lays out wider, then gains a scroller or
+                // settles its split pane. Returning to the same final width
+                // must never compound a new interpretation of saved pixels.
+                scroll = makeScroll(width: 1017); coordinator = TimelineView.Coordinator()
+                coordinator.attach(scroll, store: store); coordinator.configure(store: store)
+                try await settleScroll(scroll)
+                scroll.setFrameSize(NSSize(width: 1000, height: 180))
+                try await settleScroll(scroll)
+                check("repeated-remount-retains-time-place-" + label + "-" + String(iteration),
+                    distance(store.timelineOrigin, expectedOrigin) < 1
+                    && distance(scroll.contentView.bounds.origin, expectedOrigin) < 1
+                    && abs((store.timelinePosition?.midpoint ?? .distantPast).timeIntervalSince(expectedMidpoint)) < 0.000001)
+            }
+            observations.append(["scenario": "repeated-remount-" + label, "expectedOrigin": NSStringFromPoint(expectedOrigin),
+                "actualOrigin": NSStringFromPoint(store.timelineOrigin), "clipSize": NSStringFromSize(scroll.contentSize),
+                "geometryWidth": (scroll.documentView as? TimelineCanvas)?.geometry?.contentWidth ?? 0,
+                "scrollerStyle": label, "remounts": 5])
+            let geometryBeforeZoom = try require((scroll.documentView as? TimelineCanvas)?.geometry, "pre-zoom geometry")
+            let focalX: CGFloat = 220
+            let focalDate = geometryBeforeZoom.date(atX: Double(store.timelineOrigin.x + focalX), clamped: false)
+            let zoomApplied = coordinator.changeZoom(factor: 1.1, focalViewportX: focalX)
+            let geometryAfterZoom = try require((scroll.documentView as? TimelineCanvas)?.geometry, "post-zoom geometry")
+            let zoomedOrigin = store.timelineOrigin
+            for _ in 0..<5 { coordinator.configure(store: store) }
+            check("noncentral-anchored-zoom-does-not-jump-on-reconfigure-" + label, zoomApplied
+                && distance(store.timelineOrigin, zoomedOrigin) < 1
+                && abs(CGFloat(geometryAfterZoom.x(for: focalDate)) - zoomedOrigin.x - focalX) < 1)
+            coordinator.detach()
+            store.timelineZoom = 19.6
+        }
 
         store.navigate(a)
         check("ordinary-collection-selection-creates-no-reader", store.tabs.isEmpty && store.workspacePresented
@@ -118,8 +170,14 @@ import SwiftUI
         let baseline = try viewport(in: host, store: store)
         let timelineOrigin = store.timelineOrigin, timelineZoom = store.timelineZoom
         func temporalReceipt(_ scenario: String) -> [String: Any] {
-            ["scenario": scenario, "expectedZoom": timelineZoom, "actualZoom": store.timelineZoom,
+            var result: [String: Any] = ["scenario": scenario, "expectedZoom": timelineZoom, "actualZoom": store.timelineZoom,
              "expectedOrigin": NSStringFromPoint(timelineOrigin), "actualOrigin": NSStringFromPoint(store.timelineOrigin)]
+            if let scroll = descendants(host).compactMap({ $0 as? TimelineScrollView }).first(where: { !$0.isHiddenOrHasHiddenAncestor }) {
+                result["clipSize"] = NSStringFromSize(scroll.contentSize)
+                result["scrollerStyle"] = scroll.scrollerStyle == .legacy ? "legacy" : "overlay"
+                result["geometryWidth"] = (scroll.documentView as? TimelineCanvas)?.geometry?.contentWidth
+            }
+            return result
         }
         check("native-list-is-scrolled-away-from-selected-message", baseline.origin.y > 1000
             && baseline.anchorID != original.id && store.selection == a)

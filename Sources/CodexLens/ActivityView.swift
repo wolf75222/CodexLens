@@ -667,6 +667,7 @@ struct TimelineView: NSViewRepresentable {
         private var previousReset: Int?
         private var previousZoom: Double?
         private var previousViewport: NSSize?
+        private var previousClipSize: NSSize?
         private var axisRange: ClosedRange<Date>?
         private var rootID: String?
         private var processedFocus: UUID?
@@ -700,10 +701,22 @@ struct TimelineView: NSViewRepresentable {
             // notifications are not user scrolling and must not replace it.
             guard !isConfiguring, let scroll, let store,
                   previousViewport != nil, rootID == store.snapshot?.root.id,
-                  previousReset == store.timelineReset else { return }
+                  previousReset == store.timelineReset,
+                  previousClipSize == scroll.contentSize else { return }
             if live { liveOrigin = scroll.contentView.bounds.origin }
-            else { store.timelineOrigin = scroll.contentView.bounds.origin }
+            else if store.timelineOrigin != scroll.contentView.bounds.origin {
+                store.timelineOrigin = scroll.contentView.bounds.origin
+                rememberTimelinePosition()
+            }
             scroll.documentView?.needsDisplay = true
+        }
+        private func rememberTimelinePosition(midpoint: Date? = nil) {
+            guard !live, let store, let rootID, let range = axisRange, let viewport = previousViewport,
+                  let geometry = (scroll?.documentView as? TimelineCanvas)?.geometry else { return }
+            let x = store.timelineOrigin.x + (CGFloat(geometry.labelWidth) + viewport.width) / 2
+            store.timelinePosition = LensTimelinePosition(rootID: rootID, sourceHome: store.observedSourceHome.path,
+                range: range, zoom: store.timelineZoom,
+                origin: store.timelineOrigin, midpoint: midpoint ?? geometry.date(atX: Double(x), clamped: false))
         }
         func configure(store: LensStore, live: Bool = false, animateLive: Bool? = nil) {
             guard !isConfiguring, let scroll, let canvas = scroll.documentView as? TimelineCanvas else { return }
@@ -719,17 +732,22 @@ struct TimelineView: NSViewRepresentable {
                 rootID = store.snapshot?.root.id; processedFocus = nil
                 focusTask?.cancel(); focusTask = nil; pendingFocus = nil; zoomAnchor = nil
             }
-            let viewport = NSSize(width: max(1, scroll.contentSize.width), height: max(120, scroll.contentSize.height))
+            let clipSize = scroll.contentSize
+            let viewport = NSSize(width: max(1, clipSize.width), height: max(120, clipSize.height))
             let baseWidth = max(live ? 300 : 500, viewport.width)
             let zoom = live ? 1 : min(store.timelineZoomLimit, max(1, store.timelineZoom))
             let resetChanged = previousReset != store.timelineReset
             let extent = live ? store.liveState.window.map { $0.start...$0.end } : (store.timelineWindow ?? store.timelineProjection?.bounds.map { $0.start...$0.end })
             let extentChanged = axisRange != extent
             let scaleChanged = previousZoom != zoom || previousViewport?.width != viewport.width
-            let oldOrigin = scroll.contentView.bounds.origin
+            let oldOrigin = live ? liveOrigin : store.timelineOrigin
             let temporalMidpoint = (CGFloat(canvas.geometry?.labelWidth ?? 145) + viewport.width) / 2
             let previousTemporalMidpoint = (CGFloat(canvas.geometry?.labelWidth ?? 145) + (previousViewport?.width ?? viewport.width)) / 2
-            let anchor = live ? nil : (zoomAnchor ?? ((!resetChanged && !extentChanged && scaleChanged)
+            let savedPosition = store.timelinePosition
+            let restoredAnchor: (date: Date, viewportX: CGFloat)? = !live && savedPosition?.matches(
+                rootID: rootID, sourceHome: store.observedSourceHome.path, range: extent, zoom: store.timelineZoom, origin: oldOrigin) == true
+                ? savedPosition.map { (date: $0.midpoint, viewportX: temporalMidpoint) } : nil
+            let anchor = live ? nil : (zoomAnchor ?? restoredAnchor ?? ((!resetChanged && !extentChanged && scaleChanged)
                 ? canvas.geometry.map { (date: $0.date(atX: Double(oldOrigin.x + previousTemporalMidpoint), clamped: false), viewportX: temporalMidpoint) } : nil))
             zoomAnchor = nil
             canvas.projection = store.timelineProjection
@@ -799,11 +817,20 @@ struct TimelineView: NSViewRepresentable {
             // Reset uses the store's saved origin; Tout voir already stores zero, while history restores its own origin.
             var origin = live ? liveOrigin : store.timelineOrigin
             if let anchor, let geometry = canvas.geometry { origin.x = CGFloat(geometry.x(for: anchor.date)) - anchor.viewportX }
+            let requestedX = origin.x
             origin.x = min(max(0, origin.x), max(0, width - scroll.contentSize.width))
             origin.y = min(max(0, origin.y), max(0, height - scroll.contentSize.height))
             if scroll.contentView.bounds.origin != origin { scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView) }
-            if live { liveOrigin = origin } else { store.timelineOrigin = origin }
-            previousReset = store.timelineReset; previousZoom = zoom; previousViewport = viewport; axisRange = extent
+            if live { liveOrigin = scroll.contentView.bounds.origin } else { store.timelineOrigin = scroll.contentView.bounds.origin }
+            previousReset = store.timelineReset; previousZoom = zoom; previousViewport = viewport; previousClipSize = clipSize; axisRange = extent
+            let retainedMidpoint = anchor.flatMap { anchor -> Date? in
+                guard abs(requestedX - store.timelineOrigin.x) < 1 else { return nil }
+                // Pinch anchors can be under the pointer rather than at the
+                // viewport centre. The saved reference must remain a centre.
+                if anchor.viewportX == temporalMidpoint { return anchor.date }
+                return canvas.geometry?.date(atX: Double(requestedX + temporalMidpoint), clamped: false)
+            }
+            rememberTimelinePosition(midpoint: retainedMidpoint)
             canvas.configureAccessibility()
             canvas.updateAccessibilitySelection()
             canvas.needsDisplay = true
@@ -826,7 +853,7 @@ struct TimelineView: NSViewRepresentable {
             return changeZoom(factor: max(0.05, 1 + Double(event.magnification)),
                               focalViewportX: point.x - scroll.contentView.bounds.minX)
         }
-        @discardableResult private func changeZoom(factor: Double, focalViewportX: CGFloat? = nil) -> Bool {
+        @discardableResult func changeZoom(factor: Double, focalViewportX: CGFloat? = nil) -> Bool {
             guard factor.isFinite, factor > 0, let scroll, let store,
                   let geometry = (scroll.documentView as? TimelineCanvas)?.geometry else { return false }
             let width = scroll.contentSize.width
@@ -892,6 +919,7 @@ struct TimelineView: NSViewRepresentable {
                 // preserve that date, rather than losing an event against the old right edge.
                 canvas.reveal(request.eventID, centered: true)
                 if let scroll = self.scroll { store.timelineOrigin = scroll.contentView.bounds.origin }
+                self.rememberTimelinePosition()
             }
         }
     }
