@@ -1,0 +1,250 @@
+{
+  "schemaVersion": 2,
+  "reviewDate": "2026-10-06",
+  "anonymousFixtures": true,
+  "reviews": {
+    "baseline": {
+      "sourceCommit": null,
+      "sourceCommitStatus": "Exact commit not established in the baseline capture receipt",
+      "executableUUID": "12946FC2-09FB-3582-9770-DE86DE95A51D",
+      "productionExecutableSHA256": "43ae163d893b722f49b3c2ff236e2d9bff2f550ff7b441730943b97a8d5f24b1",
+      "matchedSourceInputCount": 108,
+      "allSourceInputsMatch": true,
+      "scope": "Development build before histogram and native values-table corrections"
+    },
+    "render-corrections": {
+      "sourceCommit": "77322f2c31da0f4506c44268ccdfdeab8aa1d75f",
+      "executableUUID": "C044565C-164E-3B9D-9613-4D34FD42646D",
+      "productionExecutableSHA256": "9b6a5dc063e72972bafd21d08db92f98b5951ceb6a874c197bb444ea27f0ae89",
+      "matchedSourceInputCount": 109,
+      "allSourceInputsMatch": true,
+      "scope": "Histogram and values-table rendering review; before subsequent source-transition dispatch and Back-remount corrections",
+      "observed": {
+        "zeroBasedHistogram": true,
+        "keyboardSelectionRevealsLateValuesRow": true,
+        "hideShowValuesRevealsRetainedSelection": true,
+        "backRestoresMetricModeDateAndSelectedRow": true,
+        "backRevealsSelectedValuesRow": false,
+        "sourceTransitionGUIReproduced": false
+      }
+    },
+    "navigation-corrections": {
+      "sourceCommit": null,
+      "baseCommit": "77322f2c31da0f4506c44268ccdfdeab8aa1d75f",
+      "sourceDirtyAtCapture": true,
+      "sourceDescription": "Frozen development source based on 77322f2 plus uncommitted source-scope and stable-bucket-anchor corrections; not a clean-commit release",
+      "executableUUID": "69B9CA48-2C2A-3698-B72E-213DC8D3D74B",
+      "buildSourceManifestSHA256": "bd0f3a8d0a8de2f0245205e229ff42cb3a1a9eaac3140209b4b9a1ec64431360",
+      "matchedSourceInputCount": 109,
+      "allSourceInputsMatch": true,
+      "scope": "Two controlled period-to-activity Back returns and a reader/workspace/history return; source-transition behavior qualified separately by native regressions",
+      "observed": {
+        "controlledBackRepeats": 2,
+        "selectedPeriod": "2026-10-01 14:01:03\u201314:01:04 Europe/Paris",
+        "selectedBucketIndex": 63,
+        "backSelectionRestored": true,
+        "backSelectedValuesRowVisible": true,
+        "backViewportValues": [
+          0.9933701657458563,
+          0.9933701657458563
+        ],
+        "readerWorkspaceReturnVerified": true,
+        "readerHistoryToChartsVerified": true,
+        "sourceTransitionGUIReproduced": false,
+        "initialUnexplainedModeResetObserved": true,
+        "initialModeResetCauseEstablished": false,
+        "initialModeResetReproducedInControlledCycles": false,
+        "initialModeResetCapturedInJPEG": false,
+        "completeWindowCountInventoryAvailable": false,
+        "supplementalGeneralSettingsDarkAppearanceRetainsSelection": true
+      }
+    },
+    "visual-polish": {
+      "sourceCommit": null,
+      "baseCommit": "77322f2c31da0f4506c44268ccdfdeab8aa1d75f",
+      "sourceDirtyAtCapture": true,
+      "sourceDescription": "Frozen 77322f2 plus source/anchor corrections and two presentation modifiers; not a clean-commit binary",
+      "executableUUID": "7243AAE4-A26E-3CF0-B80B-5F224CC4C35E",
+      "buildSourceManifestSHA256": "f7bad1b3b3df409db1e6d29897b2510453590df3b42faa39cdbdab46f1ade5ba",
+      "matchedSourceInputCount": 109,
+      "allSourceInputsMatch": true,
+      "scope": "Visual review of selected-control appearance in dark and light themes; not a fresh navigation or logical regression replay",
+      "observed": {
+        "selectedSegmentFill": "dark violet",
+        "selectedSegmentLabels": "white and visually legible",
+        "redundantVisibleActivityPickerLabelRemoved": true,
+        "accessibleActivityPickerDescriptionRetained": true,
+        "lightAndDarkRetainMCPMetricCumulativeModeValuesAndSelectedPeriod": true,
+        "selectedValuesRowVisible": true,
+        "measuredContrastRatio": null,
+        "native41AndControlledBackReturnsAttributedToThisBuild": false
+      },
+      "publication": "Metadata only; superseded illustrations are not published because the final-palette captures cover the same appearance scope with the harmonized values row"
+    },
+    "final-palette": {
+      "sourceCommit": null,
+      "baseCommit": "77322f2c31da0f4506c44268ccdfdeab8aa1d75f",
+      "sourceDirtyAtCapture": true,
+      "sourceDescription": "Frozen release-candidate source with source/anchor fixes, selector modifiers and existing LensTableSelectionRowView for values-table row rendering; not a clean-commit binary",
+      "executableUUID": "4DF7E741-494C-300B-A944-186CA06B2B6D",
+      "buildSourceManifestSHA256": "c884084e18f780df480e1ddc57d9382d1f68fbdaec52059913acbce8ab1b0bc3",
+      "matchedSourceInputCount": 109,
+      "allSourceInputsMatch": true,
+      "scope": "Final visual palette review only; not a fresh native41, Back or source-transition regression replay",
+      "observed": {
+        "activeValuesRowSelectedThroughNativeAccessibilityTarget": true,
+        "activeValuesRowAppearance": "pastel violet with a violet edge marker",
+        "selectedSegments": "dark violet with visually legible white labels",
+        "redundantVisibleActivityPickerLabelRemoved": true,
+        "accessibleActivityPickerNameRetained": true,
+        "darkAndLightRetainMCPMetricCumulativeModeValuesAndSelectedPeriod": true,
+        "selectedValuesRowVisible": true,
+        "measuredContrastRatio": null,
+        "native41AndControlledBackReturnsAttributedToThisBuild": false
+      }
+    }
+  },
+  "captures": [
+    {
+      "file": "before-histogram.jpg",
+      "sourceCapture": "01-tools-intervals.jpg",
+      "review": "baseline",
+      "description": "Tool-call counts rendered as floating horizontal pills",
+      "format": "JPEG",
+      "pixels": [
+        2960,
+        1640
+      ],
+      "bytes": 269991,
+      "sha256": "1f70e0b097633dc5e659d0b820539736d6b49efe0c65f74edb151222794c5a3f",
+      "captureMethod": "CUA native App.getScreenshot; original bytes unchanged"
+    },
+    {
+      "file": "before-table-reveal.jpg",
+      "sourceCapture": "03-chart-offscreen-selection.jpg",
+      "review": "baseline",
+      "description": "Selected chart period remains outside the table viewport",
+      "format": "JPEG",
+      "pixels": [
+        2960,
+        1640
+      ],
+      "bytes": 403191,
+      "sha256": "e57636a6470a783112ff4421c51f7feb24f226d975324f1b0485ef2f8f598653",
+      "captureMethod": "CUA native App.getScreenshot; original bytes unchanged"
+    },
+    {
+      "file": "histogram-light.jpg",
+      "sourceCapture": "01-tools-histogram-light.jpg",
+      "review": "render-corrections",
+      "description": "Tool-call interval columns rise from zero",
+      "format": "JPEG",
+      "pixels": [
+        2960,
+        1640
+      ],
+      "bytes": 262585,
+      "sha256": "01f66d632815bf35ee1b3dae93a94a8aa34d9c5359271122a84a0dfcae6e5e19",
+      "captureMethod": "CUA native App.getScreenshot; original bytes unchanged"
+    },
+    {
+      "file": "cumulative-values-revealed.jpg",
+      "sourceCapture": "03-mcp-cumulative-revealed.jpg",
+      "review": "render-corrections",
+      "description": "Keyboard-selected late MCP interval is selected and visible in the values table",
+      "format": "JPEG",
+      "pixels": [
+        2960,
+        1640
+      ],
+      "bytes": 369653,
+      "sha256": "d988db3833cd13fc8945e7ccd2d9c5e9e305a2c6b93d16ae2b10edbe41bcf409",
+      "captureMethod": "CUA native App.getScreenshot; original bytes unchanged"
+    },
+    {
+      "file": "back-table-limit-before-remount-fix.jpg",
+      "sourceCapture": "06-back-settled.jpg",
+      "review": "render-corrections",
+      "description": "Back restores the late selected period but the table viewport is at the beginning",
+      "format": "JPEG",
+      "pixels": [
+        2960,
+        1640
+      ],
+      "bytes": 344231,
+      "sha256": "6a19200959f89c9df679eae8225ba60a23505b601a672f0c35398dbf04517c56",
+      "captureMethod": "CUA native App.getScreenshot; original bytes unchanged"
+    },
+    {
+      "file": "back-values-revealed.jpg",
+      "sourceCapture": "04-back63-second.jpg",
+      "review": "navigation-corrections",
+      "description": "Second controlled Back return preserves the late MCP period with its selected values row visible",
+      "format": "JPEG",
+      "pixels": [
+        2960,
+        1640
+      ],
+      "bytes": 360208,
+      "sha256": "93ac3639b2a6f52aac909e1195d3d77be731abe9c5a4d768adf01936d539fe62",
+      "captureMethod": "CUA native App.getScreenshot; original bytes unchanged"
+    },
+    {
+      "file": "selected-mcp-harmonized-dark.jpg",
+      "sourceCapture": "01-dark-selected-mcp.jpg",
+      "review": "final-palette",
+      "description": "Selected MCP cumulative interval with actively selected pastel-violet table row and dark-violet filled selectors in dark appearance",
+      "format": "JPEG",
+      "pixels": [
+        2960,
+        1640
+      ],
+      "bytes": 366732,
+      "sha256": "21f0b12cb96d2dd95a06c4eb04c3deda6bf88d4defb156223626f36766c925be",
+      "captureMethod": "CUA native App.getScreenshot; original bytes unchanged"
+    },
+    {
+      "file": "selected-mcp-harmonized-light.jpg",
+      "sourceCapture": "02-light-selected-mcp.jpg",
+      "review": "final-palette",
+      "description": "Selected MCP cumulative interval with actively selected pastel-violet table row and dark-violet filled selectors in light appearance",
+      "format": "JPEG",
+      "pixels": [
+        2960,
+        1640
+      ],
+      "bytes": 363078,
+      "sha256": "62ef9278498af5fc3315dcbb219f1a05d6819e54ea6bee841e746e999184b995",
+      "captureMethod": "CUA native App.getScreenshot; original bytes unchanged"
+    }
+  ],
+  "limits": {
+    "personalSessionsInspected": false,
+    "AIRequestsPerformed": false,
+    "recordedCommandsExecuted": false,
+    "OSNetworkDenialGuaranteed": false,
+    "hardwarePointerSelectionQualified": false,
+    "hardwareTrackpadQualified": false,
+    "VoiceOverQualified": false,
+    "narrowWindowReplayQualified": false,
+    "darkAppearanceReplayOnRenderCorrectionBuildQualified": false,
+    "liveCollectorThroughputQualified": false,
+    "sourceTransitionFixQualifiedByCompositorCaptures": false,
+    "controlledBackRevealQualifiedOnFrozenNavigationBuild": true,
+    "darkAppearanceReplayOnNavigationCorrectionBuildQualified": true,
+    "lightAndDarkVisualPolishBuildQualified": true,
+    "lightAndDarkFinalPaletteBuildQualified": true
+  },
+  "excludedDerivedImage": {
+    "file": "header-period-crop.png",
+    "reason": "Raw crop used to reject a suspected overflow; not an original compositor capture and not published",
+    "review": "render-corrections"
+  },
+  "excludedDiagnosticCaptures": [
+    {
+      "file": "anomaly-after-reenter.jpg",
+      "review": "navigation-corrections",
+      "reason": "Shows a subsequent explicit re-entry, not the unexplained initial reset; no initial-reset JPEG exists"
+    }
+  ]
+}

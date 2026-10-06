@@ -11,7 +11,7 @@ struct ActivityView: View {
             HStack {
                 Picker(LensL10n.text("Vue de l’activité"), selection: $store.activityMode) {
                     ForEach(ActivityInspectionMode.allCases, id: \.self) { Text(LensL10n.text($0.rawValue)).tag($0) }
-                }.pickerStyle(.segmented).fixedSize().controlSize(.small)
+                }.pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small).lensFilledControlAccent()
                     .accessibilityIdentifier("lens-activity-mode")
                 Spacer(minLength: 0)
             }.padding(.horizontal, 16).padding(.vertical, 8)

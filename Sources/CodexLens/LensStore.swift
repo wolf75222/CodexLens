@@ -788,6 +788,12 @@ struct LensBookmark: Identifiable, Codable { var id = UUID(); let rootID: String
                 guard !Task.isCancelled, !isStopped, lifecycle == lifecycleGeneration, generation == openGeneration else { return }
             }
             persistWindowRoot(); persistTabs()
+            // The same root UUID can be present in different sources. Retire
+            // prepared data before publishing the new reader identity; ordinary
+            // live snapshots still retain their current presentation.
+            projectionTask?.cancel(); projectionTask = nil; projectionGeneration = UUID()
+            projectionNeedsRefresh = false; projectionReaderID = nil
+            presentation = nil; timelineProjection = nil; timelineIssue = nil
             if let selectedReaderLease { releaseReader(selectedReaderLease) }
             selectedReaderLease = lease; selectedSourceHome = openingHome; pendingReaderLease = nil; candidate = nil; fallbackEngine = nil
             receivedReaderRevision = publication.revision

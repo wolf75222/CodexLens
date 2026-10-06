@@ -118,18 +118,36 @@ Source: [activity views and native timeline](../Sources/CodexLens/ActivityView.s
 
 Entry point: **Activity → Charts**, in the shared activity view picker. This is another view of the session's recorded history, with the existing filters.
 
+Choose a metric, then **Per interval** or **Cumulative**. Select an interval in the chart or reveal the values table with its table icon. **View activity** opens that period in the existing chronology; toolbar **Back** returns to the chart's metric, counting mode and selected period. The graph does not open a separate analytics window.
+
 | Feature | Available behavior | Boundary |
 | --- | --- | --- |
-| Metrics | Events, tool calls, MCP calls, requested file changes, reported errors, recorded waits and identified compactions | Counts describe recorded items, not productivity or causal influence |
-| Per-interval and cumulative counts | Native Swift Charts bars or cumulative steps, with UTC-aligned intervals and local-time labels | Cumulative counts include the filtered, dated records only |
+| Shared activity scope | Session, agent, environment, event type, search and period filters also apply to Charts | Changing the metric does not change the session being inspected |
+| Metrics | Events, tool calls, MCP calls, requested file changes, reported errors, recorded waits and identified compactions | Counts describe recorded items, not productivity, time spent or causal influence |
+| Per-interval and cumulative counts | Native Swift Charts zero-based columns or cumulative steps, with UTC-aligned intervals and local-time labels | Cumulative counts include the filtered, dated records only; they are not context-token usage |
+| Call identities | Count a recorded invocation once; a mirrored result does not add another call | Identical call IDs from different agents are kept separate |
 | MCP classification | Count explicit qualified MCP tool names | A mention in a shell command or JavaScript source is not another captured call |
-| Requested file changes | A file counts per patch call and environment | Same relative paths in two worktrees stay distinct; a request does not prove application |
+| Requested file changes | A file target counts per logical patch call and environment | Same relative paths in two worktrees stay distinct; a request does not establish application |
+| Reported errors | Associate known failure records with their call when identifiers allow it | A completion failure uses its recorded end time; an unknown completion time is not replaced by the call start |
+| Waits and compactions | Count recorded waits and canonical compaction operations | No idle-time estimate, compression ratio or extra compaction for each mirrored representation |
 | Period inspection | Select a point or table row, then View activity; Back restores the chart state | The timeline opens the period's context, including overlapping recorded calls |
-| Values table | Resizable native table, shared selection, arrow-key chart selection and Return/double-click inspection | Physical VoiceOver and trackpad qualification are reported separately |
+| Values table | Show or hide a resizable native table of periods, interval counts and cumulative counts | It provides a textual alternative to the graph; scrolling qualification is detailed in the audit |
+| Keyboard navigation | Left/Right selects chart intervals; native table arrows change the shared selection; Return or a table-row double-click opens activity | These actions need focus in the chart or table; hardware trackpad and VoiceOver qualification are separate |
 | Bounded rendering | At most 240 plotted intervals; metadata aggregation runs in the presentation actor | Every associated source ID stays available; a bounded graph is not source truncation |
-| Missing data | Undated items are counted separately; coverage remains accessible | Empty intervals do not prove inactivity or complete observation |
+| Missing data and coverage | Undated items are counted separately; collection limits remain accessible below the chart | Empty intervals do not establish inactivity or complete observation |
+| Empty and updating states | No-dated-data guidance and a preparation indicator use the existing activity scope | An empty plot does not silently create timestamps for undated records |
 
-Source: [curve model](../Sources/LensCore/SessionTrends.swift), [native chart and table](../Sources/CodexLens/SessionTrendsView.swift), [presentation preparation](../Sources/LensCore/SessionPresentation.swift).
+The [curve audit](QA/SESSION_CURVES.md) distinguishes counting regressions, native-view checks and actual app-window inspection, including the remaining interaction limits.
+
+![Native cumulative MCP-call chart in light appearance with the selected interval visible in the values table](images/curves/selected-mcp-harmonized-light.jpg)
+
+*Choose the metric at the upper left and interval/cumulative mode at the upper right. The selected period and highlighted values row agree; the footer keeps undated items and collection limits visible. This is the final palette's frozen development-source capture, identified in the [capture notes](images/curves/README.md).*
+
+![The same cumulative MCP-call chart in dark appearance with violet filled controls and a pastel-violet selected row](images/curves/selected-mcp-harmonized-dark.jpg)
+
+*The dark view retains MCP calls, cumulative mode, the values panel and 14:01:03–14:01:04. Selected controls use the same violet family, and the active row adds an edge marker. This visual check is separate from the native navigation tests and Back-return replay; the [curve audit](QA/SESSION_CURVES.md) records their respective source identities and an isolated unexplained state change.*
+
+Source: [curve model](../Sources/LensCore/SessionTrends.swift), [native chart](../Sources/CodexLens/SessionTrendsView.swift), [values table](../Sources/CodexLens/SessionTrendValuesTable.swift), [presentation preparation](../Sources/LensCore/SessionPresentation.swift).
 
 ## Live following and previews
 

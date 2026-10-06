@@ -24,6 +24,8 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ### Fixed
 
+- Retire prepared activity and timeline data before switching to another source with the same session ID.
+- Restore the visible curve-table period after Back and preserve manual reading position when updates change interval resolution.
 - Restore the activity selection, list scroll anchor, timeline framing, filters and paused live state when returning from a reading tab.
 - Ignore temporary AppKit clip positions before timeline layout or while a saved position is waiting to be restored.
 - Preserve the timeline's time coordinate when viewport or scrollbar widths change while returning to a reader's originating view.

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CryptoKit
 import Darwin
 import Foundation
@@ -94,8 +95,15 @@ import SwiftUI
         try await waitFor(host, "native-curve-table") { valuesTable(in: host)?.numberOfRows == projection.buckets.count }
         try await settle(host)
         let selectedRow = projection.buckets.firstIndex { $0.id == bucket.id }!
+        try await waitFor(host, "native-initial-table-reveal") {
+            valuesTable(in: host).map { $0.selectedRow == selectedRow && $0.visibleRect.contains($0.rect(ofRow: selectedRow)) } ?? false
+        }
         observations.append(["scenario": "initial-table-selection", "expectedRow": selectedRow,
             "actualRow": valuesTable(in: host)?.selectedRow ?? -1, "selectedDate": store.trendSelectedDate?.ISO8601Format() ?? "none"])
+        if let table = valuesTable(in: host) {
+            observations.append(["scenario": "initial-table-viewport", "visibleRect": NSStringFromRect(table.visibleRect),
+                "rowRect": NSStringFromRect(table.rect(ofRow: selectedRow)), "documentBounds": NSStringFromRect(table.bounds)])
+        }
         check("chart-selection-is-shared-with-native-values-table", valuesTable(in: host)?.selectedRow == selectedRow)
         if let table = valuesTable(in: host), let scroll = table.enclosingScrollView {
             check("initial-chart-selection-is-revealed-in-values-table", table.visibleRect.contains(table.rect(ofRow: selectedRow)))
@@ -140,14 +148,28 @@ import SwiftUI
         check("back-restores-metric-cumulative-date-and-values-panel", store.activityMode == .trends && store.trendMetric == .mcpCalls
             && store.trendCumulative && store.trendSelectedDate == bucket.start && store.trendValuesVisible)
         check("back-restores-original-activity-filter-period", store.period == nil && store.agentFilter == fixture.rootID)
+        if let table = valuesTable(in: host) {
+            observations.append(["scenario": "back-table-viewport", "selectedRow": table.selectedRow,
+                "visibleRect": NSStringFromRect(table.visibleRect), "rowRect": NSStringFromRect(table.rect(ofRow: selectedRow)),
+                "documentBounds": NSStringFromRect(table.bounds)])
+        }
+        check("back-reveals-restored-selected-table-row", valuesTable(in: host).map {
+            $0.selectedRow == selectedRow && $0.visibleRect.contains($0.rect(ofRow: selectedRow))
+        } ?? false)
         guard let event = datedEvents.first(where: { $0.kind == .toolCall }) else { throw LensError.unavailable("MCP invocation unavailable") }
         store.navigate(.event(event.id), newTab: true); try await settle(host)
         check("event-reader-opens-without-replacing-curve-workspace", store.tabContentDestination == .event(event.id) && !store.workspacePresented)
         store.showWorkspace(); await store.waitForPresentation(); try await settle(host)
         check("workspace-return-restores-curve-selection", store.workspacePresented && store.activityMode == .trends
             && store.trendSelectedDate == bucket.start && store.trendMetric == .mcpCalls && store.trendValuesVisible)
+        check("reader-return-reveals-restored-selected-table-row", valuesTable(in: host).map {
+            $0.selectedRow == selectedRow && $0.visibleRect.contains($0.rect(ofRow: selectedRow))
+        } ?? false)
 
         stage = "in-memory-model-publication"
+        if let table = valuesTable(in: host), let scroll = table.enclosingScrollView {
+            scroll.contentView.scroll(to: .zero); scroll.reflectScrolledClipView(scroll.contentView)
+        }
         var appended = snapshot
         let modelID = "qa-curves-model-publication-only"
         appended.events.append(LensEvent(id: modelID, timestamp: bucket.start.addingTimeInterval(0.125), agentID: fixture.rootID,
@@ -158,13 +180,39 @@ import SwiftUI
         check("model-publication-preserves-reading-state", store.trendMetric == .mcpCalls && store.trendCumulative
             && store.trendSelectedDate == bucket.start && store.trendValuesVisible && store.activityMode == .trends)
         check("model-publication-retains-bounded-interval-storage", (store.presentation?.trends.buckets.count ?? 241) <= 240)
+        check("model-publication-preserves-manual-table-reading", valuesTable(in: host).map {
+            $0.rows(in: $0.visibleRect).location == 0 && $0.selectedRow == selectedRow
+        } ?? false)
+        let previousWidth = store.presentation?.trends.bucketWidth
+        appended.events.append(LensEvent(id: modelID + "-later", timestamp: bucket.end.addingTimeInterval(600), agentID: fixture.rootID,
+            kind: .toolCall, title: "Anonymous re-binning model publication", toolName: "mcp__lens_fixture__lookup", callID: modelID + "-later",
+            source: SourceRef(path: output.appendingPathComponent("in-memory-metadata-no-journal").path)))
+        store.snapshot = appended; await store.waitForPresentation(); try await settle(host)
+        check("rebinning-preserves-manual-reading-and-selected-date", store.presentation?.trends.bucketWidth != previousWidth
+            && store.trendSelectedDate == bucket.start && valuesTable(in: host).map {
+                $0.rows(in: $0.visibleRect).location == 0 && $0.selectedRow > 0
+            } == true)
         observations.append(["scenario": "model-publication", "syntheticEventID": modelID,
             "collectorsLiveIngestionQualified": false, "journalsAppendedWhileObserved": false])
 
         stage = "source-and-root-isolation"
         store.inspectTrendPeriod(bucket, rootID: fixture.rootID, sourceHome: home, openingID: UUID())
         check("foreign-opening-period-command-is-rejected", store.activityMode == .trends && store.period == nil)
-        await store.useSessionSource(fixture.alternateHome); await store.open(fixture.rootID); await store.waitForPresentation()
+        await store.useSessionSource(fixture.alternateHome)
+        var observedSourceTransition = false, previousProjectionRetired = false, transitionCommandRejected = false
+        let sourceTransition = store.$snapshot.dropFirst().sink { next in
+            guard next?.root.id == fixture.rootID, store.observedSourceHome == fixture.alternateHome.standardizedFileURL else { return }
+            // @Published emits before snapshot.didSet. Inspect the exact reader
+            // transition, before the async replacement projection can publish.
+            observedSourceTransition = true
+            previousProjectionRetired = store.presentation == nil && store.timelineProjection == nil
+            store.inspectTrendPeriod(bucket, rootID: fixture.rootID,
+                sourceHome: store.observedSourceHome, openingID: store.openingIdentity)
+            transitionCommandRejected = store.activityMode == .trends && store.period == nil
+        }
+        await store.open(fixture.rootID); sourceTransition.cancel(); await store.waitForPresentation()
+        check("same-root-reader-transition-retires-old-projections", observedSourceTransition && previousProjectionRetired)
+        check("old-bucket-cannot-dispatch-during-source-transition", observedSourceTransition && transitionCommandRejected)
         store.showSessionPicker = false; store.browseSection(.activity); store.activityMode = .trends
         observations.append(["scenario": "same-thread-new-source", "actualHome": store.observedSourceHome.path,
             "expectedHome": fixture.alternateHome.standardizedFileURL.path, "date": store.trendSelectedDate?.ISO8601Format() ?? "none",

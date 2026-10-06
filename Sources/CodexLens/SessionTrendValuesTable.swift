@@ -32,6 +32,7 @@ struct SessionTrendValuesTable: NSViewRepresentable {
         table.target = coordinator; table.doubleAction = #selector(Coordinator.openSelection(_:))
         table.onReturn = { [weak coordinator] in coordinator?.openSelection(nil) }
         table.makeMenu = { [weak coordinator] row in coordinator?.menu(for: row) }
+        table.onLayout = { [weak coordinator] in coordinator?.applySelection() }
         scroll.onLayout = { [weak coordinator] in coordinator?.applySelection() }
         coordinator.table = table; coordinator.scroll = scroll
         return scroll
@@ -40,7 +41,7 @@ struct SessionTrendValuesTable: NSViewRepresentable {
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
         (scroll as? TrendValuesScrollView)?.onLayout = nil
         coordinator.table?.delegate = nil; coordinator.table?.dataSource = nil
-        coordinator.table?.onReturn = nil; coordinator.table?.makeMenu = nil
+        coordinator.table?.onReturn = nil; coordinator.table?.makeMenu = nil; coordinator.table?.onLayout = nil
         coordinator.parent = nil; coordinator.menuActions = []
     }
 
@@ -50,13 +51,24 @@ struct SessionTrendValuesTable: NSViewRepresentable {
         var parent: SessionTrendValuesTable?
         var menuActions: [TrendValuesMenuAction] = []
         private var isUpdating = false
+        private var applyingSelection = false
         private var selectedID: String?
+        private var selectedDateValue: Date?
         private var pendingSelection = false
         private var pendingReveal = false
+        private struct ViewportAnchor {
+            let bucketID: String
+            let date: Date
+            let offset: CGFloat
+            let horizontal: CGFloat
+        }
+        private var pendingViewport: ViewportAnchor?
         private var dataSignature: [String] = []
         private var metric: SessionTrendMetric?
+        private var rowAccent: LensControlAccent?
 
         func configure(_ parent: SessionTrendValuesTable) {
+            let previous = self.parent
             self.parent = parent
             guard let table else { return }
             isUpdating = true; defer { isUpdating = false }
@@ -65,17 +77,44 @@ struct SessionTrendValuesTable: NSViewRepresentable {
             }
             let signature = parent.buckets.map { "\($0.id):\($0.count(for: parent.metric)):\($0.cumulativeCount(for: parent.metric))" }
             if dataSignature != signature || metric != parent.metric {
-                let origin = scroll?.contentView.bounds.origin
+                // A filter restoration can move the same bucket from row zero
+                // to a later row. Preserve the visible bucket, not its old pixel
+                // offset; leave a deliberately scrolled selection alone.
+                if pendingViewport == nil, let previous, table.visibleRect.height > 1 {
+                    let first = table.rows(in: table.visibleRect).location
+                    if previous.buckets.indices.contains(first) {
+                        pendingViewport = ViewportAnchor(bucketID: previous.buckets[first].id, date: previous.buckets[first].start,
+                            offset: table.visibleRect.minY - table.rect(ofRow: first).minY,
+                            horizontal: scroll?.contentView.bounds.minX ?? 0)
+                    }
+                }
                 dataSignature = signature; metric = parent.metric; table.reloadData()
-                if let origin, let scroll { scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView) }
                 pendingSelection = true
             }
             let id = parent.selectedDate.flatMap { date in parent.buckets.first { $0.start <= date && date < $0.end }?.id }
-            if selectedID != id { selectedID = id; pendingSelection = true; pendingReveal = true }
+            let dateChanged = selectedDateValue != parent.selectedDate
+            if selectedID != id || dateChanged { selectedID = id; pendingSelection = true }
+            // Re-binning can change an ID while the person's selection is
+            // unchanged. Only an explicit date change requests a new reveal.
+            if dateChanged { pendingReveal = id != nil }
+            selectedDateValue = parent.selectedDate
+            let accent = LensControlAccent.current
+            if rowAccent != accent {
+                rowAccent = accent
+                for row in 0..<table.numberOfRows {
+                    (table.rowView(atRow: row, makeIfNecessary: false) as? LensTableSelectionRowView)?.accent = accent
+                }
+            }
             table.setAccessibilityLabel(LensL10n.text("Valeurs de la courbe"))
             applySelection()
         }
         func numberOfRows(in tableView: NSTableView) -> Int { parent?.buckets.count ?? 0 }
+        func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+            let id = NSUserInterfaceItemIdentifier("lens-trends-row")
+            let view = tableView.makeView(withIdentifier: id, owner: self) as? LensTableSelectionRowView ?? LensTableSelectionRowView()
+            view.identifier = id; view.accent = LensControlAccent.current
+            return view
+        }
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             guard let parent, parent.buckets.indices.contains(row), let column = tableColumn else { return nil }
             let bucket = parent.buckets[row], id = column.identifier
@@ -96,16 +135,43 @@ struct SessionTrendValuesTable: NSViewRepresentable {
             guard !isUpdating, let table, let parent else { return }
             let row = table.selectedRow
             selectedID = parent.buckets.indices.contains(row) ? parent.buckets[row].id : nil
-            parent.selectedDate = parent.buckets.indices.contains(row) ? parent.buckets[row].start : nil
+            selectedDateValue = parent.buckets.indices.contains(row) ? parent.buckets[row].start : nil
+            parent.selectedDate = selectedDateValue
         }
         func applySelection() {
-            guard pendingSelection, let table, let parent, let scroll,
+            guard !applyingSelection, pendingSelection, let table, let parent, let scroll,
                   scroll.contentSize.width > 1, scroll.contentSize.height > 1,
                   table.numberOfRows == parent.buckets.count else { return }
+            if !parent.buckets.isEmpty {
+                let last = table.rect(ofRow: parent.buckets.count - 1)
+                guard last.height > 0, table.bounds.maxY >= last.maxY else { return }
+            }
+            applyingSelection = true; defer { applyingSelection = false }
             let updating = isUpdating; isUpdating = true; defer { isUpdating = updating }
+            if let anchor = pendingViewport {
+                if let row = parent.buckets.firstIndex(where: { $0.id == anchor.bucketID })
+                    ?? parent.buckets.firstIndex(where: { $0.start <= anchor.date && anchor.date < $0.end }) {
+                    let rowRect = table.rect(ofRow: row)
+                    var target = scroll.contentView.bounds
+                    target.origin = NSPoint(x: anchor.horizontal, y: max(0, rowRect.minY + anchor.offset))
+                    let legal = scroll.contentView.constrainBoundsRect(target).origin
+                    scroll.contentView.scroll(to: legal)
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    guard abs(scroll.contentView.bounds.minY - legal.y) <= 1 else { return }
+                }
+                pendingViewport = nil
+            }
             if let id = selectedID, let row = parent.buckets.firstIndex(where: { $0.id == id }) {
+                // A remounted table can know its row count before its document
+                // has its full height. Scrolling at that point clamps to zero.
+                // Keep the reveal pending until the row can actually be reached.
+                let rowRect = table.rect(ofRow: row)
+                guard rowRect.height > 0, table.bounds.maxY >= rowRect.maxY else { return }
                 table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
                 if pendingReveal { table.scrollRowToVisible(row) }
+                let visible = table.visibleRect
+                if pendingReveal, visible.height >= rowRect.height,
+                   visible.minY > rowRect.minY || visible.maxY < rowRect.maxY { return }
             } else { table.deselectAll(nil) }
             pendingSelection = false; pendingReveal = false
         }
@@ -132,6 +198,8 @@ struct SessionTrendValuesTable: NSViewRepresentable {
 @MainActor final class TrendValuesNSTableView: NSTableView {
     var onReturn: (() -> Void)?
     var makeMenu: ((Int) -> NSMenu?)?
+    var onLayout: (() -> Void)?
+    override func layout() { super.layout(); onLayout?() }
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 36 || event.keyCode == 76 { onReturn?() }
         else { super.keyDown(with: event) }

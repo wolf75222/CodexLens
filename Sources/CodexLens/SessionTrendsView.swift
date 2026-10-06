@@ -126,7 +126,7 @@ private struct SessionTrendContent: View {
             Text(LensL10n.text("Par intervalle")).tag(false)
             Text(LensL10n.text("Cumul")).tag(true)
         }
-        .pickerStyle(.segmented).labelsHidden().fixedSize()
+        .pickerStyle(.segmented).labelsHidden().fixedSize().lensFilledControlAccent()
         .accessibilityLabel(LensL10n.text("Comptage par intervalle ou cumul"))
         .accessibilityIdentifier("lens-trends-counting")
         .help(LensL10n.text("Le cumul porte sur les données filtrées et datées, pas sur toute la session."))
