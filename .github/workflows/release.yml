@@ -11,8 +11,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-tag:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check version and main ancestry
+        run: |
+          python3 scripts/release_notes.py check --tag "$GITHUB_REF_NAME"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "Release tags must identify a commit on main."
+            exit 1
+          fi
   verify:
     name: Verify release
+    needs: validate-tag
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read

@@ -51,9 +51,9 @@ __pycache__/
 !/scripts/package_release.py
 !/scripts/validate-release.py
 !/scripts/check-repository.py
+!/scripts/release_notes.py
 !/scripts/render-docs.sh
 
 # OS/user-specific project state
 *.xcuserstate
 xcuserdata/
-

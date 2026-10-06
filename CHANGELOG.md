@@ -1,38 +1,70 @@
 # Changelog
 
-This file summarizes published changes. A feature being listed does not imply qualification on every macOS release, Codex version, or data format.
+Notable changes to Codex Lens, organized by release. Dates use UTC. This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the app version uses `major.minor.patch`, with a separate increasing build number. Before 1.0, minor releases may change compatibility.
 
-## 0.41.0
+Compatibility and test coverage are documented in each release's notes. A listed feature does not imply qualification on every macOS release or Codex version.
 
-- Set up the public GitHub project with English installation, usage, architecture, contribution, and security documentation.
-- Add repository CI and release packaging, including a drag-to-Applications disk image and checksums.
-- Publish anonymized interface screenshots instead of personal development logs.
+## [Unreleased]
 
-## 0.40.6
+### Added
+
+- Preview-first release preparation that updates the app version, build number, changelog and release notes together without creating a tag or publishing.
+- CI checks for release metadata consistency, changelog structure and version/tag mismatches.
+- Release-tag validation that rejects commits outside the main branch before building or publishing.
+
+### Changed
+
+- Separate public releases from private development history, and add dates and comparison links.
+- Document the contribution and release workflow, including change categories and GitHub labels.
+
+## [0.41.0] - 2026-10-05
+
+First public community release.
+
+### Added
+
+- Native macOS session inspection: activity, agents, calls, environments, resources, recorded changes and isolated investigation chat.
+- English installation, usage, architecture, contribution and security documentation with anonymous interface screenshots.
+- CI and verified release packaging: a drag-to-Applications disk image, app ZIP, matching symbols, checksums and source metadata.
+
+### Fixed
+
+- Coalesce pending local Codex connections instead of launching duplicate subprocesses.
+- Prevent delayed connection launches from surviving shutdown or publishing stale account state.
+- Preserve a noncancelled connection waiter when another waiter is cancelled, while allowing shutdown to close the owned process.
+
+## Pre-public development
+
+These versions were local deliveries, not published GitHub releases. Their dates and full private validation receipts are not included here.
+
+### 0.40.6
 
 - Simplify first-use onboarding to one primary action per step.
 - Remove repeated actions and labels from the session picker and empty state.
 
-## 0.40.5
+### 0.40.5
 
 - Thicken the app icon's magnifier, widen its handle, and smooth the join.
 - Update both appearance variants while keeping the dark icon as the default.
 
-## 0.40.4
+### 0.40.4
 
 - Automatically check the installed Codex and its existing ChatGPT connection when opening the chat or AI settings.
 - Distinguish a local process error from a signed-out account and show the appropriate retry or connection state.
 
-## 0.40.3
+### 0.40.3
 
 - Remove repeated transmission notices from the chat composer while retaining the explanation in AI settings.
 
-## 0.40.2
+### 0.40.2
 
 - Accept `codex://threads/<thread-id>` links in the session picker.
 - Make the observed source directory visible and offer a route back to personal Codex sessions.
 - Preserve the current session while a new opening is pending or fails.
 
-## Earlier development
+### Earlier work
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
+
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.41.0...main
+[0.41.0]: https://github.com/wolf75222/CodexLens/releases/tag/v0.41.0

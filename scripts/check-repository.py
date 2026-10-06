@@ -3,9 +3,10 @@
 from pathlib import Path
 import ast
 import json
-import plistlib
+import os
 import re
 import subprocess
+from release_notes import validate_repository
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -36,12 +37,12 @@ def main():
             for action in re.findall(r"uses:\s*([^\s#]+)", path.read_text()):
                 if not action.startswith("./") and not re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", action):
                     errors.append(str(relative) + ": action is not pinned to a full SHA")
-    info = plistlib.loads((ROOT / "Support/Info.plist").read_bytes())
-    version = info["CFBundleShortVersionString"]
-    if not re.fullmatch(r"\d+\.\d+\.\d+", version) or "LSEnvironment" in info:
-        errors.append("Support/Info.plist: invalid release version or QA environment")
-    if not (ROOT / f"docs/releases/{version}.md").is_file():
-        errors.append("Missing release notes for " + version)
+    try:
+        tag = os.environ.get("GITHUB_REF_NAME") if os.environ.get("GITHUB_REF_TYPE") == "tag" else None
+        info, _ = validate_repository(ROOT, tag)
+        version = info["CFBundleShortVersionString"]
+    except (ValueError, KeyError, OSError) as error:
+        errors.append(str(error))
     if errors:
         raise SystemExit("\n".join(errors))
     print(f"Public repository checks passed: {len(files)} files, version {version}.")

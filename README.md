@@ -77,6 +77,7 @@ CI runs the repository's build and test scripts. Release workflows and their exa
 - [Contributing](CONTRIBUTING.md): local validation and review expectations.
 - [Security](SECURITY.md): privacy boundaries and reporting sensitive issues.
 - [Changelog](CHANGELOG.md): release changes.
+- [Release maintenance](docs/RELEASING.md): changelog entries, version preparation, checks and publication.
 
 Codex Lens is an independent project and is not an official OpenAI app. Product names and visual references do not imply endorsement.
 

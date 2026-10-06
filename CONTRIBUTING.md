@@ -42,6 +42,10 @@ For performance work, record the scenario, source size, build configuration, too
 
 Describe the user-visible problem, resulting behavior, validation performed, and remaining limits. Include anonymized screenshots when they help explain a layout or interaction change. Keep changes bounded; separate unrelated features.
 
+Record notable changes under **Unreleased** in [CHANGELOG.md](CHANGELOG.md), using Added, Changed, Deprecated, Removed, Fixed or Security. Leave out empty categories and routine internal cleanup. For a security fix, coordinate disclosure before describing sensitive details publicly. Keep app version bumps for a reviewed release-preparation change; see [Release maintenance](docs/RELEASING.md).
+
+Use labels to make issues and PRs easier to find: `bug`, `enhancement`, `documentation`, `accessibility`, `ci` or `dependencies`, as appropriate. `skip-changelog` excludes routine work from GitHub-generated notes; it does not skip CI or replace the changelog policy. Dependency update PRs follow the same validation and review rules as other changes.
+
 Never commit personal Codex journals, credentials, account details, raw investigations, absolute developer-home paths, or screenshots of real conversations. Redaction is not a substitute for inspecting what is published.
 
 Use your own Git identity. The project does not require an AI co-author trailer.
