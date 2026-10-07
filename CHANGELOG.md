@@ -6,6 +6,8 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+## [0.42.4] - 2026-10-07
+
 ### Changed
 
 - Switch content-area loading indicators to a slim native indeterminate bar after 1.5 seconds. Keep cancellation available and the sheet surface unchanged; Reduce Motion stops the bar animation. No elapsed-time percentage is presented as measured progress.
@@ -128,7 +130,8 @@ These versions were local deliveries, not published GitHub releases. Their dates
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
 
-[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.3...main
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.4...main
+[0.42.4]: https://github.com/wolf75222/CodexLens/compare/v0.42.3...v0.42.4
 [0.42.3]: https://github.com/wolf75222/CodexLens/compare/v0.42.2...v0.42.3
 [0.42.2]: https://github.com/wolf75222/CodexLens/compare/v0.42.1...v0.42.2
 [0.42.1]: https://github.com/wolf75222/CodexLens/compare/v0.42.0...v0.42.1
