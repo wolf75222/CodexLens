@@ -10,6 +10,9 @@ import LensCore
 /// Native layout regression and a visible fixture using the product views.
 /// No Codex process, model request, real journal or global preference is used.
 @main struct LoadingV42Main {
+    @MainActor private static var diagnosticOutput: URL?
+    @MainActor private static weak var diagnosticWindow: NSWindow?
+    @MainActor private static var stage = "setup"
     @MainActor static func main() {
         NSApplication.shared.setActivationPolicy(CommandLine.arguments.contains("--linger") ? .accessory : .prohibited)
         if !CommandLine.arguments.contains("--linger") {
@@ -45,6 +48,7 @@ import LensCore
               Bundle.main.object(forInfoDictionaryKey: "CFBundleExecutable") as? String == "NativeDesignV07Probe" else {
             throw LensError.unavailable("Source-matched disposable wrapper required; refusing production preferences")
         }
+        diagnosticOutput = output
         UserDefaults.standard.setVolatileDomain(["lens.language": "fr", "lensReduceMotionOverride": false,
             "lensRootByWindow": [String: String](), "lensTabsByRoot": [String: Data](), "lensChatByRoot": [String: String]()], forName: UserDefaults.argumentDomain)
         LensL10n.language = .fr
@@ -59,15 +63,22 @@ import LensCore
         var completed = false
         defer { if !completed {
             try? JSONSerialization.data(withJSONObject: ["checks": checks, "observations": observations, "renders": renders,
-                "completed": false, "allExecutedChecksPassed": false], options: [.prettyPrinted, .sortedKeys])
+                "completed": false, "failedStage": stage, "allExecutedChecksPassed": false], options: [.prettyPrinted, .sortedKeys])
                 .write(to: output.appendingPathComponent("native-design-v07-receipt.json"))
         } }
-        func check(_ id: String, _ passed: Bool) { checks.append(["id": id, "name": id, "passed": passed]) }
+        func check(_ id: String, _ passed: Bool) {
+            checks.append(["id": id, "name": id, "passed": passed])
+            if !passed, let window = diagnosticWindow { saveAXDiagnostics(window, name: id, reason: "Decisive assertion failed") }
+        }
         let window = NSWindow(contentRect: NSRect(x: -12_000, y: -12_000, width: 740, height: 540), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.setAccessibilityIdentifier("LoadingV42-owned-" + UUID().uuidString)
+        diagnosticWindow = window
         defer { if !CommandLine.arguments.contains("--linger") { window.orderOut(nil); window.contentView = nil; window.close() } }
         window.title = "Codex Lens — chargement (données de test)"
+        window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 740, height: 540))
+        window.orderBack(nil)
+        _ = try await waitForOwnAX(window, name: "owned-window-registered") { !$0.isEmpty }
         for dark in [false, true] {
             for width in [620.0, 1040.0] {
                 store.busy = true
@@ -118,10 +129,13 @@ import LensCore
             let rect = bar.convert(bar.bounds, to: host), id = "long-bar-\(dark ? "dark" : "light")-\(Int(width))"
             check(id + "-thin-bounded-centred", abs(rect.midX - host.bounds.midX) <= 2 && rect.width > 0 && rect.width <= 240.5 && abs(rect.height - 12) <= 0.5)
             check(id + "-native-indeterminate-animation-configured", bar.style == .bar && bar.isIndeterminate && bar.isDisplayedWhenStopped && bar.animationEnabled)
-            let nodes = ownNodes(window)
-            check(id + "-accessible-title-and-in-progress-value", nodes.contains { attribute($0, kAXIdentifierAttribute) as? String == "lens-progress-long-running"
-                && attribute($0, kAXDescriptionAttribute) as? String == "Chargement prolongé de test"
-                && attribute($0, kAXValueAttribute) as? String == "En cours" })
+            let accessibleBar: ([AXUIElement]) -> Bool = { nodes in nodes.contains {
+                attribute($0, kAXIdentifierAttribute) as? String == "lens-progress-long-running"
+                    && attribute($0, kAXDescriptionAttribute) as? String == "Chargement prolongé de test"
+                    && attribute($0, kAXValueAttribute) as? String == "En cours"
+            } }
+            let nodes = try await waitForOwnAX(window, name: id + "-accessible-title-and-in-progress-value", accessibleBar)
+            check(id + "-accessible-title-and-in-progress-value", accessibleBar(nodes))
             observations.append(["id": id, "barFrame": NSStringFromRect(rect), "contentBounds": NSStringFromRect(host.bounds),
                 "style": "NSProgressIndicator.bar", "indeterminate": bar.isIndeterminate, "animationEnabled": bar.animationEnabled])
             renders.append(try capture(host, name: id, output: output))
@@ -138,14 +152,14 @@ import LensCore
         await settle(transition)
         check("controlled-delay-starts-with-spinner", descendants(transition).contains { ($0 as? NSProgressIndicator)?.style == .spinning }
             && !descendants(transition).contains { $0 is LensLoadingBarIndicator })
-        let titleBefore = try frame(window, label: state.title, role: kAXStaticTextRole)
-        let cancelBefore = try frame(window, label: state.cancelTitle, role: kAXButtonRole)
+        let titleBefore = try await frame(window, label: state.title, role: kAXStaticTextRole)
+        let cancelBefore = try await frame(window, label: state.cancelTitle, role: kAXButtonRole)
         renders.append(try capture(transition, name: "controlled-early-spinner", output: output))
         try await wait("controlled-delayed-bar") { descendants(transition).contains { $0 is LensLoadingBarIndicator } }
         await settle(transition)
         let stableBar = try require(descendants(transition).compactMap { $0 as? LensLoadingBarIndicator }.first, "transition bar")
-        let titleAfter = try frame(window, label: state.title, role: kAXStaticTextRole)
-        let cancelAfter = try frame(window, label: state.cancelTitle, role: kAXButtonRole)
+        let titleAfter = try await frame(window, label: state.title, role: kAXStaticTextRole)
+        let cancelAfter = try await frame(window, label: state.cancelTitle, role: kAXButtonRole)
         check("delayed-transition-keeps-title-and-cancel-positions", sameFrame(titleBefore, titleAfter) && sameFrame(cancelBefore, cancelAfter))
         observations.append(["id": "controlled-delayed-transition", "titleBefore": NSStringFromRect(titleBefore), "titleAfter": NSStringFromRect(titleAfter),
             "cancelBefore": NSStringFromRect(cancelBefore), "cancelAfter": NSStringFromRect(cancelAfter), "delay": "1 second controlled fixture"])
@@ -166,7 +180,7 @@ import LensCore
         }
         check("same-title-new-operation-starts-early-without-old-bar", descendants(transition).contains { ($0 as? NSProgressIndicator)?.style == .spinning } && !stableBar.animationEnabled)
         try await wait("new-operation-delayed-bar") { descendants(transition).contains { $0 is LensLoadingBarIndicator } }
-        try press(window, label: state.cancelTitle)
+        try await press(window, label: state.cancelTitle)
         try await wait("accessible-cancel-hides-loader") { state.cancelCount == 1 && !state.visible && !descendants(transition).contains { $0 is NSProgressIndicator } }
         check("long-loading-accessible-cancel-dispatches-once", state.cancelCount == 1 && !state.visible)
 
@@ -221,11 +235,17 @@ import LensCore
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }; return value
     }
-    @MainActor private static func ownNodes(_ window: NSWindow) -> [AXUIElement] {
+    @MainActor private static func ownAXSnapshot(_ window: NSWindow) -> (nodes: [AXUIElement], diagnostics: [String]) {
         let application = AXUIElementCreateApplication(getpid()); AXUIElementSetMessagingTimeout(application, 0.5)
-        let peers = attribute(application, kAXWindowsAttribute) as? [AXUIElement] ?? []
+        var rawWindows: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &rawWindows)
+        guard error == .success, let peers = rawWindows as? [AXUIElement] else {
+            return ([], ["Own-process AXWindows unavailable: \(error.rawValue)"])
+        }
         let windows = peers.filter { attribute($0, kAXIdentifierAttribute) as? String == window.accessibilityIdentifier() }
-        guard windows.count == 1, let own = windows.first else { return [] }
+        guard windows.count == 1, let own = windows.first else {
+            return ([], ["Expected one identified own window; found \(windows.count), own-process windows: \(peers.count)"])
+        }
         var nodes: [AXUIElement] = [], seen: [CFHashCode: [AXUIElement]] = [:]
         func visit(_ element: AXUIElement, depth: Int) {
             guard depth < 40, nodes.count < 5000 else { return }
@@ -234,30 +254,77 @@ import LensCore
             seen[hash, default: []].append(element); nodes.append(element)
             for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] { visit(child, depth: depth + 1) }
         }
-        visit(own, depth: 0); return nodes
+        visit(own, depth: 0)
+        return (nodes, ["Own-process public AX nodes visited: \(nodes.count)"])
     }
-    @MainActor private static func matching(_ window: NSWindow, label: String, role: String) -> [AXUIElement] {
-        ownNodes(window).filter { element in
+    @MainActor private static func waitForOwnAX(_ window: NSWindow, name: String, _ predicate: ([AXUIElement]) -> Bool) async throws -> [AXUIElement] {
+        stage = name
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while true {
+            let snapshot = ownAXSnapshot(window)
+            if predicate(snapshot.nodes) { return snapshot.nodes }
+            guard ContinuousClock.now < deadline else {
+                saveAXDiagnostics(window, name: name, reason: "Own-window AX did not publish required exact nodes within the bound")
+                throw LensError.unavailable("Bounded owned AX did not reach " + name)
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+    @MainActor private static func saveAXDiagnostics(_ window: NSWindow, name: String, reason: String) {
+        guard let output = diagnosticOutput else { return }
+        let snapshot = ownAXSnapshot(window)
+        let nodes = snapshot.nodes.map { node -> [String: String] in
+            var values: [String: String] = [:]
+            for key in [kAXRoleAttribute, kAXIdentifierAttribute, kAXDescriptionAttribute, kAXTitleAttribute, kAXValueAttribute] {
+                if let value = attribute(node, key) as? String { values[key] = value }
+                else if let number = attribute(node, key) as? NSNumber { values[key] = number.stringValue }
+            }
+            return values
+        }
+        var native: [[String: Any]] = []
+        if let host = window.contentView {
+            for indicator in descendants(host).compactMap({ $0 as? NSProgressIndicator }) {
+                native.append(["class": String(describing: type(of: indicator)), "frame": NSStringFromRect(indicator.convert(indicator.bounds, to: host)),
+                    "style": indicator.style == .bar ? "bar" : "spinning", "indeterminate": indicator.isIndeterminate,
+                    "animationEnabled": (indicator as? LensLoadingBarIndicator).map { $0.animationEnabled as Any } ?? NSNull()])
+            }
+            _ = try? capture(host, name: "failure-" + name, output: output)
+        }
+        let value: [String: Any] = ["stage": name, "reason": reason, "pid": getpid(),
+            "bundleIdentifier": Bundle.main.bundleIdentifier ?? "unavailable", "windowIdentifier": window.accessibilityIdentifier() ?? "unavailable",
+            "windowNumber": window.windowNumber, "windowVisible": window.isVisible, "windowFrame": NSStringFromRect(window.frame),
+            "accessibilityDiagnostics": snapshot.diagnostics, "accessibilityNodes": nodes, "nativeIndicators": native,
+            "scope": "Only this exact disposable process/window; no screen/input, unlock, permissions request or production app inspection. PNG is offscreen cache only."]
+        try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys])
+            .write(to: output.appendingPathComponent("failure-" + name + "-AX.json"))
+    }
+    @MainActor private static func matching(_ nodes: [AXUIElement], label: String, role: String) -> [AXUIElement] {
+        nodes.filter { element in
             attribute(element, kAXRoleAttribute) as? String == role
                 && [kAXDescriptionAttribute, kAXTitleAttribute, kAXValueAttribute].compactMap { attribute(element, $0) as? String }.contains(label)
         }
     }
-    @MainActor private static func frame(_ window: NSWindow, label: String, role: String) throws -> NSRect {
-        let nodes = matching(window, label: label, role: role)
+    @MainActor private static func frame(_ window: NSWindow, label: String, role: String) async throws -> NSRect {
+        let current = try await waitForOwnAX(window, name: "frame-" + role + "-" + label) { matching($0, label: label, role: role).count == 1 }
+        let nodes = matching(current, label: label, role: role)
         guard nodes.count == 1, let node = nodes.first,
               let position = attribute(node, kAXPositionAttribute), CFGetTypeID(position) == AXValueGetTypeID(),
               let size = attribute(node, kAXSizeAttribute), CFGetTypeID(size) == AXValueGetTypeID() else {
+            saveAXDiagnostics(window, name: stage, reason: "Unique owned AX frame unavailable for " + label)
             throw LensError.unavailable("Unique owned AX frame unavailable for " + label)
         }
         var point = CGPoint.zero, dimensions = CGSize.zero
         guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &dimensions) else {
+            saveAXDiagnostics(window, name: stage, reason: "Invalid owned AX frame for " + label)
             throw LensError.unavailable("Invalid owned AX frame for " + label)
         }
         return NSRect(origin: point, size: dimensions)
     }
-    @MainActor private static func press(_ window: NSWindow, label: String) throws {
-        let nodes = matching(window, label: label, role: kAXButtonRole)
+    @MainActor private static func press(_ window: NSWindow, label: String) async throws {
+        let current = try await waitForOwnAX(window, name: "press-" + label) { matching($0, label: label, role: kAXButtonRole).count == 1 }
+        let nodes = matching(current, label: label, role: kAXButtonRole)
         guard nodes.count == 1, let node = nodes.first, AXUIElementPerformAction(node, kAXPressAction as CFString) == .success else {
+            saveAXDiagnostics(window, name: stage, reason: "Owned accessible cancellation unavailable")
             throw LensError.unavailable("Owned accessible cancellation unavailable")
         }
     }
