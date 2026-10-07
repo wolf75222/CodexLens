@@ -333,10 +333,12 @@ struct LensCommands: Commands {
         CommandGroup(replacing: .help) {
             Button(LensL10n.text("Aide Codex Lens")) { LensGuideCoordinator.shared.showHelp(); openSettings() }
             Button(LensL10n.text("Revoir les premiers pas")) { LensGuideCoordinator.shared.showHelp(replay: true); openSettings() }
+            #if DEBUG
             Divider()
             Menu(LensL10n.text("Développement")) {
                 Button(LensL10n.text("Galerie des composants")) { openWindow(id: "components") }
             }
+            #endif
         }
     }
     private func command(_ action: LensAction) -> some View {

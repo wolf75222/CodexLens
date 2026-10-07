@@ -11,6 +11,7 @@ Compatibility and test coverage are documented in each release's notes. A listed
 ### Changed
 
 - Show one aggregate history progress bar across all known session journals, weighted by their byte sizes. Keep the current file counter below it, move its name to a tooltip, and show the opening stage out of four. New descendants and growing journals update the measured totals; missing bounds remain indeterminate.
+- Keep the component fixture gallery and its Development menu in Debug builds only. Release packaging and installer validation reject test names as well as QA bundle identifiers and environment overrides.
 
 ## [0.42.8] - 2026-10-07
 

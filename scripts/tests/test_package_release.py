@@ -37,6 +37,7 @@ class ReleaseBoundaryTests(unittest.TestCase):
         self.app = self.root / "Codex Lens.app"
         (self.app / "Contents").mkdir(parents=True)
         self.info = {"CFBundleIdentifier": "fr.codexlens.inspector", "CFBundleExecutable": "CodexLens",
+                     "CFBundleName": "Codex Lens", "CFBundleDisplayName": "Codex Lens",
                      "CFBundleShortVersionString": "0.41.0", "CFBundleVersion": "75"}
         self.save()
 
@@ -50,6 +51,23 @@ class ReleaseBoundaryTests(unittest.TestCase):
         self.info["LSEnvironment"] = {"LENS_CODEX_HOME": "/anonymous/fixture"}
         self.save()
         with self.assertRaisesRegex(ValueError, "QA"):
+            package.read_bundle(self.app)
+
+    def test_test_name_is_rejected_by_packaging_and_installer_validation(self):
+        for key in ("CFBundleName", "CFBundleDisplayName"):
+            with self.subTest(key=key):
+                self.info[key] = "Codex Lens (test)"
+                self.save()
+                with self.assertRaisesRegex(ValueError, "application name"):
+                    package.read_bundle(self.app)
+                with self.assertRaisesRegex(ValueError, "application name"):
+                    validator.bundle_checks(self.app, {})
+                self.info[key] = "Codex Lens"
+
+    def test_missing_production_name_is_rejected(self):
+        del self.info["CFBundleDisplayName"]
+        self.save()
+        with self.assertRaisesRegex(ValueError, "application name"):
             package.read_bundle(self.app)
 
     def test_symbolic_link_cannot_impersonate_a_bundle(self):

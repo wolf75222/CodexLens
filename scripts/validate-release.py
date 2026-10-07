@@ -14,6 +14,7 @@ import tempfile
 import zipfile
 
 from sparkle_bundle import validate_embedded
+from package_release import validate_production_identity
 
 
 def run(args: list[str]) -> bytes:
@@ -54,8 +55,7 @@ def checksum_files(directory: Path) -> None:
 
 def bundle_checks(app: Path, metadata: dict) -> dict:
     info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
-    if info.get("CFBundleIdentifier") != "fr.codexlens.inspector" or "LSEnvironment" in info:
-        raise ValueError("Release contains QA configuration.")
+    validate_production_identity(info)
     if info.get("CFBundleShortVersionString") != metadata["version"] or info.get("CFBundleVersion") != metadata["build"]:
         raise ValueError("Bundle version differs from release metadata.")
     if info.get("LSMinimumSystemVersion") != metadata["minimumMacOS"]:
