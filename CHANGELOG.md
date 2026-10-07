@@ -6,6 +6,12 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+## [0.42.7] - 2026-10-07
+
+### Fixed
+
+- Align event rows using one timestamp column for dated and undated entries. Wrap the missing-timestamp label within that column, retaining full localized dates, 12-hour clock suffixes and enlarged text.
+
 ## [0.42.6] - 2026-10-07
 
 ### Changed
@@ -142,7 +148,8 @@ These versions were local deliveries, not published GitHub releases. Their dates
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
 
-[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.6...main
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.7...main
+[0.42.7]: https://github.com/wolf75222/CodexLens/compare/v0.42.6...v0.42.7
 [0.42.6]: https://github.com/wolf75222/CodexLens/compare/v0.42.5...v0.42.6
 [0.42.5]: https://github.com/wolf75222/CodexLens/compare/v0.42.4...v0.42.5
 [0.42.4]: https://github.com/wolf75222/CodexLens/compare/v0.42.3...v0.42.4

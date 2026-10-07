@@ -285,6 +285,7 @@ private struct EventTableView: NSViewRepresentable {
         private var sourceHome: String?
         private var calls = false
         private var fontSize = 12.0
+        private var timestampColumnWidth: CGFloat = 68
         private var codeFont: LensCodeFont = .system
         private var accent: LensControlAccent = .lens
         func updateAccent(_ value: LensControlAccent) {
@@ -374,6 +375,7 @@ private struct EventTableView: NSViewRepresentable {
                 rows = events // Copy-on-write values, never a scan or a new UI-side index.
                 rowByID = nextRowsByID
                 version = nextVersion; rootID = nextRoot; sourceHome = nextSourceHome; calls = isCalls; fontSize = nextFontSize; codeFont = store.codeFont; language = nextLanguage
+                timestampColumnWidth = EventTableCell.timestampWidth(fontSize: fontSize)
                 table.rowHeight = fontSize >= 18 ? CGFloat(fontSize + 6) * 5.5 : max(84, CGFloat(fontSize + 4) * 5)
                 table.reloadData()
                 applySelection(nextSelectedID, reveal: false)
@@ -410,7 +412,7 @@ private struct EventTableView: NSViewRepresentable {
             let cell = tableView.makeView(withIdentifier: cellID, owner: self) as? EventTableCell ?? EventTableCell(frame: .zero)
             cell.identifier = cellID
             let event = rows[row]
-            cell.configure(event: event, agentLabel: store?.agentName(event.agentID) ?? event.agentID, fontSize: fontSize, codeFont: codeFont)
+            cell.configure(event: event, agentLabel: store?.agentName(event.agentID) ?? event.agentID, fontSize: fontSize, codeFont: codeFont, timestampWidth: timestampColumnWidth)
             return cell
         }
         func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
@@ -545,7 +547,7 @@ private struct EventTableView: NSViewRepresentable {
 @MainActor private final class EventTableCell: NSTableCellView {
     override var isFlipped: Bool { true }
     private let timeField = NSTextField(labelWithString: "")
-    private let dateField = NSTextField(labelWithString: "")
+    private let dateField = NSTextField(wrappingLabelWithString: "")
     private let kindField = NSTextField(labelWithString: "")
     private let titleField = NSTextField(labelWithString: "")
     private let agentField = NSTextField(labelWithString: "")
@@ -553,6 +555,7 @@ private struct EventTableView: NSViewRepresentable {
     private let environmentField = NSTextField(labelWithString: "")
     private let swatch = LensEventSwatch()
     private var baseFontSize = 12.0
+    private var timestampColumnWidth: CGFloat = 68
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         for field in [timeField, dateField, kindField, titleField, agentField, previewField, environmentField] {
@@ -560,15 +563,30 @@ private struct EventTableView: NSViewRepresentable {
             field.setAccessibilityElement(false); addSubview(field)
         }
         previewField.maximumNumberOfLines = 2
+        dateField.maximumNumberOfLines = 2
+        dateField.lineBreakMode = .byWordWrapping
         swatch.setAccessibilityElement(false); addSubview(swatch)
         setAccessibilityElement(true); setAccessibilityRole(.cell)
     }
     required init?(coder: NSCoder) { return nil }
-    func configure(event: LensEvent, agentLabel: String, fontSize: Double, codeFont: LensCodeFont = .system) {
+    /// One width per table presentation, based on the fonts and locale rather
+    /// than each row's text. Sample all months without scanning session events.
+    static func timestampWidth(fontSize: Double) -> CGFloat {
+        let clockFont = NSFont.monospacedDigitSystemFont(ofSize: CGFloat(max(10, fontSize - 1)), weight: .regular)
+        let dateFont = NSFont.systemFont(ofSize: CGFloat(max(10, fontSize - 3)))
+        let clockWidth = ("11:59:59 PM" as NSString).size(withAttributes: [.font: clockFont]).width
+        let calendar = Calendar(identifier: .gregorian)
+        let dates = (1...12).compactMap { calendar.date(from: DateComponents(year: 2088, month: $0, day: 28, hour: 12)) }
+        let dateWidth = dates.map { ($0.lensFormatted(date: .abbreviated, time: .omitted) as NSString).size(withAttributes: [.font: dateFont]).width }.max() ?? 0
+        return max(68, ceil(max(clockWidth, dateWidth)) + 4)
+    }
+    func configure(event: LensEvent, agentLabel: String, fontSize: Double, codeFont: LensCodeFont = .system, timestampWidth: CGFloat) {
         baseFontSize = fontSize
+        timestampColumnWidth = timestampWidth
         let dated = event.timestamp != .distantPast && event.timestamp.timeIntervalSince1970.isFinite
         timeField.stringValue = dated ? event.timestamp.lensFormatted(date: .omitted, time: .standard) : LensL10n.text("Non daté")
         dateField.stringValue = dated ? event.timestamp.lensFormatted(date: .abbreviated, time: .omitted) : LensL10n.text("Horodatage indisponible")
+        dateField.maximumNumberOfLines = dated ? 1 : 2
         kindField.stringValue = event.kind.label
         titleField.stringValue = event.title.nonempty ?? event.kind.label
         var identity = agentLabel
@@ -594,17 +612,12 @@ private struct EventTableView: NSViewRepresentable {
     override func layout() {
         super.layout()
         let font = CGFloat(baseFontSize), titleHeight = font + 7, metadataHeight = max(14, font - 1)
-        // Reserve a complete 12-hour clock as well as the localized value.
-        // English adds AM/PM; an eight-character estimate clipped that suffix.
-        let clockWidth = max(("11:59:59 PM" as NSString).size(withAttributes: [.font: timeField.font!]).width,
-                             (timeField.stringValue as NSString).size(withAttributes: [.font: timeField.font!]).width)
-        let dateWidth = (dateField.stringValue as NSString).size(withAttributes: [.font: dateField.font!]).width
-        let timeWidth = max(68, ceil(max(clockWidth, dateWidth)) + 4)
+        let timeWidth = timestampColumnWidth
         let textX = timeWidth + 26, textWidth = max(0, bounds.width - textX - 12)
         let stacked = baseFontSize >= 18
         let agentWidth = min(200, max(100, textWidth * 0.30))
         timeField.frame = NSRect(x: 10, y: 8, width: timeWidth, height: titleHeight)
-        dateField.frame = NSRect(x: 10, y: 8 + titleHeight, width: timeWidth, height: metadataHeight)
+        dateField.frame = NSRect(x: 10, y: 8 + titleHeight, width: timeWidth, height: metadataHeight * CGFloat(dateField.maximumNumberOfLines))
         kindField.frame = NSRect(x: 10, y: bounds.height - metadataHeight - 10, width: timeWidth, height: metadataHeight)
         swatch.frame = NSRect(x: timeWidth + 14, y: 10, width: 3, height: max(0, bounds.height - 20))
         titleField.frame = NSRect(x: textX, y: 6, width: stacked ? textWidth : max(0, textWidth - agentWidth - 10), height: titleHeight)

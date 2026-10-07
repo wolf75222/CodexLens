@@ -171,6 +171,50 @@ import SwiftUI
             $0.selectedRow == selectedRow && rowVisible(selectedRow, in: $0)
         } ?? false)
 
+        // Mixed dated/undated rows share one timestamp column. Exercise the
+        // actual native cells, including language changes and enlarged type.
+        stage = "mixed-event-row-alignment"
+        let savedFont = store.fontSize, savedLanguage = LensL10n.language
+        store.activityMode = .chronology; store.timelineVisible = false
+        await store.waitForPresentation(); try await settle(host)
+        for language in [LensL10n.Language.en, .fr] {
+            LensL10n.language = language
+            for size in [10.0, 14.0, 20.0, 24.0] {
+                store.fontSize = size; try await settle(host)
+                guard let table = descendants(host).compactMap({ $0 as? NSTableView }).first(where: {
+                    !$0.isHiddenOrHasHiddenAncestor && $0.tableColumns.count == 1 && $0.numberOfRows >= 3
+                }) else { throw LensError.unavailable("Mixed event table unavailable") }
+                table.scrollRowToVisible(0); try await settle(host)
+                let cells = (0..<3).compactMap { table.view(atColumn: 0, row: $0, makeIfNecessary: true) }
+                cells.forEach { $0.layoutSubtreeIfNeeded() }
+                let swatches = cells.compactMap { descendants($0).compactMap { $0 as? LensEventSwatch }.first }
+                let hints = cells.flatMap { descendants($0).compactMap { $0 as? NSTextField } }.filter {
+                    $0.stringValue == LensL10n.text("Horodatage indisponible")
+                }
+                let key = "mixed-rows-\(language.rawValue)-\(Int(size))"
+                check(key + "-dated-and-undated-content-aligned", swatches.count == 3 && Set(swatches.map { $0.frame.minX }).count == 1)
+                check(key + "-missing-timestamp-fits-two-lines", hints.count == 2 && hints.allSatisfy { field in
+                    field.maximumNumberOfLines == 2 && field.frame.height >= (field.font?.pointSize ?? 0) * 2
+                        && field.stringValue.split(separator: " ").allSatisfy {
+                            (String($0) as NSString).size(withAttributes: [.font: field.font!]).width <= field.frame.width
+                        }
+                })
+                check(key + "-timestamp-hint-does-not-overlap-kind", hints.allSatisfy { field in
+                    field.superview.map { cell in
+                        let below = descendants(cell).compactMap { $0 as? NSTextField }.filter {
+                            $0 !== field && $0.frame.minX == field.frame.minX && $0.frame.minY > field.frame.minY
+                        }
+                        return below.count == 1 && below.allSatisfy { $0.frame.minY >= field.frame.maxY }
+                    } ?? false
+                })
+                if size == 14 {
+                    renders.append(try capture(host, output.appendingPathComponent("mixed-event-rows-\(language.rawValue)-component-cache.png")))
+                }
+            }
+        }
+        LensL10n.language = savedLanguage; store.fontSize = savedFont
+        store.timelineVisible = true; store.activityMode = .trends; try await settle(host)
+
         stage = "in-memory-model-publication"
         if let table = valuesTable(in: host), let scroll = table.enclosingScrollView {
             scroll.contentView.scroll(to: .zero); scroll.reflectScrolledClipView(scroll.contentView)
