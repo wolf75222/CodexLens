@@ -88,7 +88,7 @@ import SwiftUI
             // LensStore writes only this wrapper's private bundle domain; this
             // process-local overlay also prevents old wrapper state being read.
             var values: [String: Any] = [
-                "lensLanguage": "en", "lensControlAccent": "lens", "lensReduceMotionOverride": true,
+                "lens.language": "en", "lensControlAccent": "lens", "lensReduceMotionOverride": true,
                 "lensBookmarks": Data(), "lensTabsByRoot": [String: Data](),
                 "lensChatByRoot": [String: String](), "LensCodexModel": "",
                 "LensCodexExecutablePath": "", "LensGroupCodexInvestigations": false,
@@ -256,6 +256,72 @@ import SwiftUI
             check("ordinary-explicit-open-API-replaces-root-on-success", picker.snapshot?.root.id == rootB
                 && !picker.busy && !picker.showSessionPicker)
             await finish(picker, pickerPool)
+
+            mark("picker-surface-states")
+            let (surfaceStore, surfacePool) = makeStore("surface-picker", scope: UUID().uuidString)
+            await surfaceStore.start()
+            let recordedCatalogue = surfaceStore.catalog
+            check("surface-fixture-has-recorded-catalogue", Set(recordedCatalogue.map(\.id)) == Set([rootA, rootB]))
+            for dark in [true, false] {
+                let mountedSurface = mountSurfacePicker(surfaceStore, dark: dark)
+                defer { mountedSurface.window.contentView = nil; mountedSurface.window.close() }
+                try await settle(mountedSurface.host)
+                let surfaceSearch = try require(descendants(mountedSurface.host).compactMap { $0 as? NSSearchField }.first, "surface search")
+                let theme = dark ? "dark" : "light"
+                var nativeListIdentity: ObjectIdentifier?
+                func sample(_ state: String) async throws {
+                    let name = "picker-surface-" + theme + "-" + state
+                    mark(name)
+                    try await settle(mountedSurface.host)
+                    let captured = try captureSurface(mountedSurface.host, name: name, busy: surfaceStore.busy, output: output)
+                    renders.append(captured.render); observations.append(captured.observation)
+                    check(name + "-controlled-parent-distinct-from-window-background", captured.distinctParent)
+                    check(name + "-blank-list-and-overlay-patches-match-parent", captured.blankPatchesMatch)
+                    if let nativeListIdentity {
+                        check(name + "-native-list-identity-retained", captured.scrollIdentity == nativeListIdentity)
+                    } else { nativeListIdentity = captured.scrollIdentity }
+                    if state == "busy-catalogue" {
+                        check(name + "-catalogue-retained-while-reading", surfaceStore.busy && surfaceStore.catalog.map(\.id) == recordedCatalogue.map(\.id))
+                        check(name + "-underlying-row-region-has-no-opaque-surface-or-row-ink", captured.rowRegionMismatchCount == 0)
+                    } else if state == "normal-catalogue" {
+                        check(name + "-native-catalogue-row-region-is-rendered", captured.rowRegionMismatchCount > 0)
+                    } else if state == "catalogue-loading-empty" {
+                        check(name + "-actual-loading-state-remains-pending", surfaceStore.catalogLoading && surfaceStore.catalog.isEmpty)
+                    }
+                }
+                surfaceStore.catalog = recordedCatalogue; surfaceStore.error = nil; surfaceStore.busy = false
+                setSearch(surfaceSearch, text: "")
+                try await sample("normal-catalogue")
+                surfaceStore.busy = true
+                try await sample("busy-catalogue")
+                surfaceStore.cancelSessionOpening()
+                check("picker-surface-" + theme + "-cancel-preserves-catalogue", !surfaceStore.busy && surfaceStore.catalog.map(\.id) == recordedCatalogue.map(\.id))
+                surfaceStore.catalog = []
+                try await sample("empty-catalogue")
+                surfaceStore.catalog = recordedCatalogue
+                setSearch(surfaceSearch, text: "no-session-matches-this-owned-query")
+                try await sample("no-matches")
+                surfaceStore.catalog = []; setSearch(surfaceSearch, text: "")
+                surfaceStore.error = "Disposable surface fixture error"
+                try await sample("error-empty-catalogue")
+                surfaceStore.error = nil
+
+                // Keep refreshCatalog's real pending state observable without
+                // changing private(set) model properties or assuming I/O speed.
+                // This barrier belongs only to this disposable fixture actor.
+                let gate = CatalogueSurfaceGate()
+                let engine = surfaceStore.engine
+                let heldReader = Task.detached { await holdCatalogueReader(engine, gate: gate) }
+                defer { gate.resume() }
+                try await waitUntil("surface-owned-reader-held") { gate.entered }
+                let refresh = Task { @MainActor in await surfaceStore.refreshCatalog() }
+                try await waitUntil("surface-catalogue-loading-empty") { surfaceStore.catalogLoading }
+                try await sample("catalogue-loading-empty")
+                gate.resume(); await heldReader.value; await refresh.value
+                check("picker-surface-" + theme + "-owned-barrier-released-without-timeout", !gate.timedOut)
+                check("picker-surface-" + theme + "-refresh-restores-recorded-catalogue", !surfaceStore.catalogLoading && surfaceStore.catalog.map(\.id) == recordedCatalogue.map(\.id))
+            }
+            await finish(surfaceStore, surfacePool)
         }
 
         mark("source-integrity-and-receipt")
@@ -266,7 +332,7 @@ import SwiftUI
             "completed": true, "failedStage": passed ? "none" : stage, "scenario": mode, "allExecutedChecksPassed": passed,
             "fixture": ["anonymous": true, "largeEvents": fixture.largeEventCount, "sourcesUnchanged": try fixture.unchanged()],
             "scope": "Source-matched LensStore startup/restoration/cancellation and owned offscreen native picker callbacks; isolated sources/cache/archive/registry/preferences. No Codex/account/network action.",
-            "unqualified": ["PNG files are NSHostingView cache renders, not compositor screenshots.",
+            "unqualified": ["PNG files are NSHostingView cache renders, not compositor screenshots. Surface checks use a controlled opaque parent, not Liquid Glass compositor sampling.",
                 "Double-click/context-menu gesture dispatch, physical mouse/trackpad and VoiceOver are unqualified; the failed probe-2 synthetic gesture attempt is retained separately.",
                 "The full mode does not test --session; cli-valid and cli-missing are separate explicitly requested invocations.",
                 "No performance/RAM improvement is asserted from a bounded completion timeout."]]
@@ -318,6 +384,109 @@ import SwiftUI
     @MainActor private static func settle(_ host: NSView) async throws {
         for _ in 0..<10 { await Task.yield(); host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 10_000_000) }
     }
+    @MainActor private static func mountSurfacePicker(_ store: LensStore, dark: Bool) -> (window: NSWindow, host: NSHostingView<AnyView>) {
+        let size = NSSize(width: 780, height: 600)
+        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: -12_000, y: -12_000), size: size),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        // Strongly distinct but opaque: a transparent List/overlay must reveal
+        // this same parent. A windowBackground-filled rectangle must fail.
+        let surface = NSColor(srgbRed: dark ? 0.12 : 0.91, green: dark ? 0.29 : 0.82, blue: dark ? 0.31 : 0.61, alpha: 1)
+        let view = AnyView(ZStack {
+            Color(nsColor: surface)
+            SessionPickerView().environmentObject(store).frame(width: 740, height: 560)
+            Color(nsColor: .windowBackgroundColor).frame(width: 12, height: 12).position(x: 8, y: 8)
+        }.frame(width: size.width, height: size.height).environment(\.colorScheme, dark ? .dark : .light))
+        let host = NSHostingView(rootView: view); host.sizingOptions = []; host.frame = NSRect(origin: .zero, size: size)
+        window.contentView = host
+        return (window, host)
+    }
+    private static func holdCatalogueReader(_ engine: isolated SessionEngine, gate: CatalogueSurfaceGate) {
+        gate.hold() // At most eight seconds; not a throughput/latency assertion.
+    }
+    private struct SurfaceCapture {
+        let render: [String: Any], observation: [String: Any]
+        let distinctParent: Bool, blankPatchesMatch: Bool, rowRegionMismatchCount: Int
+        let scrollIdentity: ObjectIdentifier
+    }
+    @MainActor private static func captureSurface(_ host: NSView, name: String, busy: Bool, output: URL) throws -> SurfaceCapture {
+        let candidates = descendants(host).compactMap { $0 as? NSScrollView }.filter {
+            let rect = $0.convert($0.bounds, to: host)
+            return rect.width > host.bounds.width * 0.65 && rect.height > 200
+        }
+        guard candidates.count == 1, let scroll = candidates.first else {
+            throw LensError.unavailable("Expected one large native session-list scroll view, found \(candidates.count)")
+        }
+        let viewport = scroll.contentView.convert(scroll.contentView.bounds, to: host)
+        guard viewport.width > 400, viewport.height > 220,
+              let image = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            throw LensError.unavailable("Surface fixture has no measurable list viewport/bitmap")
+        }
+        host.cacheDisplay(in: host.bounds, to: image)
+        guard let data = image.representation(using: .png, properties: [:]) else { throw LensError.unavailable("No surface PNG") }
+        try data.write(to: output.appendingPathComponent(name + ".png"))
+        let scaleX = CGFloat(image.pixelsWide) / host.bounds.width, scaleY = CGFloat(image.pixelsHigh) / host.bounds.height
+        func pixel(_ point: NSPoint) throws -> [Double] {
+            let x = Int((point.x - host.bounds.minX) * scaleX)
+            let y = Int((host.isFlipped ? point.y - host.bounds.minY : host.bounds.maxY - point.y) * scaleY)
+            guard (0..<image.pixelsWide).contains(x), (0..<image.pixelsHigh).contains(y),
+                  let color = image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else {
+                throw LensError.unavailable("Surface pixel outside owned bitmap")
+            }
+            return [Double(color.redComponent), Double(color.greenComponent), Double(color.blueComponent), Double(color.alphaComponent)]
+        }
+        func patch(_ point: NSPoint) throws -> [Double] {
+            var mean = [Double](repeating: 0, count: 4)
+            for dy in [CGFloat(-2), 0, 2] { for dx in [CGFloat(-2), 0, 2] {
+                let value = try pixel(NSPoint(x: point.x + dx, y: point.y + dy))
+                for channel in 0..<4 { mean[channel] += value[channel] / 9 }
+            } }
+            return mean
+        }
+        func difference(_ lhs: [Double], _ rhs: [Double]) -> Double { zip(lhs, rhs).map { abs($0.0 - $0.1) }.max() ?? .infinity }
+        // Reference and viewport patches share the same image/color conversion;
+        // tolerance is two 8-bit code points, not a perceptual contrast claim.
+        let tolerance = 2.0 / 255.0
+        let referencePoint = NSPoint(x: 8, y: host.bounds.midY)
+        let reference = try patch(referencePoint)
+        let windowSwatchPoint = NSPoint(x: 8, y: host.isFlipped ? 8 : host.bounds.height - 8)
+        let windowSwatch = try patch(windowSwatchPoint)
+        var patches: [[String: Any]] = [], largestDifference = 0.0
+        for bottomInset in [CGFloat(30), 65] {
+            for x in [viewport.minX + 36, viewport.midX, viewport.maxX - 36] {
+                let y = host.isFlipped ? viewport.maxY - bottomInset : viewport.minY + bottomInset
+                let point = NSPoint(x: x, y: y), value = try patch(point)
+                let delta = difference(value, reference); largestDifference = max(largestDifference, delta)
+                patches.append(["x": point.x, "y": point.y, "rgba": value, "maximumChannelDifferenceFromParent": delta])
+            }
+        }
+        // The normal catalogue must actually draw row ink. In busy mode the
+        // same top band must be parent-only, outside the centered loading UI.
+        let bandHeight = min(CGFloat(70), viewport.height * 0.18)
+        var rowPixels = 0, rowMismatches = 0, largestRowDifference = 0.0
+        for topInset in stride(from: CGFloat(8), to: bandHeight, by: 3) {
+            for x in stride(from: viewport.minX + 18, to: viewport.maxX - 18, by: 3) {
+                let y = host.isFlipped ? viewport.minY + topInset : viewport.maxY - topInset
+                let delta = difference(try pixel(NSPoint(x: x, y: y)), reference)
+                rowPixels += 1; if delta > tolerance { rowMismatches += 1 }
+                largestRowDifference = max(largestRowDifference, delta)
+            }
+        }
+        let render: [String: Any] = ["file": name + ".png", "width": host.bounds.width, "height": host.bounds.height,
+            "pixelWidth": image.pixelsWide, "pixelHeight": image.pixelsHigh, "bytes": data.count,
+            "sha256": SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+            "method": "Owned native NSHostingView bitmap cache with opaque parent; not application compositor or a material screenshot"]
+        let observation: [String: Any] = ["scenario": name, "busy": busy,
+            "listViewport": ["x": viewport.minX, "y": viewport.minY, "width": viewport.width, "height": viewport.height],
+            "nativeListIdentity": String(describing: ObjectIdentifier(scroll)), "hostFlipped": host.isFlipped, "referencePoint": [referencePoint.x, referencePoint.y], "parentRGBA": reference,
+            "windowBackgroundSwatchRGBA": windowSwatch, "parentVsWindowBackgroundDifference": difference(reference, windowSwatch),
+            "blankPatches": patches, "maximumBlankPatchDifference": largestDifference, "tolerance": tolerance,
+            "rowBandSampledPixels": rowPixels, "rowBandMismatchPixels": rowMismatches, "maximumRowBandDifference": largestRowDifference,
+            "scope": "Blank patches avoid rows/centered state UI; row band checks busy row hiding versus the rendered normal control. Same-bitmap sampling only."]
+        return SurfaceCapture(render: render, observation: observation,
+            distinctParent: reference[3] > 0.99 && difference(reference, windowSwatch) > 0.08,
+            blankPatchesMatch: largestDifference <= tolerance, rowRegionMismatchCount: rowMismatches, scrollIdentity: ObjectIdentifier(scroll))
+    }
     @MainActor private static func renderPicker(_ store: LensStore, name: String, output: URL) async throws -> [String: Any] {
         let mounted = mountPicker(store); defer { mounted.window.contentView = nil; mounted.window.close() }
         try await settle(mounted.host)
@@ -356,4 +525,19 @@ private struct PickerFixture {
     }
     func unchanged() throws -> Bool { try originals.allSatisfy { try Self.digest(Data(contentsOf: $0.key)) == $0.value } }
     private static func digest(_ value: Data) -> String { SHA256.hash(data: value).map { String(format: "%02x", $0) }.joined() }
+}
+
+/// A bounded barrier on one owned fixture actor, solely to render the real
+/// catalogLoading transition. It never holds a user reader or the MainActor.
+private final class CatalogueSurfaceGate: @unchecked Sendable {
+    private let lock = NSLock(), release = DispatchSemaphore(value: 0)
+    private var didEnter = false, didTimeOut = false
+    var entered: Bool { lock.lock(); defer { lock.unlock() }; return didEnter }
+    var timedOut: Bool { lock.lock(); defer { lock.unlock() }; return didTimeOut }
+    func hold() {
+        lock.lock(); didEnter = true; lock.unlock()
+        let result = release.wait(timeout: .now() + 8)
+        lock.lock(); didTimeOut = result == .timedOut; lock.unlock()
+    }
+    func resume() { release.signal() }
 }

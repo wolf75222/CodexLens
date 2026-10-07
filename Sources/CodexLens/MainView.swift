@@ -613,13 +613,17 @@ struct SessionPickerView: View {
                         Button(LensL10n.text("Copier le répertoire initial")) { store.copyLocalText(session.cwd, notice: LensL10n.text("Répertoire initial copié")) }.disabled(session.cwd.isEmpty)
                     }
             }
+            .scrollContentBackground(.hidden)
+            // Retain the native list's selection/scroll state while opening,
+            // but let the sheet's surface show through behind the loader.
+            .opacity(store.busy ? 0 : 1)
+            .accessibilityHidden(store.busy)
             .disabled(store.busy)
             .overlay {
                 if store.busy {
                     LensLoadingState(title: LensL10n.text("Lecture des traces…"),
                         cancelTitle: LensL10n.text("Annuler l’ouverture"), onCancel: { store.cancelSessionOpening() })
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color(nsColor: .windowBackgroundColor))
                 } else if choices.isEmpty {
                     if store.catalogLoading { LensLoadingState(title: LensL10n.text("Recherche des sessions locales…")) }
                     else { Text(store.catalog.isEmpty ? LensL10n.text("Aucune session locale accessible. Collez un ID complet ou actualisez la liste.") : LensL10n.text("Aucune session ne correspond. Essayez un autre terme ou collez un ID complet.")).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(24).allowsHitTesting(false) }

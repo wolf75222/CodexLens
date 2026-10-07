@@ -6,6 +6,10 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep the session picker on its native sheet surface during loading, empty results and errors, removing the opaque dark rectangle. Hide the underlying rows while opening without replacing the native list or losing its selection and scroll state.
+
 ## [0.42.2] - 2026-10-06
 
 ### Added
