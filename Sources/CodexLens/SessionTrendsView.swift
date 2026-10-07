@@ -235,12 +235,15 @@ private struct SessionTrendContent: View {
         }
         .chartXSelection(value: chartSelection)
         .chartGesture { proxy in
-            DragGesture(minimumDistance: 0)
+            SpatialTapGesture().onEnded { value in
+                proxy.selectXValue(at: value.location.x)
+                chartFocused = true
+            }.simultaneously(with: DragGesture(minimumDistance: 3)
                 .onChanged { value in
                     proxy.selectXValue(at: value.location.x)
                     chartFocused = true
                 }
-                .onEnded { value in proxy.selectXValue(at: value.location.x) }
+                .onEnded { value in proxy.selectXValue(at: value.location.x) })
         }
         .chartXScale(domain: plotDomain)
         .chartYScale(domain: .automatic(includesZero: true))
