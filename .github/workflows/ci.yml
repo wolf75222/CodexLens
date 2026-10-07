@@ -21,7 +21,7 @@ jobs:
   validate:
     name: Build, test and package
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 75
     outputs:
       version: ${{ steps.version.outputs.version }}
     env:
@@ -176,7 +176,7 @@ jobs:
         if: always()
         run: |
           mkdir -p dist/native-diagnostics
-          for kind in ui navigation scenes curves timeline picker loading colors agents; do
+          for kind in ui navigation scenes curves timeline picker loading changes colors agents; do
             probe="/private/tmp/lens-ci-${kind}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             mkdir -p "dist/native-diagnostics/$kind"
             for file in native-design-v07-receipt.json process-receipt.json phase.json scene-phase.json runtime.log build.log toolchain.log; do
