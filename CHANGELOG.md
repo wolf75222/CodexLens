@@ -6,6 +6,8 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+## [0.42.3] - 2026-10-07
+
 ### Fixed
 
 - Keep the session picker on its native sheet surface during loading, empty results and errors, removing the opaque dark rectangle. Hide the underlying rows while opening without replacing the native list or losing its selection and scroll state.
@@ -122,7 +124,8 @@ These versions were local deliveries, not published GitHub releases. Their dates
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
 
-[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.2...main
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.3...main
+[0.42.3]: https://github.com/wolf75222/CodexLens/compare/v0.42.2...v0.42.3
 [0.42.2]: https://github.com/wolf75222/CodexLens/compare/v0.42.1...v0.42.2
 [0.42.1]: https://github.com/wolf75222/CodexLens/compare/v0.42.0...v0.42.1
 [0.42.0]: https://github.com/wolf75222/CodexLens/compare/v0.41.0...v0.42.0
