@@ -6,6 +6,12 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+## [0.42.8] - 2026-10-07
+
+### Changed
+
+- Choose session chart marks from count density: bars for dense intervals, discrete stems for sparse occurrences and steps for cumulative totals, starting at zero. Make click and drag select a period, replace the full-chart focus rectangle with the selected cursor, and preserve keyboard navigation and the linked values table.
+
 ## [0.42.7] - 2026-10-07
 
 ### Fixed
@@ -148,7 +154,8 @@ These versions were local deliveries, not published GitHub releases. Their dates
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
 
-[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.7...main
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.8...main
+[0.42.8]: https://github.com/wolf75222/CodexLens/compare/v0.42.7...v0.42.8
 [0.42.7]: https://github.com/wolf75222/CodexLens/compare/v0.42.6...v0.42.7
 [0.42.6]: https://github.com/wolf75222/CodexLens/compare/v0.42.5...v0.42.6
 [0.42.5]: https://github.com/wolf75222/CodexLens/compare/v0.42.4...v0.42.5

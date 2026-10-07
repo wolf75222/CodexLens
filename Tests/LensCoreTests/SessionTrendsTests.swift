@@ -11,6 +11,32 @@ final class SessionTrendsTests: XCTestCase {
         XCTAssertNil(projection.bucket(containing: Date()))
     }
 
+    func testChartMarksFollowCountDensityAndCumulativeMeaning() throws {
+        let sparse = try SessionTrendProjection(events: [event("first", at: 0), event("last", at: 63)])
+        XCTAssertEqual(sparse.chartStyle(for: .activity, cumulative: false), .eventStems)
+        XCTAssertEqual(sparse.chartStyle(for: .activity, cumulative: true), .cumulativeSteps)
+        let dense = try SessionTrendProjection(events: (0..<64).map { event("item-\($0)", at: Double($0)) })
+        XCTAssertEqual(dense.chartStyle(for: .activity, cumulative: false), .intervalBars)
+        XCTAssertEqual(dense.chartStyle(for: .activity, cumulative: true), .cumulativeSteps)
+        XCTAssertEqual(dense.chartStyle(for: .mcpCalls, cumulative: false), .intervalBars, "An empty metric does not invent occurrences")
+        let undated = try SessionTrendProjection(events: [event("unknown")])
+        XCTAssertEqual(undated.chartStyle(for: .activity, cumulative: false), .intervalBars)
+        XCTAssertTrue(undated.buckets.isEmpty)
+    }
+
+    func testChartEdgeSelectionsStayInsideTheirSourceInterval() throws {
+        let projection = try SessionTrendProjection(events: [event("first", at: 0), event("last", at: 63)])
+        let first = try XCTUnwrap(projection.buckets.first), last = try XCTUnwrap(projection.buckets.last)
+        XCTAssertEqual(projection.selectionDate(at: first.start, cumulative: true), first.start)
+        let finalCumulative = try XCTUnwrap(projection.selectionDate(at: last.end, cumulative: true))
+        XCTAssertEqual(projection.bucket(containing: finalCumulative)?.id, last.id)
+        let finalInterval = try XCTUnwrap(projection.selectionDate(at: last.end, cumulative: false))
+        XCTAssertEqual(projection.bucket(containing: finalInterval)?.id, last.id)
+        let earlier = try XCTUnwrap(projection.selectionDate(at: first.start.addingTimeInterval(-30), cumulative: false))
+        XCTAssertEqual(projection.bucket(containing: earlier)?.id, first.id)
+        XCTAssertNil(try SessionTrendProjection(events: []).selectionDate(at: Date(), cumulative: true))
+    }
+
     func testCallMirrorsResultsAndDescendantCallIDsDoNotDoubleCountCalls() throws {
         let events = [event("root-call", at: 10, kind: .toolCall, tool: "mcp__files__read", call: "shared"),
                       event("root-mirror", at: 11, kind: .toolCall, tool: "mcp__files__read", call: "shared"),

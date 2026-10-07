@@ -2257,6 +2257,7 @@
     "{0} fichiers trouvés": "{0} files found",
     "{0} / {1} fichiers traités": "{0} / {1} files processed",
     "{0} / {1} · fichier en cours": "{0} / {1} · current file",
-    "{0} / {1} événements traités": "{0} / {1} events processed"
+    "{0} / {1} événements traités": "{0} / {1} events processed",
+    "Graphique : {0}": "Chart: {0}"
   }
 }

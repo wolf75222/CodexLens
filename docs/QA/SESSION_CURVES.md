@@ -2,6 +2,22 @@
 
 The Charts mode belongs to Activity and uses its session, agent, environment, event-type, search and period scope. It does not create a separate dashboard or observe another session process. A selected interval opens the existing timeline; navigation history preserves the selected metric, cumulative mode, date and values-panel visibility.
 
+## Chart choice in 0.42.8
+
+The current metrics are counts. Mark choice follows both the counting mode and the density of the filtered, dated intervals:
+
+| Data | Display | Purpose |
+| --- | --- | --- |
+| Dense interval counts | Columns rising from zero | Compare activity peaks and quieter intervals |
+| Sparse interval counts | Points with vertical stems | Locate isolated occurrences while retaining their count; a point represents a whole interval, not an exact execution time |
+| Cumulative counts | Step line from a zero origin | Show a discrete running total without smooth interpolation |
+
+Sparse means at most 16 occupied intervals and at most one quarter of the available intervals. The projection caches these counts; drawing does not scan or reread a session. This is a visual-density rule, not a behavioral score. Undated items remain in coverage and the activity list. A zero denotes no matching recorded items, not proven inactivity.
+
+Click or drag selects a source interval. Keyboard focus uses the selected cursor and value, rather than a border around the whole plot. Left/Right, Return and the linked table remain available; Escape clears the plot selection. Context size, elapsed waiting time and token consumption are not inferred from these counts.
+
+These choices follow Apple's guidance to select marks for the information being communicated: [Charts HIG](https://developer.apple.com/design/human-interface-guidelines/charts). The native focus treatment uses [focusEffectDisabled](https://developer.apple.com/documentation/swiftui/view/focuseffectdisabled(_:)), available from macOS 14.
+
 ## Reading and navigation
 
 1. Open a session, choose **Activity → Charts**, and retain or adjust the activity filters.

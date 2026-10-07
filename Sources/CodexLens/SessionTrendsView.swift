@@ -39,6 +39,7 @@ private struct SessionTrendContent: View {
     let preparing: Bool
     let inspect: (SessionTrendBucket) -> Void
     let showCoverage: () -> Void
+    @FocusState private var chartFocused: Bool
 
     private var selectedBucket: SessionTrendBucket? {
         selectedDate.flatMap { projection.bucket(containing: $0) }
@@ -50,9 +51,7 @@ private struct SessionTrendContent: View {
         }, set: { date in
             // Cumulative marks sit at interval ends. Keep the selected date
             // inside their half-open interval, including the final endpoint.
-            selectedDate = date.map {
-                cumulative ? Date(timeIntervalSinceReferenceDate: $0.timeIntervalSinceReferenceDate.nextDown) : $0
-            }
+            selectedDate = date.flatMap { projection.selectionDate(at: $0, cumulative: cumulative) }
         })
     }
     private var locale: Locale { Locale(identifier: LensL10n.resolvedLanguage.rawValue) }
@@ -60,6 +59,7 @@ private struct SessionTrendContent: View {
         projection.totalCounts[metric, default: 0] - projection.unplottedCounts[metric, default: 0]
     }
     private var accent: Color { LensControlAccent.current.color }
+    private var chartStyle: SessionTrendChartStyle { projection.chartStyle(for: metric, cumulative: cumulative) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -175,6 +175,12 @@ private struct SessionTrendContent: View {
 
     private var plot: some View {
         Chart {
+            if cumulative, let first = projection.buckets.first {
+                LineMark(x: .value(LensL10n.text("Début de l’intervalle"), first.start),
+                    y: .value(LensL10n.text("Cumul"), 0))
+                    .foregroundStyle(accent).lineStyle(StrokeStyle(lineWidth: 2))
+                    .interpolationMethod(.stepEnd).accessibilityHidden(true)
+            }
             ForEach(projection.buckets) { bucket in
                 if cumulative {
                     LineMark(x: .value(LensL10n.text("Fin de l’intervalle"), bucket.end),
@@ -188,6 +194,19 @@ private struct SessionTrendContent: View {
                             y: .value(LensL10n.text("Cumul"), bucket.cumulativeCount(for: metric)))
                             .foregroundStyle(accent).symbolSize(25).accessibilityHidden(true)
                     }
+                } else if chartStyle == .eventStems {
+                    if bucket.count(for: metric) > 0 {
+                        RuleMark(x: .value(LensL10n.text("Période"), midpoint(bucket)),
+                            yStart: .value(LensL10n.text("Nombre"), 0),
+                            yEnd: .value(LensL10n.text("Nombre"), bucket.count(for: metric)))
+                            .foregroundStyle(accent.opacity(0.55)).lineStyle(StrokeStyle(lineWidth: 2))
+                            .accessibilityHidden(true)
+                        PointMark(x: .value(LensL10n.text("Période"), midpoint(bucket)),
+                            y: .value(LensL10n.text("Nombre"), bucket.count(for: metric)))
+                            .foregroundStyle(accent).symbolSize(selectedBucket?.id == bucket.id ? 45 : 25)
+                            .accessibilityLabel(Text(periodLabel(bucket)))
+                            .accessibilityValue(Text(valueLabel(bucket)))
+                    }
                 } else {
                     RectangleMark(xStart: .value(LensL10n.text("Début de l’intervalle"), bucket.start),
                         xEnd: .value(LensL10n.text("Fin de l’intervalle"), bucket.end),
@@ -199,6 +218,11 @@ private struct SessionTrendContent: View {
                 }
             }
             if let bucket = selectedBucket {
+                if cumulative {
+                    PointMark(x: .value(LensL10n.text("Période sélectionnée"), bucket.end),
+                        y: .value(LensL10n.text("Cumul"), bucket.cumulativeCount(for: metric)))
+                        .foregroundStyle(accent).symbolSize(45).accessibilityHidden(true)
+                }
                 RuleMark(x: .value(LensL10n.text("Période sélectionnée"), cumulative ? bucket.end : bucket.start.addingTimeInterval(bucket.end.timeIntervalSince(bucket.start) / 2)))
                     .foregroundStyle(accent).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                     .annotation(position: .top, spacing: 6,
@@ -210,6 +234,14 @@ private struct SessionTrendContent: View {
             }
         }
         .chartXSelection(value: chartSelection)
+        .chartGesture { proxy in
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    proxy.selectXValue(at: value.location.x)
+                    chartFocused = true
+                }
+                .onEnded { value in proxy.selectXValue(at: value.location.x) }
+        }
         .chartXScale(domain: plotDomain)
         .chartYScale(domain: .automatic(includesZero: true))
         .chartXAxis {
@@ -233,16 +265,26 @@ private struct SessionTrendContent: View {
             }
         }
         .chartXAxisLabel(LensL10n.text("Heure locale"), alignment: .trailing)
-        .accessibilityLabel(LensL10n.text("Courbe : {0}", SessionTrendLabels.title(metric)))
+        .accessibilityLabel(LensL10n.text("Graphique : {0}", SessionTrendLabels.title(metric)))
         .accessibilityHint(LensL10n.text("Les valeurs sont aussi disponibles dans le tableau. Les flèches sélectionnent une période ; Retour ouvre son activité."))
         .accessibilityIdentifier("lens-trends-chart")
         .focusable()
+        .focusEffectDisabled()
+        .focused($chartFocused)
+        .onChange(of: chartFocused) { _, focused in
+            if focused && selectedBucket == nil { moveSelection(1) }
+        }
         .onKeyPress(.leftArrow) { moveSelection(-1); return .handled }
         .onKeyPress(.rightArrow) { moveSelection(1); return .handled }
         .onKeyPress(.return) {
             guard let bucket = selectedBucket else { return .ignored }
             inspect(bucket); return .handled
         }
+        .onKeyPress(.escape) { selectedDate = nil; chartFocused = false; return .handled }
+    }
+
+    private func midpoint(_ bucket: SessionTrendBucket) -> Date {
+        bucket.start.addingTimeInterval(bucket.end.timeIntervalSince(bucket.start) / 2)
     }
 
     private var plotDomain: ClosedRange<Date> {

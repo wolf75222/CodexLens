@@ -81,6 +81,9 @@ import SwiftUI
         check("known-wait-is-counted", projection.totalCounts[.waits, default: 0] > 0)
         check("requested-file-changes-are-retained", projection.totalCounts[.requestedFileChanges, default: 0] > 0)
         check("chart-storage-is-bounded-to-240-intervals", projection.buckets.count <= 240)
+        check("sparse-mcp-counts-use-occurrence-stems", projection.chartStyle(for: .mcpCalls, cumulative: false) == .eventStems)
+        check("dense-activity-counts-use-interval-bars", projection.chartStyle(for: .activity, cumulative: false) == .intervalBars)
+        check("cumulative-counts-use-discrete-steps", projection.chartStyle(for: .mcpCalls, cumulative: true) == .cumulativeSteps)
 
         store.trendMetric = .mcpCalls; store.trendCumulative = true
         store.trendSelectedDate = bucket.start; store.trendValuesVisible = true
@@ -130,6 +133,9 @@ import SwiftUI
         renders.append(try capture(host, output.appendingPathComponent("curves-light-component-cache.png")))
         store.trendCumulative = false; try await settle(host)
         renders.append(try capture(host, output.appendingPathComponent("curves-intervals-component-cache.png")))
+        store.trendMetric = .activity; try await settle(host)
+        renders.append(try capture(host, output.appendingPathComponent("curves-dense-bars-component-cache.png")))
+        store.trendMetric = .mcpCalls; try await settle(host)
         store.trendCumulative = true; try await settle(host)
         let appearances: [(ColorScheme, CGFloat, String)] = [(.dark, 1380, "dark"), (.light, 920, "narrow")]
         for (scheme, width, name) in appearances {

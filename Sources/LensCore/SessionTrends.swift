@@ -5,6 +5,10 @@ public enum SessionTrendMetric: String, CaseIterable, Identifiable, Sendable {
     public var id: String { rawValue }
 }
 
+/// These projections contain counts, not continuous measurements. Sparse
+/// occurrences use stems; dense intervals use bars; a cumulative count uses steps.
+public enum SessionTrendChartStyle: Sendable, Equatable { case intervalBars, eventStems, cumulativeSteps }
+
 /// Counts refer to recorded items, not execution success, causality or productivity.
 /// A bucket covers [start, end); the closed period serves the existing timeline filter.
 public struct SessionTrendBucket: Identifiable, Sendable {
@@ -40,6 +44,22 @@ public struct SessionTrendProjection: Sendable {
     private let sourceIDs: [String: [SessionTrendMetric: [String]]]
     private let undatedIDs: [SessionTrendMetric: [String]]
     private let bucketIndices: [String: Int]
+    private let activeBucketCounts: [SessionTrendMetric: Int]
+
+    public func chartStyle(for metric: SessionTrendMetric, cumulative: Bool) -> SessionTrendChartStyle {
+        if cumulative { return .cumulativeSteps }
+        let active = activeBucketCounts[metric, default: 0]
+        // A bounded visual-density choice, not an assessment of agent behavior.
+        return active > 0 && active <= 16 && active * 4 <= buckets.count ? .eventStems : .intervalBars
+    }
+
+    /// Chart marks at interval ends still address their half-open source bucket.
+    /// Clamp plot-edge gestures to available intervals, including the zero origin.
+    public func selectionDate(at date: Date, cumulative: Bool) -> Date? {
+        guard let first = buckets.first, let last = buckets.last, date.timeIntervalSinceReferenceDate.isFinite else { return nil }
+        let value = cumulative ? Date(timeIntervalSinceReferenceDate: date.timeIntervalSinceReferenceDate.nextDown) : date
+        return max(first.start, min(last.period.upperBound, value))
+    }
 
     public func eventIDs(for metric: SessionTrendMetric, in bucketID: String) -> [String] {
         sourceIDs[bucketID]?[metric] ?? []
@@ -180,12 +200,15 @@ public struct SessionTrendProjection: Sendable {
         totalCounts = totals; unplottedCounts = unplotted
         undatedIDs = undated.mapValues { Self.ordered($0, dates: datesByID) }
         var result: [SessionTrendBucket] = [], byID: [String: [SessionTrendMetric: [String]]] = [:]
-        var indices: [String: Int] = [:], cumulative: [SessionTrendMetric: Int] = [:]
+        var indices: [String: Int] = [:], cumulative: [SessionTrendMetric: Int] = [:], active: [SessionTrendMetric: Int] = [:]
         if let lower, let upper, let width {
             let first = Self.index(lower, width: width), last = Self.index(upper, width: width)
             for index in first...last {
                 let values = counts[index] ?? [:]
-                for metric in SessionTrendMetric.allCases { cumulative[metric, default: 0] += values[metric, default: 0] }
+                for metric in SessionTrendMetric.allCases {
+                    cumulative[metric, default: 0] += values[metric, default: 0]
+                    if values[metric, default: 0] > 0 { active[metric, default: 0] += 1 }
+                }
                 let id = Self.bucketID(index: index, width: width)
                 indices[id] = result.count
                 result.append(SessionTrendBucket(id: id, start: Date(timeIntervalSince1970: Double(index) * width),
@@ -195,6 +218,7 @@ public struct SessionTrendProjection: Sendable {
             }
         }
         buckets = result; sourceIDs = byID; bucketIndices = indices
+        activeBucketCounts = active
     }
 
     private struct CallKey: Hashable { var agent: String; var call: String; var eventID: String? = nil }
