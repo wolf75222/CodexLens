@@ -2243,6 +2243,8 @@
     "Contexte hérité": "Inherited context",
     "Version de Codex": "Codex version",
     "Ouvrez le message d’origine pour consulter la mission complète.": "Open the original message to read the complete task.",
-    "Le modèle et l’effort du thread indiquent sa dernière configuration enregistrée. Le détail de chaque requête peut manquer.": "The thread’s model and reasoning effort describe its latest recorded configuration. Details for individual requests may be unavailable."
+    "Le modèle et l’effort du thread indiquent sa dernière configuration enregistrée. Le détail de chaque requête peut manquer.": "The thread’s model and reasoning effort describe its latest recorded configuration. Details for individual requests may be unavailable.",
+    "Oui": "Yes",
+    "Non": "No"
   }
 }
