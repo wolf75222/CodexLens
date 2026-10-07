@@ -6,6 +6,10 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+### Changed
+
+- Simplify the session picker: keep refresh as a labelled icon beside search, group Close and Open in the native dialog footer, and remove the repeated explanatory footer. Preserve Return, Escape, row selection and the existing loading/cancellation flow.
+
 ## [0.42.4] - 2026-10-07
 
 ### Changed
