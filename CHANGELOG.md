@@ -142,7 +142,8 @@ These versions were local deliveries, not published GitHub releases. Their dates
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
 
-[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.5...main
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.6...main
+[0.42.6]: https://github.com/wolf75222/CodexLens/compare/v0.42.5...v0.42.6
 [0.42.5]: https://github.com/wolf75222/CodexLens/compare/v0.42.4...v0.42.5
 [0.42.4]: https://github.com/wolf75222/CodexLens/compare/v0.42.3...v0.42.4
 [0.42.3]: https://github.com/wolf75222/CodexLens/compare/v0.42.2...v0.42.3
