@@ -353,6 +353,12 @@ Entry point: **Changes** or **Command-6**, a recorded call's changes, or a live-
 
 ### Worktree overview
 
+![Files overview in Dark appearance](images/changes-overview/files-dark.png)
+
+![Worktree activity and recorded diff](images/changes-overview/worktrees-light.png)
+
+These anonymous fixtures are native AppKit component bitmap captures. Their [manifest](images/changes-overview/capture-manifest.json) records the source hashes and capture limits; they are not screenshots of personal sessions.
+
 **Files** groups changed files by their exact environment. Choose **Files** for a PR-style file list or **Worktrees** for parallel activity lanes. Selecting a file or a point opens its original activity and recorded diff; grouped points list every included operation. **Actions** keeps the individual trace list available.
 
 Requests and linked tool results are one activity, with their traces available separately. The overview does not compose an invented final patch, add unrelated worktrees together, infer Git ancestry or date a worktree's creation from its first recorded operation. Recorded branch/reference fields remain available in the identity disclosure; undated operations remain in the list.
