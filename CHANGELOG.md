@@ -6,6 +6,10 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+### Changed
+
+- Switch content-area loading indicators to a slim native indeterminate bar after 1.5 seconds. Keep cancellation available and the sheet surface unchanged; Reduce Motion stops the bar animation. No elapsed-time percentage is presented as measured progress.
+
 ## [0.42.3] - 2026-10-07
 
 ### Fixed

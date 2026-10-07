@@ -111,6 +111,16 @@ jobs:
           mkdir -p dist/ui-validation/picker
           cp "$picker/native-design-v07-receipt.json" dist/ui-validation/picker/receipt.json
           cp "$picker/"*.png dist/ui-validation/picker/
+      - name: Loading state regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          loading="/private/tmp/lens-ci-loading-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$loading" --corpus "$corpus" --entrypoint LoadingV42Main.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/loading
+          cp "$loading/native-design-v07-receipt.json" dist/ui-validation/loading/receipt.json
+          for image in "$loading/"*.png; do
+            if [ -f "$image" ]; then cp "$image" dist/ui-validation/loading/; fi
+          done
       - name: Control color regression
         run: |
           corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -141,7 +151,7 @@ jobs:
         if: always()
         run: |
           mkdir -p dist/native-diagnostics
-          for kind in ui navigation scenes curves timeline picker colors agents; do
+          for kind in ui navigation scenes curves timeline picker loading colors agents; do
             probe="/private/tmp/lens-ci-${kind}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             mkdir -p "dist/native-diagnostics/$kind"
             for file in native-design-v07-receipt.json process-receipt.json phase.json scene-phase.json runtime.log build.log toolchain.log; do

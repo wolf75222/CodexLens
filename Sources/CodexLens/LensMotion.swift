@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 private struct LensReduceMotionOverrideKey: EnvironmentKey {
     static let defaultValue: Bool? = nil
@@ -73,16 +74,34 @@ struct LensProgressIndicator: View {
     }
 }
 
-/// A content-area loading state. Inline indicators remain compact; the title,
-/// spinner and optional cancellation here share the same horizontal centre.
+/// A content-area loading state. Slow operations use a native indeterminate bar;
+/// no elapsed time is converted into an invented completion percentage.
 struct LensLoadingState: View {
     let title: String
     var cancelTitle: String? = nil
     var onCancel: (() -> Void)? = nil
+    var longRunningDelay: Duration = .milliseconds(1500)
+    var operationID: UUID? = nil
+    @State private var showsProgressBar = false
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.lensReduceMotionOverride) private var override
 
     var body: some View {
         VStack(spacing: 12) {
-            LensProgressIndicator(accessibilityLabel: title)
+            Group {
+                if showsProgressBar {
+                    LensLoadingBar(animationEnabled: !(override ?? systemReduceMotion))
+                        // The small AppKit control reserves 12 pt for its thin track.
+                        .frame(height: 12)
+                        .accessibilityIdentifier("lens-progress-long-running")
+                        .accessibilityLabel(title)
+                        .accessibilityValue(LensL10n.text("En cours"))
+                } else {
+                    LensProgressIndicator(accessibilityLabel: title)
+                }
+            }
+            .frame(maxWidth: 240)
+            .frame(height: 20)
             Text(title).font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -94,5 +113,54 @@ struct LensLoadingState: View {
         .padding(20)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
+        .task(id: LoadingIdentity(title: title, operationID: operationID, delay: longRunningDelay)) {
+            showsProgressBar = false
+            do {
+                try await Task.sleep(for: longRunningDelay)
+                try Task.checkCancellation()
+                showsProgressBar = true
+            } catch { return }
+        }
+    }
+
+    private struct LoadingIdentity: Equatable {
+        let title: String
+        let operationID: UUID?
+        let delay: Duration
+    }
+}
+
+/// Native animation stays in AppKit, with no repeating SwiftUI timer or extra I/O.
+/// Keeping an indeterminate control stopped also respects Reduce Motion without
+/// falsely presenting a measured fraction of completion.
+private struct LensLoadingBar: NSViewRepresentable {
+    let animationEnabled: Bool
+
+    func makeNSView(context: Context) -> LensLoadingBarIndicator {
+        let indicator = LensLoadingBarIndicator()
+        indicator.style = .bar
+        indicator.controlSize = .small
+        indicator.isIndeterminate = true
+        indicator.isDisplayedWhenStopped = true
+        indicator.stopAnimation(nil)
+        return indicator
+    }
+
+    func updateNSView(_ indicator: LensLoadingBarIndicator, context: Context) {
+        indicator.setAnimationEnabled(animationEnabled)
+    }
+
+    static func dismantleNSView(_ indicator: LensLoadingBarIndicator, coordinator: ()) {
+        indicator.setAnimationEnabled(false)
+    }
+}
+
+final class LensLoadingBarIndicator: NSProgressIndicator {
+    private(set) var animationEnabled = false
+
+    func setAnimationEnabled(_ enabled: Bool) {
+        guard animationEnabled != enabled else { return }
+        animationEnabled = enabled
+        if enabled { startAnimation(nil) } else { stopAnimation(nil) }
     }
 }

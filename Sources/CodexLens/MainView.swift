@@ -481,7 +481,8 @@ struct MainView: View {
         Group {
             if store.busy {
                 LensLoadingState(title: LensL10n.text("Lecture des traces de la session…"),
-                    cancelTitle: LensL10n.text("Annuler l’ouverture"), onCancel: { store.cancelSessionOpening() })
+                    cancelTitle: LensL10n.text("Annuler l’ouverture"), onCancel: { store.cancelSessionOpening() },
+                    operationID: store.openingIdentity)
             } else {
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 7) {
@@ -622,7 +623,8 @@ struct SessionPickerView: View {
             .overlay {
                 if store.busy {
                     LensLoadingState(title: LensL10n.text("Lecture des traces…"),
-                        cancelTitle: LensL10n.text("Annuler l’ouverture"), onCancel: { store.cancelSessionOpening() })
+                        cancelTitle: LensL10n.text("Annuler l’ouverture"), onCancel: { store.cancelSessionOpening() },
+                        operationID: store.openingIdentity)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if choices.isEmpty {
                     if store.catalogLoading { LensLoadingState(title: LensL10n.text("Recherche des sessions locales…")) }
