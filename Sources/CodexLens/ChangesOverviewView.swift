@@ -1,6 +1,17 @@
 import SwiftUI
 import LensCore
 
+private struct ChangesDeferredSelectionDiagnosticKey: EnvironmentKey {
+    static let defaultValue: (@MainActor @Sendable ([String: String]) -> Void)? = nil
+}
+extension EnvironmentValues {
+    /// Native fixture diagnostics are opt-in; production records no selection data.
+    var lensChangesDeferredSelectionDiagnostic: (@MainActor @Sendable ([String: String]) -> Void)? {
+        get { self[ChangesDeferredSelectionDiagnosticKey.self] }
+        set { self[ChangesDeferredSelectionDiagnosticKey.self] = newValue }
+    }
+}
+
 enum ChangesOverviewMode: String, Codable, CaseIterable {
     case files, activity
 }
@@ -15,6 +26,7 @@ struct ChangesOverviewView: View {
     @EnvironmentObject private var store: LensStore
     @Environment(\.lensAccent) private var accent
     @Environment(\.lensWindowContext) private var windowContext
+    @Environment(\.lensChangesDeferredSelectionDiagnostic) private var selectionDiagnostic
     let projection: ChangesOverviewProjection
     @Binding var environmentID: String?
     @Binding var fileID: String?
@@ -602,6 +614,7 @@ struct ChangesOverviewView: View {
          store.kindFilter?.rawValue, store.changesKindFilter?.rawValue, store.originInstructionFilter]
     }
     private func cancelDeferredSelection() {
+        if selectionTask != nil { reportSelection("cancelled-on-disappear") }
         selectionTask?.cancel(); selectionTask = nil
         selectionGeneration = UUID(); pendingSelection = nil
     }
@@ -612,36 +625,77 @@ struct ChangesOverviewView: View {
         let generation = UUID(); selectionGeneration = generation; pendingSelection = pending
         let home = store.sourceHome.standardizedFileURL
         let observedHome = store.observedSourceHome.standardizedFileURL
-        let rootID = store.snapshot?.root.id, presentationID = store.presentation?.id
+        let rootID = store.snapshot?.root.id
         let storeIdentity = ObjectIdentifier(store), windowIdentity = windowContext.map(ObjectIdentifier.init)
-        let expectedSelection = store.selection, expectedEnvironmentID = environmentID, expectedFileID = fileID
+        let expectedSelection = store.selection
+        // A Binding read within a native table/publisher update may still be
+        // the rendered value. Validate the explicit requested binding value.
+        let expectedEnvironmentID: String?
+        if case .environment(let value) = pending {
+            switch value {
+            case .all: expectedEnvironmentID = nil
+            case .environment(let id): expectedEnvironmentID = id
+            }
+        } else { expectedEnvironmentID = environmentID }
+        let expectedFileID: String?
+        if case .file(let id) = pending { expectedFileID = id }
+        else { expectedFileID = fileID }
         let expectedSection = store.section, expectedPresentation = store.changesPresentation
         let expectedMode = mode, expectedDetailMode = detailMode
         let filters = selectionFilterIdentity, period = store.period
+        reportSelection("queued")
         selectionTask = Task { @MainActor in
             await Task.yield()
-            guard !Task.isCancelled, selectionGeneration == generation else { return }
+            guard !Task.isCancelled else { reportSelection("task-cancelled"); return }
+            guard selectionGeneration == generation else { reportSelection("generation-replaced"); return }
             defer {
                 if selectionGeneration == generation { pendingSelection = nil; selectionTask = nil }
             }
-            guard ObjectIdentifier(store) == storeIdentity, windowContext.map(ObjectIdentifier.init) == windowIdentity,
-                  store.sourceHome.standardizedFileURL == home, store.observedSourceHome.standardizedFileURL == observedHome,
-                  store.snapshot?.root.id == rootID, store.presentation?.id == presentationID,
-                  store.selection == expectedSelection, environmentID == expectedEnvironmentID, fileID == expectedFileID,
-                  store.section == expectedSection, store.changesPresentation == expectedPresentation,
-                  mode == expectedMode, detailMode == expectedDetailMode,
-                  selectionFilterIdentity == filters, store.period == period,
-                  let current = store.presentation?.changesOverview else { return }
-            if let targetEnvironmentID { guard current.groups.contains(where: { $0.id == targetEnvironmentID }) else { return } }
-            if let targetFile { guard current.files.contains(where: { $0.key == targetFile }) else { return } }
+            // Live publication may replace the projection during the yield.
+            // Keep the context guards and validate the target in that fresh
+            // projection instead of requiring an unchanged presentation UUID.
+            let checks: [String: Bool] = [
+                "store": ObjectIdentifier(store) == storeIdentity,
+                "window": windowContext.map(ObjectIdentifier.init) == windowIdentity,
+                "source": store.sourceHome.standardizedFileURL == home,
+                "observedSource": store.observedSourceHome.standardizedFileURL == observedHome,
+                "root": store.snapshot?.root.id == rootID,
+                "selection": store.selection == expectedSelection,
+                "environment": environmentID == expectedEnvironmentID,
+                "file": fileID == expectedFileID,
+                "section": store.section == expectedSection,
+                "presentationMode": store.changesPresentation == expectedPresentation,
+                "overviewMode": mode == expectedMode, "detailMode": detailMode == expectedDetailMode,
+                "filters": selectionFilterIdentity == filters, "period": store.period == period
+            ]
+            guard checks.values.allSatisfy({ $0 }), let current = store.presentation?.changesOverview else {
+                reportSelection("context-rejected", checks: checks); return
+            }
+            if let targetEnvironmentID, !current.groups.contains(where: { $0.id == targetEnvironmentID }) {
+                reportSelection("environment-target-missing"); return
+            }
+            if let targetFile, !current.files.contains(where: { $0.key == targetFile }) {
+                reportSelection("file-target-missing"); return
+            }
             if let targetChange {
-                guard store.change(targetChange.id) == targetChange, current.traceIDs.contains(targetChange.id) else { return }
+                guard store.change(targetChange.id) == targetChange, current.traceIDs.contains(targetChange.id) else {
+                    reportSelection("trace-target-missing"); return
+                }
             }
             if case .activity(let id) = pending {
-                guard current.groups.contains(where: { $0.activities.contains(where: { $0.id == id }) }) else { return }
+                guard current.groups.contains(where: { $0.activities.contains(where: { $0.id == id }) }) else {
+                    reportSelection("activity-target-missing"); return
+                }
             }
+            reportSelection("accepted")
             operation()
         }
+    }
+    private func reportSelection(_ phase: String, checks: [String: Bool] = [:]) {
+        guard let selectionDiagnostic else { return }
+        var values = checks.mapValues { $0 ? "pass" : "fail" }
+        values["phase"] = phase
+        selectionDiagnostic(values)
     }
     private func synchronizeSelectedChange() {
         guard let change = selectedChange,

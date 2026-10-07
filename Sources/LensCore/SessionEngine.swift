@@ -310,6 +310,12 @@ public actor SessionEngine {
     }
 
     private func collect(progress: SessionProgressHandler? = nil) throws -> SessionSnapshot {
+        // Collection also creates temporary file buffers, lookup objects and
+        // cache-encoding objects outside individual JSON record scopes.
+        try autoreleasepool { try collectIndex(progress: progress) }
+    }
+
+    private func collectIndex(progress: SessionProgressHandler?) throws -> SessionSnapshot {
         let reporter = SessionProgressReporter(progress)
         try Task.checkCancellation()
         guard let selectedID, let root = summaries[selectedID] else { throw LensError.unavailable("Aucune session sélectionnée.") }
@@ -585,7 +591,7 @@ public actor SessionEngine {
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path)); defer { try? handle.close() }
         try handle.seek(toOffset: file.offset)
         var buffer = Data(), cursor = file.offset, readEnd = file.offset, dropping = false
-        while let chunk = try handle.read(upToCount: 256 * 1024), !chunk.isEmpty {
+        while let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: 256 * 1024) }), !chunk.isEmpty {
             try Task.checkCancellation()
             readEnd += UInt64(chunk.count)
             buffer.append(chunk)
@@ -596,7 +602,15 @@ public actor SessionEngine {
                 if file.line.isMultiple(of: 1024) { try Task.checkCancellation() }
                 if dropping { file.issues.append(CoverageIssue("événement volumineux", "Ligne \(file.line) de plus de \(maximumLineBytes) octets : non indexée, source conservée à l'offset \(cursor).", source: path)); dropping = false }
                 else if file.records.count >= maximumIndexedEvents { if !file.issues.contains(where: { $0.category == "limite d'index" }) { file.issues.append(CoverageIssue("limite d'index", "Plus de \(maximumIndexedEvents) événements dans ce journal ; les suivants restent disponibles dans la source mais ne sont pas indexés.", source: path)) } }
-                else { parse(line: line, source: SourceRef(path: path, offset: cursor, length: length, line: file.line), index: &file) }
+                else {
+                    // Foundation's JSON reader creates autoreleased objects. A
+                    // collection task can decode many files without returning to
+                    // a run loop; release temporary dictionaries after each line
+                    // instead of retaining them for the entire history load.
+                    autoreleasepool {
+                        parse(line: line, source: SourceRef(path: path, offset: cursor, length: length, line: file.line), index: &file)
+                    }
+                }
                 cursor += UInt64(length + 1)
                 buffer.removeSubrange(...newline)
                 file.offset = cursor
@@ -890,14 +904,16 @@ public actor SessionEngine {
                     else if summaries[child]?.parentID == nil { summaries[child]?.parentID = file.owner; summaries[child]?.relation = .subagent; summaries[child]?.evidence += "; SubAgentActivity started, agent_thread_id enregistré" }
                 }
                 if event.toolName?.contains("spawn_agent") == true, let callID = event.callID { spawnCalls.insert(callID) }
-                if event.kind == .toolResult, let callID = event.callID, spawnCalls.contains(callID), !event.isError,
-                   let raw = try? Self.read(event.source), let root = try? JSONSerialization.jsonObject(with: raw) as? [String: Any], let payload = root["payload"] as? [String: Any] {
-                    let output = Self.jsonDictionary(Self.string(payload["output"] ?? ""))
-                    if let child = output["agent_id"] as? String ?? output["thread_id"] as? String,
-                       !excludedInvestigationIDs.contains(child),
-                       child.range(of: #"^[A-Fa-f0-9]{8}-[A-Fa-f0-9-]{27}$"#, options: .regularExpression) != nil {
-                        if summaries[child] == nil { summaries[child] = SessionSummary(id: child, parentID: file.owner, relation: .subagent, evidence: "spawn_agent \(callID) → agent_id enregistré ; journal indisponible") }
-                        else if summaries[child]?.parentID == nil { summaries[child]?.parentID = file.owner; summaries[child]?.relation = .subagent; summaries[child]?.evidence += "; spawn_agent \(callID) → agent_id enregistré" }
+                autoreleasepool {
+                    if event.kind == .toolResult, let callID = event.callID, spawnCalls.contains(callID), !event.isError,
+                       let raw = try? Self.read(event.source), let root = try? JSONSerialization.jsonObject(with: raw) as? [String: Any], let payload = root["payload"] as? [String: Any] {
+                        let output = Self.jsonDictionary(Self.string(payload["output"] ?? ""))
+                        if let child = output["agent_id"] as? String ?? output["thread_id"] as? String,
+                           !excludedInvestigationIDs.contains(child),
+                           child.range(of: #"^[A-Fa-f0-9]{8}-[A-Fa-f0-9-]{27}$"#, options: .regularExpression) != nil {
+                            if summaries[child] == nil { summaries[child] = SessionSummary(id: child, parentID: file.owner, relation: .subagent, evidence: "spawn_agent \(callID) → agent_id enregistré ; journal indisponible") }
+                            else if summaries[child]?.parentID == nil { summaries[child]?.parentID = file.owner; summaries[child]?.relation = .subagent; summaries[child]?.evidence += "; spawn_agent \(callID) → agent_id enregistré" }
+                        }
                     }
                 }
             }

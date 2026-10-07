@@ -92,6 +92,14 @@ public actor SessionPresentationBuilder {
         published = presentation; publishedSequence = sequence
     }
     public func prepare(snapshot: SessionSnapshot, revision: Int, filters: EventFilters, agentFilters: AgentFilters? = nil) throws -> SessionPresentation {
+        // Actor tasks do not have a per-run-loop autorelease boundary. Index
+        // preparation parses recorded arguments and creates Foundation lookup
+        // objects; keep those temporaries out of the published generation.
+        try autoreleasepool {
+            try prepareIndex(snapshot: snapshot, revision: revision, filters: filters, agentFilters: agentFilters)
+        }
+    }
+    private func prepareIndex(snapshot: SessionSnapshot, revision: Int, filters: EventFilters, agentFilters: AgentFilters?) throws -> SessionPresentation {
         let span = LensSignposts.begin("SessionPresentation"); defer { span.end() }
         try Task.checkCancellation()
         // nil keeps the original API's shared query semantics for existing consumers.

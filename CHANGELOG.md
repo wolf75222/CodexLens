@@ -41,8 +41,9 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ### Fixed
 
+- Release temporary Foundation objects after each history record, file read, collection and presentation preparation, preventing accumulation across large multi-agent histories while retaining lazy source access.
 - Accept the installed Codex 0.160.1 alongside qualified 0.159.2 after verifying version-specific schemas and isolated permission profiles. Report the actual chosen binary version and keep unsupported versions, API authentication and unapproved tools rejected.
-- Preserve the selected worktree, file, overview mode and trace filter when returning from a reader or another tab.
+- Preserve the selected worktree, file, overview mode and trace filter when returning from a reader or another tab. Keep queued native file selection valid when a new same-session projection is published before navigation.
 - Align event rows using one timestamp column for dated and undated entries. Wrap the missing-timestamp label within that column, retaining full localized dates, 12-hour clock suffixes and enlarged text.
 - Keep the session picker on its native sheet surface during loading, empty results and errors, removing the opaque dark rectangle. Hide the underlying rows while opening without replacing the native list or losing its selection and scroll state.
 - Keep custom control accents consistent across settings navigation, session dialogs, search focus, text selection and content indicators. Native System mode continues to follow macOS.

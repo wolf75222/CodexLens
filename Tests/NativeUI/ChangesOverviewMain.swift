@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Combine
 import CryptoKit
 import Darwin
 import Foundation
@@ -13,6 +14,7 @@ import SwiftUI
     @MainActor private static var stage = "anonymous-fixture"
     @MainActor private static var diagnosticOutput: URL?
     @MainActor private static weak var diagnosticStore: LensStore?
+    @MainActor private static var selectionDiagnostics: [[String: String]] = []
 
     @MainActor static func main() {
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -39,6 +41,7 @@ import SwiftUI
         func receipt(_ complete: Bool) {
             let value: [String: Any] = [
                 "checks": checks, "observations": observations, "renders": renders, "completed": complete,
+                "deferredSelectionDiagnostics": selectionDiagnostics,
                 "allExecutedChecksPassed": complete && checks.allSatisfy { $0["passed"] as? Bool == true },
                 "failedStage": complete ? "none" : stage,
                 "fixture": ["anonymous": true, "rootID": fixture.rootID,
@@ -48,6 +51,7 @@ import SwiftUI
                 "unqualified": [
                     "Programmatic store and AppKit checks do not qualify physical clicks, trackpad gestures, VoiceOver or the production compositor.",
                     "The dense scenario publishes anonymous metadata in memory; it is not a live collector-ingestion test.",
+                    "The selection interleaving publishes cloned same-root metadata in memory; it does not qualify collector I/O.",
                     "A bounded number of graph marks is not a CPU, memory or latency improvement measurement.",
                     "Recorded trace timestamps, worktree labels and explicit agent-parent links establish no Git ancestry, creation date, authorship or net historical patch."
                 ]
@@ -116,6 +120,59 @@ import SwiftUI
         check("overview-exposes-files-environments-and-modes", Set(["lens-changes-files", "lens-changes-environments",
             "lens-changes-presentation", "lens-changes-presentation"]).isSubset(of: identifiers(host)))
         renders.append(try capture(host, output.appendingPathComponent("changes-overview-all-files-light-component-cache.png")))
+
+        stage = "same-context-publication-during-native-selection"
+        do {
+            let previousID = try require(store.presentation?.id, "presentation before interleaving")
+            let previousSelection = store.selection
+            let betaRequest = try require(initial.changes.first {
+                $0.environmentID == betaFile.environmentID && $0.kind == .requestedPatch && betaFile.traceIDs.contains($0.id)
+            }, "beta requested trace")
+            let betaRow = try require(projection.files.firstIndex { $0.id == betaFile.id }, "beta file row")
+            let fileTables = descendants(host).compactMap { $0 as? NSTableView }.filter {
+                !$0.isHiddenOrHasHiddenAncestor && $0.numberOfRows == projection.files.count
+            }
+            guard fileTables.count == 1, let fileTable = fileTables.first else {
+                throw LensError.unavailable("Expected one native table for the four-file anonymous overview.")
+            }
+            var callbackRan = false, interleavedNewGeneration = false, bindingChangedBeforeNavigation = false
+            // @Published emits in willSet. Selecting the actual native file row
+            // here queues navigation against the old presentation; the new one
+            // is assigned synchronously before that MainActor task can resume.
+            let publication = store.$presentation.dropFirst().sink { next in
+                guard !callbackRan, let next, next.rootID == initial.root.id, next.id != previousID else { return }
+                callbackRan = true
+                interleavedNewGeneration = store.presentation?.id == previousID
+                fileTable.selectRowIndexes(IndexSet(integer: betaRow), byExtendingSelection: false)
+                bindingChangedBeforeNavigation = store.changesOverviewFileID == betaFile.id
+                    && store.selection == previousSelection
+            }
+            defer { publication.cancel() }
+            var refreshed = initial
+            refreshed.collectedAt = initial.collectedAt.addingTimeInterval(1)
+            store.snapshot = refreshed
+            await store.waitForPresentation()
+            check("native-file-selection-interleaves-same-context-publication", callbackRan
+                && interleavedNewGeneration && bindingChangedBeforeNavigation
+                && store.presentation?.id != previousID)
+            try await waitFor(host, "same-context-publication-preserves-file-navigation") {
+                store.selection == .change(betaRequest.id) && store.changesOverviewFileID == betaFile.id
+                    && identifiers(host).contains("lens-change-open-action")
+            }
+            check("same-context-publication-keeps-native-file-and-trace-aligned",
+                store.selection == .change(betaRequest.id) && store.changesOverviewFileID == betaFile.id
+                && store.changesOverviewDetailMode == .recorded && identifiers(host).contains("lens-change-open-action"))
+            check("interleaving-keeps-root-source-and-filter-context",
+                store.snapshot?.root.id == initial.root.id && store.observedSourceHome == fixture.home
+                && store.query.isEmpty && store.agentFilter == nil && store.environmentFilter == nil
+                && store.changesKindFilter == nil && store.changesOverviewEnvironmentID == nil)
+            observations.append(["scenario": "same-context-publication-during-native-selection",
+                "trigger": "NSTableView.selectRowIndexes inside presentation willSet publisher",
+                "oldPresentationID": previousID.uuidString,
+                "newPresentationID": store.presentation?.id.uuidString ?? "<missing>",
+                "selectedFileID": betaFile.id, "selectedTraceID": betaRequest.id,
+                "collectorIOQualified": false])
+        }
 
         stage = "file-trace-native-diff"
         store.changesOverviewFileID = alphaFile.id
@@ -292,6 +349,10 @@ import SwiftUI
     }
     @MainActor private static func component(store: LensStore, context: LensWindowContext, scheme: ColorScheme) -> AnyView {
         AnyView(ChangesView().environmentObject(store).environment(\.lensWindowContext, context)
+            .environment(\.lensChangesDeferredSelectionDiagnostic, { values in
+                selectionDiagnostics.append(values)
+                if selectionDiagnostics.count > 64 { selectionDiagnostics.removeFirst() }
+            })
             .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .windowBackgroundColor))
             .environment(\.colorScheme, scheme).environment(\.locale, Locale(identifier: "en")))
     }
