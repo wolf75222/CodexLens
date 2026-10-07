@@ -2258,6 +2258,9 @@
     "{0} / {1} fichiers traités": "{0} / {1} files processed",
     "{0} / {1} · fichier en cours": "{0} / {1} · current file",
     "{0} / {1} événements traités": "{0} / {1} events processed",
-    "Graphique : {0}": "Chart: {0}"
+    "Graphique : {0}": "Chart: {0}",
+    "{0} · {1}/4": "{0} · {1}/4",
+    "{0} / {1} au total": "{0} / {1} total",
+    "Fichier {0}/{1} · {2} / {3}": "File {0}/{1} · {2} / {3}"
   }
 }

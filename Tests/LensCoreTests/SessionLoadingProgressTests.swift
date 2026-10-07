@@ -12,6 +12,49 @@ final class SessionLoadingProgressTests: XCTestCase {
         XCTAssertEqual(growing.fraction, 1)
     }
 
+    func testHistoryUsesByteWeightsAndExpandsForNewlyDiscoveredFiles() {
+        let history = SessionHistoryProgress()
+        history.register(path: "small", bytes: 10); history.register(path: "large", bytes: 90)
+        history.update(path: "small", completedBytes: 10, totalBytes: 10); history.finish(path: "small")
+        let first = SessionLoadingProgress(stage: .readingHistory, completed: 10, total: 10, fileName: "small", history: history.snapshot)
+        XCTAssertEqual(first.fraction, 0.1, "A complete small file is not half of the byte workload")
+        XCTAssertEqual(first.history?.completedFiles, 1)
+        XCTAssertEqual(first.history?.currentFile, 1)
+        history.update(path: "large", completedBytes: 45, totalBytes: 90)
+        XCTAssertEqual(history.snapshot.fraction, 0.55)
+        XCTAssertEqual(history.snapshot.currentFile, 2)
+        history.register(path: "late", bytes: 100)
+        XCTAssertEqual(history.snapshot.totalFiles, 3)
+        XCTAssertEqual(history.snapshot.completedBytes, 55)
+        XCTAssertEqual(history.snapshot.totalBytes, 200)
+        history.update(path: "large", completedBytes: 120, totalBytes: 120)
+        XCTAssertEqual(history.snapshot.totalBytes, 230, "A live journal may grow after the initial plan")
+        history.register(path: "unknown", bytes: nil)
+        XCTAssertNil(history.snapshot.fraction, "Missing byte bounds must not produce a global percentage")
+        XCTAssertEqual(SessionLoadingProgress(stage: .readingHistory, completed: 120, total: 120, history: history.snapshot).fraction, nil)
+    }
+
+    func testEngineReportsAggregateCompletionAcrossTwoJournalFiles() async throws {
+        let f = try ProgressFixture(); defer { f.remove() }
+        let a = try f.write(count: 6000), original = try Data(contentsOf: a)
+        let b = f.home.appendingPathComponent("sessions/short-history.jsonl")
+        var short = Data()
+        for line in original.split(separator: 10).prefix(40) { short.append(contentsOf: line); short.append(10) }
+        try short.write(to: b)
+        let capture = ProgressCapture(), engine = SessionEngine(home: f.home, cacheDirectory: f.cache)
+        _ = try await engine.open(id: ProgressFixture.id, progress: { capture.append($0) })
+        let histories = capture.values.filter { $0.stage == .readingHistory }.compactMap(\.history)
+        let last = try XCTUnwrap(histories.last)
+        XCTAssertEqual(last.totalBytes, Int64(original.count + short.count))
+        XCTAssertEqual(last.completedBytes, last.totalBytes)
+        XCTAssertEqual(last.totalFiles, 2); XCTAssertEqual(last.completedFiles, 2)
+        XCTAssertEqual(last.fraction, 1)
+        XCTAssertTrue(histories.contains { $0.completedFiles == 1 && ($0.fraction ?? 1) < 1 })
+        XCTAssertEqual(try Data(contentsOf: a), original); XCTAssertEqual(try Data(contentsOf: b), short)
+        XCTAssertEqual(SessionLoadingProgress(stage: .readingHistory).openingStep, 2)
+        XCTAssertEqual(SessionLoadingProgress(stage: .savingIndex).openingStep, 4)
+    }
+
     func testReporterCoalescesRapidWorkButKeepsStageAndFileBoundaries() {
         let capture = ProgressCapture()
         let measured = SessionProgressReporter { capture.append($0) }

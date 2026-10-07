@@ -6,6 +6,12 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+## [0.42.9] - 2026-10-07
+
+### Changed
+
+- Show one aggregate history progress bar across all known session journals, weighted by their byte sizes. Keep the current file counter below it, move its name to a tooltip, and show the opening stage out of four. New descendants and growing journals update the measured totals; missing bounds remain indeterminate.
+
 ## [0.42.8] - 2026-10-07
 
 ### Changed
@@ -154,7 +160,8 @@ These versions were local deliveries, not published GitHub releases. Their dates
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
 
-[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.8...main
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.42.9...main
+[0.42.9]: https://github.com/wolf75222/CodexLens/compare/v0.42.8...v0.42.9
 [0.42.8]: https://github.com/wolf75222/CodexLens/compare/v0.42.7...v0.42.8
 [0.42.7]: https://github.com/wolf75222/CodexLens/compare/v0.42.6...v0.42.7
 [0.42.6]: https://github.com/wolf75222/CodexLens/compare/v0.42.5...v0.42.6

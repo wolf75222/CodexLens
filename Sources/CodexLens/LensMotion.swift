@@ -84,6 +84,7 @@ struct LensLoadingState: View {
     var longRunningDelay: Duration = .milliseconds(1500)
     var operationID: UUID? = nil
     var progress: SessionLoadingProgress? = nil
+    var showsOpeningSteps = false
     @State private var showsProgressBar = false
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.lensReduceMotionOverride) private var override
@@ -94,7 +95,7 @@ struct LensLoadingState: View {
                 if showsProgressBar || progress?.fraction != nil {
                     LensLoadingBar(animationEnabled: !(override ?? systemReduceMotion), fraction: progress?.fraction)
                         // A new measured stage/file resets AppKit's retained fill.
-                        .id(LoadingBarIdentity(stage: progress?.stage, fileName: progress?.fileName))
+                        .id(LoadingBarIdentity(stage: progress?.stage, fileName: progress?.history == nil ? progress?.fileName : nil, totalBytes: progress?.history?.totalBytes))
                         // The small AppKit control reserves 12 pt for its thin track.
                         .frame(height: 12)
                         .accessibilityIdentifier("lens-progress-long-running")
@@ -106,7 +107,7 @@ struct LensLoadingState: View {
             }
             .frame(maxWidth: 240)
             .frame(height: 20)
-            Text(progress?.stageTitle ?? title).font(.callout).foregroundStyle(.secondary)
+            Text(progress.map { showsOpeningSteps ? LensL10n.text("{0} · {1}/4", $0.stageTitle, $0.openingStep.formatted()) : $0.stageTitle } ?? title).font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 420)
@@ -116,7 +117,10 @@ struct LensLoadingState: View {
                         .accessibilityIdentifier("lens-progress-counter")
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if let fileName = progress.fileName {
+                if let detail = progress.fileDetailTitle {
+                    Text(detail).font(.caption2).monospacedDigit().foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true).help(progress.fileName ?? detail)
+                } else if let fileName = progress.fileName {
                     Text(fileName).font(.caption2).foregroundStyle(.tertiary)
                         .lineLimit(1).truncationMode(.middle).frame(maxWidth: 320).help(fileName)
                 }
@@ -148,6 +152,7 @@ struct LensLoadingState: View {
 private struct LoadingBarIdentity: Hashable {
     let stage: SessionLoadingProgress.Stage?
     let fileName: String?
+    var totalBytes: Int64? = nil
 }
 
 /// Native animation stays in AppKit, with no repeating SwiftUI timer or extra I/O.
@@ -214,15 +219,26 @@ extension SessionLoadingProgress {
     var counterTitle: String? {
         switch stage {
         case .discoveringSessions:
-            completed > 0 ? LensL10n.text("{0} fichiers trouvés", completed.formatted()) : nil
+            return completed > 0 ? LensL10n.text("{0} fichiers trouvés", completed.formatted()) : nil
         case .readingMetadata:
-            total.map { LensL10n.text("{0} / {1} fichiers traités", completed.formatted(), $0.formatted()) }
+            return total.map { LensL10n.text("{0} / {1} fichiers traités", completed.formatted(), $0.formatted()) }
         case .readingHistory:
-            total.map { LensL10n.text("{0} / {1} · fichier en cours", ByteCountFormatter.string(fromByteCount: completed, countStyle: .file), ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)) }
+            if let history {
+                if let total = history.totalBytes {
+                    return LensL10n.text("{0} / {1} au total", ByteCountFormatter.string(fromByteCount: history.completedBytes, countStyle: .file), ByteCountFormatter.string(fromByteCount: total, countStyle: .file))
+                }
+                return LensL10n.text("{0} / {1} fichiers traités", history.completedFiles.formatted(), history.totalFiles.formatted())
+            }
+            return total.map { LensL10n.text("{0} / {1} · fichier en cours", ByteCountFormatter.string(fromByteCount: completed, countStyle: .file), ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)) }
         case .organizingEvents:
-            total.map { LensL10n.text("{0} / {1} événements traités", completed.formatted(), $0.formatted()) }
-        default: nil
+            return total.map { LensL10n.text("{0} / {1} événements traités", completed.formatted(), $0.formatted()) }
+        default: return nil
         }
+    }
+
+    var fileDetailTitle: String? {
+        guard let history, let total, stage == .readingHistory else { return nil }
+        return LensL10n.text("Fichier {0}/{1} · {2} / {3}", history.currentFile.formatted(), history.totalFiles.formatted(), ByteCountFormatter.string(fromByteCount: completed, countStyle: .file), ByteCountFormatter.string(fromByteCount: total, countStyle: .file))
     }
 }
 

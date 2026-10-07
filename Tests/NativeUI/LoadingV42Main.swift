@@ -215,6 +215,24 @@ import LensCore
         check("stage-change-resets-native-fill", historyBar !== measuredBar)
         check("reduce-motion-retains-measured-value", !historyBar.isIndeterminate && abs(historyBar.doubleValue - 0.5) < 0.001 && !historyBar.animationEnabled)
         renders.append(try capture(transition, name: "measured-history-half-reduced-motion", output: output))
+        state.showsOpeningSteps = true
+        state.progress = .init(stage: .readingHistory, completed: 25, total: 50, fileName: "second-history.jsonl",
+            history: .init(completedBytes: 150, totalBytes: 200, completedFiles: 1, totalFiles: 3, currentFile: 2))
+        await settle(transition)
+        let globalBar = try require(descendants(transition).compactMap { $0 as? LensLoadingBarIndicator }.first, "aggregate history bar")
+        check("history-bar-follows-global-bytes-instead-of-file-fraction", abs(globalBar.doubleValue - 0.75) < 0.001 && !globalBar.isIndeterminate)
+        check("opening-phases-remain-distinct-from-history-percentage", state.progress?.openingStep == 2)
+        renders.append(try capture(transition, name: "aggregate-history-three-quarters", output: output))
+        state.progress = .init(stage: .readingHistory, completed: 10, total: 20, fileName: "third-history.jsonl",
+            history: .init(completedBytes: 160, totalBytes: 200, completedFiles: 2, totalFiles: 3, currentFile: 3))
+        await settle(transition)
+        check("changing-file-keeps-global-bar-and-advances-total", descendants(transition).contains { $0 === globalBar } && abs(globalBar.doubleValue - 0.8) < 0.001)
+        state.progress = .init(stage: .readingHistory, completed: 10, total: 20, fileName: "third-history.jsonl",
+            history: .init(completedBytes: 160, totalBytes: 400, completedFiles: 2, totalFiles: 4, currentFile: 3))
+        await settle(transition)
+        let expandedBar = try require(descendants(transition).compactMap { $0 as? LensLoadingBarIndicator }.first, "expanded history plan")
+        check("new-file-plan-resets-retained-fill-to-measured-global-fraction", expandedBar !== globalBar && abs(expandedBar.doubleValue - 0.4) < 0.001)
+        state.showsOpeningSteps = false
         state.progress = .init(stage: .savingIndex)
         state.delay = .zero
         await settle(transition)
@@ -408,6 +426,7 @@ import LensCore
     var reducedMotion = false
     var operationID = UUID()
     var progress: SessionLoadingProgress?
+    var showsOpeningSteps = false
     var layoutRevision = 0
     var cancelCount = 0
     var delay: Duration
@@ -423,7 +442,7 @@ import LensCore
             if state.visible {
                 LensLoadingState(title: state.title, cancelTitle: state.cancelTitle,
                     onCancel: { state.cancelCount += 1; state.visible = false },
-                    longRunningDelay: state.delay, operationID: state.operationID, progress: state.progress)
+                    longRunningDelay: state.delay, operationID: state.operationID, progress: state.progress, showsOpeningSteps: state.showsOpeningSteps)
                     .padding(.horizontal, CGFloat(state.layoutRevision % 2))
             } else { Color.clear }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)

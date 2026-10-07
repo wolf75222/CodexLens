@@ -322,15 +322,24 @@ public actor SessionEngine {
             restore(root: selectedID); loadedCache = true
         }
         var readOwners = Set<String>()
+        let history = SessionHistoryProgress()
         while !memberIDs.isSubset(of: readOwners) {
             try Task.checkCancellation()
+            for id in memberIDs {
+                for path in summaries[id]?.paths ?? [] {
+                    guard !history.contains(path: path) else { continue }
+                    let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.int64Value
+                    history.register(path: path, bytes: size)
+                }
+            }
             for id in memberIDs.subtracting(readOwners) {
                 readOwners.insert(id)
                 guard let summary = summaries[id] else { continue }
                 for path in summary.paths where FileManager.default.fileExists(atPath: path) {
-                    do { try update(path: path, owner: id, reporter: reporter) }
+                    do { try update(path: path, owner: id, reporter: reporter, history: history) }
                     catch is CancellationError { throw CancellationError() }
                     catch { var index = files[path] ?? FileIndex(owner: id); index.issues.append(CoverageIssue("lecture", error.localizedDescription, source: path)); files[path] = index }
+                    history.finish(path: path)
                 }
             }
             discoverSpawnedChildren(in: memberIDs)
@@ -547,7 +556,7 @@ public actor SessionEngine {
         return [investigationWorkspaceRoot, investigationConnectionProbeRoot].contains { path == $0 || path.hasPrefix($0 + "/") }
     }
 
-    private func update(path: String, owner: String, reporter: SessionProgressReporter? = nil) throws {
+    private func update(path: String, owner: String, reporter: SessionProgressReporter? = nil, history: SessionHistoryProgress? = nil) throws {
         try LocalContentGuard.requireResident(path: path)
         let attrs = try FileManager.default.attributesOfItem(atPath: path)
         let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
@@ -561,8 +570,15 @@ public actor SessionEngine {
         }
         file.inode = inode
         let fileName = URL(fileURLWithPath: path).lastPathComponent
+        var reportedOffset = file.offset
         func report(_ offset: UInt64) {
-            reporter?.send(.init(stage: .readingHistory, completed: Int64(clamping: offset), total: Int64(clamping: max(size, offset)), fileName: fileName))
+            reportedOffset = offset
+            let completed = Int64(clamping: offset), total = Int64(clamping: max(size, offset))
+            history?.update(path: path, completedBytes: completed, totalBytes: total)
+            reporter?.send(.init(stage: .readingHistory, completed: completed, total: total, fileName: fileName, history: history?.snapshot))
+        }
+        defer {
+            if !Task.isCancelled { history?.finish(path: path); report(reportedOffset) }
         }
         report(file.offset)
         guard size > file.offset else { file.pendingBytes = 0; files[path] = file; return }
