@@ -3,10 +3,11 @@ import Darwin
 
 /// The native Codex process owns credentials. Lens only examines the public RPC
 /// configuration in memory; it never reads auth.json or changes a config file.
-/// This policy is qualified against the bundled 0.159.2 protocol and source.
+/// Exact-version qualification uses each binary's experimental JSON schemas,
+/// tagged tool-registry source and isolated configuration/permissions probes.
 enum CodexInvestigationPolicy {
     static let profileName = "codex_lens_context_only_v19"
-    static let supportedVersion = "0.159.2"
+    static let supportedVersions = ["0.159.2", "0.160.1"]
     private static let backend = "https://chatgpt.com/backend-api/codex"
     private static let disabledFeatures = [
         "hooks", "plugins", "apps", "shell_tool", "unified_exec", "shell_snapshot",
@@ -16,28 +17,18 @@ enum CodexInvestigationPolicy {
     ]
     private static let instructions = "Use only the conversation context supplied by Codex Lens. Do not access local files, commands, apps, connectors, plugins, skills or other conversations."
 
-    static func executable() throws -> URL {
-        let candidates = [
-            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
-            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
-        ]
-        guard let path = candidates.first(where: FileManager.default.isExecutableFile(atPath:)) else {
-            throw failure("Le binaire Codex qualifié est introuvable. Installez ou mettez à jour l’application ChatGPT ; le brouillon est conservé.")
-        }
-        return URL(fileURLWithPath: path)
-    }
-
     static func version(executable: URL) async throws -> String {
-        guard try await CodexInvestigationLocalStatus.inspectVersion(executable: executable) == supportedVersion else {
+        guard let version = try await CodexInvestigationLocalStatus.inspectVersion(executable: executable),
+              CodexInstallation.isSupportedVersion(version) else {
             throw failure("Version Codex non qualifiée ; connexion refusée sans modifier la session CLI.")
         }
-        return supportedVersion
+        return version
     }
 
     /// The returned server is started but deliberately NOT initialized. The
     /// caller owns its final initialize/initialized handshake and authentication.
     static func launch(executable: URL, version: String, workspace: URL, stateHome: URL? = nil) async throws -> CodexAppServerTransport {
-        guard version == supportedVersion else { throw failure("Version Codex non qualifiée.") }
+        guard CodexInstallation.isSupportedVersion(version) else { throw failure("Version Codex non qualifiée.") }
         let hostArguments = try hostSandboxArguments(stateHome: stateHome)
         try prepare(workspace)
         let common = arguments(workspace: workspace)
@@ -46,7 +37,8 @@ enum CodexInvestigationPolicy {
         let names: [String]
         do {
             try await bootstrap.start()
-            _ = try await rpc(bootstrap, "initialize", ["clientInfo": ["name": "codex_lens", "title": "Codex Lens", "version": "0.19"], "capabilities": ["experimentalApi": true]])
+            let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+            _ = try await rpc(bootstrap, "initialize", ["clientInfo": ["name": "codex_lens", "title": "Codex Lens", "version": appVersion], "capabilities": ["experimentalApi": true]])
             try await bootstrap.notify(method: "initialized")
             let response = try await rpc(bootstrap, "config/read", ["includeLayers": true])
             guard let config = response["config"] as? [String: Any] else { throw failure("Configuration Codex illisible ; connexion refusée.") }
@@ -84,8 +76,9 @@ enum CodexInvestigationPolicy {
     }
 
     /// Supplemental macOS restriction for the native process, not a replacement
-    /// for Codex's named permission profile. v0.159.2 exposes no RPC to disable
-    /// its CODEX_HOME instruction provider. Credentials remain owned by Codex.
+    /// for Codex's named permission profile. The qualified versions expose no
+    /// RPC to disable their CODEX_HOME instruction provider. Credentials remain
+    /// owned by Codex.
     /// Reject instruction symlinks: SBPL checks resolved paths and a denylist
     /// cannot safely prevent a symlink from being retargeted after launch.
     static func hostSandboxArguments(stateHome: URL? = nil) throws -> [String] {
@@ -117,8 +110,8 @@ enum CodexInvestigationPolicy {
     }
 
     /// Both thread/start and turn/start must also send environments: [] and the
-    /// named permissions profile. In 0.159.2 an empty environment list removes
-    /// shell, apply_patch and view_image from the model's tool registry.
+    /// named permissions profile. In the qualified versions an empty environment
+    /// list removes shell, apply_patch and view_image from the model's tool registry.
     static func threadConfiguration(workspace: URL) -> [String: Any] {
         var values = settings(workspace: workspace)
         values["instructions"] = ""
@@ -240,11 +233,11 @@ enum CodexInvestigationPolicy {
         }
     }
 
-    /// The typed v159 ToolsV2 response omits these two fields. Read the
+    /// The qualified typed ToolsV2 responses omit these two fields. Read the
     /// highest-precedence raw layer through the documented config interface.
     private static func validateControlLayer(_ response: [String: Any]) throws {
         let active = (response["layers"] as? [[String: Any]] ?? []).filter { $0["disabledReason"] == nil || $0["disabledReason"] is NSNull }
-        // Native v159 returns layers from highest to lowest precedence.
+        // Qualified native versions return layers from highest to lowest precedence.
         guard let layer = active.first, (layer["name"] as? [String: Any])?["type"] as? String == "sessionFlags",
               let config = layer["config"] as? [String: Any], let tools = config["tools"] as? [String: Any],
               (tools["experimental_request_user_input"] as? [String: Any])?["enabled"] as? Bool == false,

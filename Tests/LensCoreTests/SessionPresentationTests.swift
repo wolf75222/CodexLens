@@ -182,6 +182,43 @@ final class SessionPresentationTests: XCTestCase {
         XCTAssertEqual(result.recentRecordedChanges.map(\.id), (988..<1000).reversed().map { "change-\($0)" })
     }
 
+    func testChangesOverviewFiltersBeforeGroupingAndCachesSameFilters() async throws {
+        let builder = SessionPresentationBuilder()
+        let snapshot = SessionSnapshot(root: SessionSummary(id: "root"),
+            events: [recentEvent("alpha", at: 100), recentEvent("beta", at: 200)],
+            changes: [recentChange("alpha-patch", event: "alpha"), recentChange("beta-result", event: "beta", environment: "/fixture/beta", kind: .recordedResult)])
+        let all = try await builder.prepare(snapshot: snapshot, revision: 1, filters: EventFilters())
+        XCTAssertEqual(all.changesOverview.files.count, 2)
+        let filter = EventFilters(changeKind: .recordedResult)
+        let result = try await builder.prepare(snapshot: snapshot, revision: 1, filters: filter)
+        XCTAssertEqual(result.filteredChanges.map(\.id), ["beta-result"])
+        XCTAssertEqual(result.changesOverview.groups.map(\.id), ["/fixture/beta"])
+        XCTAssertEqual(result.changesOverview.traceIDs, ["beta-result"])
+        let again = try await builder.prepare(snapshot: snapshot, revision: 1, filters: filter)
+        XCTAssertEqual(again.id, result.id)
+    }
+
+    func testChangesOverviewCannotExposeConflictingDuplicateThroughFilter() async throws {
+        let snapshot = SessionSnapshot(root: SessionSummary(id: "root"),
+            events: [recentEvent("alpha", at: 100), recentEvent("beta", at: 200)],
+            changes: [recentChange("same-id", event: "alpha"), recentChange("same-id", event: "beta", environment: "/fixture/beta")])
+        let result = try await SessionPresentationBuilder().prepare(snapshot: snapshot, revision: 1, filters: EventFilters(environmentID: "/fixture/beta"))
+        XCTAssertTrue(result.filteredChanges.isEmpty)
+        XCTAssertTrue(result.changesOverview.groups.isEmpty)
+        XCTAssertEqual(result.changesByID["same-id"]?.environmentID, "/fixture/alpha")
+    }
+
+    func testChangesOverviewSearchMatchesSourceAndHonorsRecordedPeriod() async throws {
+        let snapshot = SessionSnapshot(root: SessionSummary(id: "root"),
+            events: [recentEvent("before", at: 100), recentEvent("inside", at: 200)],
+            changes: [recentChange("old", event: "before"), recentChange("visible", event: "inside")])
+        let result = try await SessionPresentationBuilder().prepare(snapshot: snapshot, revision: 1,
+            filters: EventFilters(period: Date(timeIntervalSince1970: 150)...Date(timeIntervalSince1970: 250), query: "captured output", sourceMatches: ["inside"]))
+        XCTAssertEqual(result.filteredChanges.map(\.id), ["visible"])
+        XCTAssertEqual(result.changesOverview.activityCount, 1)
+        XCTAssertEqual(result.changesOverview.firstTimestamp, Date(timeIntervalSince1970: 200))
+    }
+
     private func recentEvent(_ id: String, at timestamp: TimeInterval) -> LensEvent {
         LensEvent(id: id, timestamp: Date(timeIntervalSince1970: timestamp), agentID: "root", kind: .toolCall, source: SourceRef(path: "/fixture/trace"))
     }

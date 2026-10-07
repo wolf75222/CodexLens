@@ -6,6 +6,16 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+### Added
+
+- A Changes overview grouped by worktree and file, with linked recorded activities, a compact worktree activity graph, adaptive panes and a keyboard-accessible operations list. Requests and linked results count as one activity; files with the same path in different worktrees stay separate.
+- An explicit current Git comparison from an environment's recorded full commit, including committed and uncommitted tracked changes. Missing or invalid references produce an error rather than falling back to HEAD; current content remains distinct from historical session state.
+
+### Fixed
+
+- Accept the installed Codex 0.160.1 alongside qualified 0.159.2 after verifying version-specific schemas and isolated permission profiles. Report the actual chosen binary version and keep unsupported versions, API authentication and unapproved tools rejected.
+- Preserve the selected worktree, file, overview mode and trace filter when returning from a reader or another tab.
+
 ## [0.42.9] - 2026-10-07
 
 ### Changed

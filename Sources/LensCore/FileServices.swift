@@ -223,13 +223,28 @@ public actor FileService {
         return url.resolvingSymlinksInPath()
     }
 
-    public func currentDiff(environment: EnvironmentRecord, relativePath: String? = nil, staged: Bool = false) async throws -> CurrentDiff {
+    /// With a recorded reference, compares that verified commit with the entire
+    /// current tracked worktree; `staged` applies only to the default index modes.
+    /// A commit baseline cannot reconstruct session-start dirty files or attribute edits.
+    public func currentDiff(environment: EnvironmentRecord, relativePath: String? = nil, staged: Bool = false, recordedReference: String? = nil) async throws -> CurrentDiff {
         let interval = LensSignposts.begin("CurrentGitDiff")
         defer { interval.end() }
+        if let recordedReference {
+            guard recordedReference.range(of: #"\A(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\z"#, options: .regularExpression) != nil,
+                  let recordedRef = environment.recordedRef,
+                  recordedRef.caseInsensitiveCompare(recordedReference) == .orderedSame else {
+                throw FileServiceError.invalidReference(recordedReference)
+            }
+        }
         let inspection = try await inspect(environment: environment)
         guard inspection.exists, let worktree = inspection.worktreePath else { throw FileServiceError.notRepository(environment.path) }
         let root = URL(fileURLWithPath: worktree, isDirectory: true).standardizedFileURL
-        let names = try await git(.names(staged: staged, reference: inspection.head), at: root)
+        let commit: String?
+        if let recordedReference { commit = try await verifiedCommit(recordedReference, at: root) }
+        else { commit = nil }
+        let indexComparison = recordedReference == nil && staged
+        let diffReference = commit ?? (indexComparison ? inspection.head : nil)
+        let names = try await git(.names(staged: indexComparison, reference: diffReference), at: root)
         guard names.status == 0 else { throw FileServiceError.gitFailure(names.text) }
         let changedPaths = names.text.split(separator: "\0").map(String.init)
         var selectedPaths = changedPaths
@@ -242,9 +257,11 @@ public actor FileService {
         }
         let excluded = selectedPaths.filter { isRestricted(root.appendingPathComponent($0)) || isRestricted(root.appendingPathComponent($0).resolvingSymlinksInPath()) }
         let allowed = selectedPaths.filter { !excluded.contains($0) }
-        let reference = staged ? "HEAD \(inspection.head ?? "(branche sans commit)") → index actuel" : "Index actuel → worktree actuel (HEAD observé \(inspection.head ?? "sans commit"))"
+        let reference: String
+        if let commit { reference = "Commit enregistré \(commit) → worktree actuel" }
+        else { reference = staged ? "HEAD \(inspection.head ?? "(branche sans commit)") → index actuel" : "Index actuel → worktree actuel (HEAD observé \(inspection.head ?? "sans commit"))" }
         guard !allowed.isEmpty else { return CurrentDiff(text: "", reference: reference, excludedPaths: excluded) }
-        let result = try await git(.diff(staged: staged, paths: allowed, reference: inspection.head), at: root)
+        let result = try await git(.diff(staged: indexComparison, paths: allowed, reference: diffReference), at: root)
         guard result.status == 0 else { throw FileServiceError.gitFailure(result.text) }
         try rejectSecretContent(Data(result.text.utf8), path: root.path)
         return CurrentDiff(text: result.text, reference: reference, excludedPaths: excluded)
@@ -274,16 +291,7 @@ public actor FileService {
         } else { throw FileServiceError.historicalUnavailable("Dépôt contenant le commit introuvable.") }
         try ensureAllowed(root)
         try ensureAllowed(root.appendingPathComponent(relativePath))
-        let commitType = try await git(.objectType(reference), at: root)
-        guard commitType.status == 0, commitType.text.trimmingCharacters(in: .whitespacesAndNewlines) == "commit" else {
-            throw FileServiceError.historicalUnavailable("Le commit enregistré \(reference) n’est pas présent dans ce dépôt.")
-        }
-        let resolved = try await git(.resolveCommit(reference), at: root)
-        let commit = resolved.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard resolved.status == 0, commit.range(of: hexPattern, options: .regularExpression) != nil,
-              commit.caseInsensitiveCompare(reference) == .orderedSame else {
-            throw FileServiceError.historicalUnavailable("Le commit enregistré n’a pas pu être vérifié.")
-        }
+        let commit = try await verifiedCommit(reference, at: root)
         let tree = try await git(.treeEntry(commit: commit, path: relativePath), at: root)
         guard tree.status == 0 else { throw FileServiceError.historicalUnavailable("Arbre du commit inaccessible.") }
         let entries = tree.text.split(separator: "\0", omittingEmptySubsequences: true)
@@ -465,6 +473,21 @@ public actor FileService {
         if versionOrder.count > 128 { openVersions.removeValue(forKey: versionOrder.removeFirst()) }
     }
 
+    private func verifiedCommit(_ reference: String, at root: URL) async throws -> String {
+        let commitType = try await git(.objectType(reference), at: root)
+        guard commitType.status == 0, commitType.text.trimmingCharacters(in: .whitespacesAndNewlines) == "commit" else {
+            throw FileServiceError.historicalUnavailable("Le commit enregistré \(reference) n’est pas présent dans ce dépôt.")
+        }
+        let resolved = try await git(.resolveCommit(reference), at: root)
+        let commit = resolved.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard resolved.status == 0,
+              commit.range(of: #"\A(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\z"#, options: .regularExpression) != nil,
+              commit.caseInsensitiveCompare(reference) == .orderedSame else {
+            throw FileServiceError.historicalUnavailable("Le commit enregistré n’a pas pu être vérifié.")
+        }
+        return commit
+    }
+
     private enum GitRead {
         case roots, branch, head, names(staged: Bool, reference: String?), diff(staged: Bool, paths: [String], reference: String?)
         case objectType(String), objectSize(String), resolveCommit(String), treeEntry(commit: String, path: String), blob(String)
@@ -473,8 +496,8 @@ public actor FileService {
             case .roots: return ["rev-parse", "--show-toplevel", "--git-common-dir"]
             case .branch: return ["branch", "--show-current"]
             case .head: return ["rev-parse", "--verify", "HEAD"]
-            case .names(let staged, let reference): return ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z"] + (staged ? ["--cached"] + (reference.map { [$0] } ?? []) : []) + ["--"]
-            case .diff(let staged, let paths, let reference): return ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames"] + (staged ? ["--cached"] + (reference.map { [$0] } ?? []) : []) + ["--"] + paths.map { ":(literal)" + $0 }
+            case .names(let staged, let reference): return ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z"] + (staged ? ["--cached"] : []) + (reference.map { [$0] } ?? []) + ["--"]
+            case .diff(let staged, let paths, let reference): return ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames"] + (staged ? ["--cached"] : []) + (reference.map { [$0] } ?? []) + ["--"] + paths.map { ":(literal)" + $0 }
             case .objectType(let object): return ["cat-file", "-t", object]
             case .objectSize(let object): return ["cat-file", "-s", object]
             case .resolveCommit(let commit): return ["rev-parse", "--verify", commit + "^{commit}"]

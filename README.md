@@ -38,7 +38,7 @@ Release assets include SHA-256 checksums. Current community builds are locally s
 | Native UI | SwiftUI and AppKit; Liquid Glass controls on macOS 26 with fallbacks |
 | Language | English and French, selectable in Settings |
 | Session inspection | Local persisted Codex data, including separately stored descendants when their relationships are recorded |
-| Local Codex chat | App Server adapter qualified for **Codex 0.159.2** and a ChatGPT login; other versions are refused |
+| Local Codex chat | App Server adapter qualified for **Codex 0.159.2 or 0.160.1** and a ChatGPT login; other versions are refused |
 | Historical files | Recorded content, verified Git objects, or reconstruction validated against a recorded content hash |
 
 The macOS 14 target is a deployment declaration, not a claim that every feature has been tested on that OS. Intel, every Codex log format, and remote sessions without local traces are not qualified.

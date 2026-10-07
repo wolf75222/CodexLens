@@ -351,6 +351,16 @@ Source: [resource views](../Sources/CodexLens/ObjectViews.swift), [recovery UI](
 
 Entry point: **Changes** or **Command-6**, a recorded call's changes, or a live-diff preview.
 
+### Worktree overview
+
+**Files** groups changed files by their exact environment. Choose **Files** for a PR-style file list or **Worktrees** for parallel activity lanes. Selecting a file or a point opens its original activity and recorded diff; grouped points list every included operation. **Actions** keeps the individual trace list available.
+
+Requests and linked tool results are one activity, with their traces available separately. The overview does not compose an invented final patch, add unrelated worktrees together, infer Git ancestry or date a worktree's creation from its first recorded operation. Recorded branch/reference fields remain available in the identity disclosure; undated operations remain in the list.
+
+**Current Git diff** is an explicit read of the selected environment. Its options include staged changes or comparison from the recorded full commit, which includes later committed and tracked working-file changes. The comparison labels its current observation and excludes untracked files; it does not reconstruct earlier uncommitted content or attribute current edits to Codex. An unavailable recorded commit stays an error.
+
+Preparation reuses the session's indexed facts outside SwiftUI. Graph marks are bounded to 160 bins per lane, with all constituent operations accessible. The layout adapts between three panes, two panes and a vertical split; Back and reading tabs retain the overview selection.
+
 | Feature | Available behavior | Boundary |
 | --- | --- | --- |
 | Change collection | Inspect/filter changes by file, agent, environment, period, and trace kind | The collector creates requested-patch and recorded-result rows; current filesystem/Git changes remain separate |
@@ -431,7 +441,7 @@ Entry points: the chat toolbar action, **Option-Command-C**, **Command-7**, or *
 ### Local Codex connection
 
 - Detects the installed Codex at chat/AI-settings opening and checks account metadata without sending a message.
-- The qualified adapter accepts **Codex 0.159.2** with **ChatGPT authentication**; an API-authenticated or signed-out account is not silently accepted as the requested personal connection.
+- The qualified adapter accepts **Codex 0.159.2 or 0.160.1** with **ChatGPT authentication**; an API-authenticated or signed-out account is not silently accepted as the requested personal connection.
 - Codex manages its own credentials. Lens does not read/copy `auth.json`, export tokens, alter global Codex configuration, or log out the shared CLI.
 - Settings → AI offers automatic discovery or a native installed-binary chooser, Verify/Refresh, verification cancellation, and reported engine/version/path.
 - A signed-out state offers Open Codex, or copies `codex login` if no containing app is identified. Copying does not execute the command.
@@ -651,11 +661,13 @@ Source: [collector](../Sources/LensCore/SessionEngine.swift), [content guard](..
 
 ## Developer tools
 
-These shipped tools are separate from normal session inspection; they do not make fixture content into production history.
+The component fixture gallery and its Development menu are available in Debug builds only. Public Release builds omit that scene and menu.
+
+These tools are separate from normal session inspection; fixtures are never production history. The component gallery requires a Debug build.
 
 | Tool | Entry point/use | Qualification boundary |
 | --- | --- | --- |
-| Native component gallery | Help → Development → Component Gallery | Anonymous fixture identities, activity, provenance/citations, diffs, selection/questions, and loading/limit states |
+| Native component gallery | Debug builds only: Help → Development → Component Gallery | Anonymous fixture identities, activity, provenance/citations, diffs, selection/questions, and loading/limit states |
 | Gallery appearance/text controls | System/light/dark and standard/enlarged | Preview controls for the gallery, not account/session changes |
 | `lens-inspect` | Built beside the app; see its command help | Read-only diagnostics, not a terminal embedded in the app |
 | Build/test scripts | `bash scripts/build.sh`, `bash scripts/test.sh -c release` | Local checks are distinct from GitHub CI on the pushed commit |
@@ -673,7 +685,7 @@ The following distinctions prevent implemented lower-level helpers or requested 
 
 | Capability | Current status |
 | --- | --- |
-| Universal Codex App Server compatibility | Local chat adapter is qualified for **0.159.2**, not arbitrary newer/older binaries |
+| Universal Codex App Server compatibility | Local chat adapter is qualified for **0.159.2 and 0.160.1**, not arbitrary newer/older binaries |
 | Observation through another process's App Server | Observation uses persisted local sources; a private chat server is not assumed to see external activity |
 | Hook installation/instrumentation | No observation-hook setup is required or offered by this release |
 | Trigger compaction to inspect it | No such action; Lens reads recorded compaction |

@@ -48,11 +48,13 @@ final class CodexInvestigationPolicyTests: XCTestCase {
     /// ephemeral auth, and synthetic files. No thread, turn, login or logout RPC.
     func testNativeIsolatedLaunchDisablesMCPAndEnforcesNamedReadDenials() async throws {
         let executable: URL
-        do { executable = try CodexInvestigationPolicy.executable() }
-        catch { throw XCTSkip("Qualified bundled Codex binary unavailable.") }
-        let version: String
-        do { version = try await CodexInvestigationPolicy.version(executable: executable) }
-        catch { throw XCTSkip("Bundled Codex version is not qualified by this fixture.") }
+        let preferred = ProcessInfo.processInfo.environment["LENS_POLICY_TEST_EXECUTABLE"].map { URL(fileURLWithPath: $0) }
+        do { executable = try await CodexInstallation.qualifiedExecutable(preferred: preferred) }
+        catch {
+            if preferred != nil { throw error }
+            throw XCTSkip("Qualified installed Codex binary unavailable.")
+        }
+        let version = try await CodexInvestigationPolicy.version(executable: executable)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("LensPolicy-\(UUID().uuidString)").resolvingSymlinksInPath()
         let home = root.appendingPathComponent("State"), workspace = root.appendingPathComponent("Context")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)

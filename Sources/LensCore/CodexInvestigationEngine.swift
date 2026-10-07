@@ -303,14 +303,15 @@ public actor CodexInvestigationEngine {
             return Connection(server: server, workspace: requested, executable: URL(fileURLWithPath: "/nonexistent"), version: "")
         }
         let executable = try await CodexInstallation.qualifiedExecutable(preferred: preferred)
-        let version = CodexInvestigationPolicy.supportedVersion
+        let version = try await CodexInvestigationPolicy.version(executable: executable)
         let directory: URL
         if let requested { directory = requested } else { directory = try await registry.connectionProbeDirectory() }
         try Task.checkCancellation()
         let server = try await CodexInvestigationPolicy.launch(executable: executable, version: version, workspace: directory)
         do {
             try Task.checkCancellation()
-            _ = try await rpc(server, "initialize", ["clientInfo": ["name": "codex_lens", "title": "Codex Lens", "version": "0.19"], "capabilities": ["experimentalApi": true]])
+            let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+            _ = try await rpc(server, "initialize", ["clientInfo": ["name": "codex_lens", "title": "Codex Lens", "version": appVersion], "capabilities": ["experimentalApi": true]])
             try await server.notify(method: "initialized")
             try await CodexInvestigationPolicy.verify(server: server, workspace: directory)
             try Task.checkCancellation()

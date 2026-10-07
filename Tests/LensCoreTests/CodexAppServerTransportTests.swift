@@ -4,6 +4,47 @@ import Darwin
 @testable import LensCore
 
 final class CodexAppServerTransportTests: XCTestCase {
+    /// These request/notification envelopes are shared by the exact generated
+    /// 0.159.2 and 0.160.1 schemas. Approvals stay refused with no client handler.
+    func testQualifiedProtocolApprovalRequestsStayRefusedAndNotificationsRemainOpaque() async throws {
+        let methods = ["item/commandExecution/requestApproval", "item/fileChange/requestApproval",
+                       "item/permissions/requestApproval", "item/tool/call", "item/tool/requestUserInput",
+                       "mcpServer/elicitation/request", "applyPatchApproval", "execCommandApproval"]
+        let encodedMethods = String(decoding: try JSONSerialization.data(withJSONObject: methods), as: UTF8.self)
+        let transport = fixture("""
+import json, sys
+request = json.loads(sys.stdin.readline())
+methods = \(encodedMethods)
+for index, method in enumerate(methods):
+    ident = index if index % 2 == 0 else 'approval-' + str(index)
+    print(json.dumps({'id':ident,'method':method,'params':{}}), flush=True)
+    reply = json.loads(sys.stdin.readline())
+    assert reply['id'] == ident and reply['error']['code'] == -32601
+print(json.dumps({'id':request['id'],'result':{'denied':len(methods)}}), flush=True)
+print(json.dumps({'method':'item/agentMessage/delta','emittedAtMs':123,'params':{'threadId':'fixture-thread','turnId':'fixture-turn','itemId':'fixture-item','delta':'anonymous reply'}}), flush=True)
+print(json.dumps({'method':'turn/completed','params':{'threadId':'fixture-thread','turn':{'id':'fixture-turn','status':'completed','items':[],'error':None}}}), flush=True)
+sys.stdin.read()
+""")
+        try await transport.start()
+        let stream = Task { () throws -> [CodexAppServerNotification] in
+            var received: [CodexAppServerNotification] = []
+            for try await notification in transport.notifications {
+                received.append(notification)
+                if received.count == 2 { return received }
+            }
+            return received
+        }
+        let result = try await transport.request(method: "fixture/qualified-protocol")
+        XCTAssertEqual(try json(result)["denied"] as? Int, methods.count)
+        let notifications = try await stream.value
+        XCTAssertEqual(notifications.map(\.method), ["item/agentMessage/delta", "turn/completed"])
+        let delta = try json(XCTUnwrap(notifications.first?.params))
+        XCTAssertEqual(delta["delta"] as? String, "anonymous reply")
+        let completed = try json(XCTUnwrap(notifications.last?.params))
+        XCTAssertEqual((completed["turn"] as? [String: Any])?["status"] as? String, "completed")
+        await transport.close()
+    }
+
     func testFragmentedMessagesAndDefaultServerRequestRefusal() async throws {
         let transport = fixture(#"""
 import json, os, sys, time

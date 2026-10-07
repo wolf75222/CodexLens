@@ -47,6 +47,13 @@ The app distinguishes a requested patch, its recorded tool result, available his
 
 Use a file's context menu to reveal its current location in Finder or open it with another app. These actions refer to the **current** file; they do not change the historical content displayed in Lens. Editing in an external app is outside Lens's read-only inspection boundary.
 
+## Review changes across worktrees
+
+1. Open **Changes → Files**. Pick an environment or keep all environments visible, then select a file.
+2. Choose its recorded activity and trace to inspect the corresponding diff. **Worktrees** shows parallel lanes; grouped points give access to every operation.
+3. Use **Current Git diff** only when you want a current local comparison. Open its options to compare staged changes or changes from the recorded commit, then choose **Read diff**. Recorded activity and current Git state are separate.
+4. Open an action in a tab and use **Back** to return to the overview selection. **Actions** restores the individual change list.
+
 ## Explore environments and resources
 
 **Environments** shows the directories used by the session and known descendants. Browse the accessible tree, not just modified files. The same relative path in two worktrees denotes two different files. A deleted worktree keeps its historical reference, while its current contents are unavailable.
@@ -60,7 +67,7 @@ For a missing attachment, **Find File…** lets you search chosen local director
 ![Investigation chat with selected context](images/chat.png)
 
 1. Open the chat with **Option-Command-C**. Lens checks the installed Codex and its connection without sending a question.
-2. If needed, open **Settings → AI** to inspect or choose the executable. This adapter requires Codex **0.159.2** with a ChatGPT connection. Sign in using Codex itself if it is signed out.
+2. If needed, open **Settings → AI** to inspect or choose the executable. This adapter requires Codex **0.159.2 or 0.160.1** with a ChatGPT connection. Sign in using Codex itself if it is signed out.
 3. Write a question. Optionally use **Add to Question**, the attachment menu, or an item's **Ask AI…** context action to include messages, calls, diffs, agents, or excerpts.
 4. Review the attached context and version references, then send. Return sends; Shift-Return inserts a newline.
 5. Continue in the same chat. Open a cited source to inspect the content attached to that response, or add it to a follow-up.

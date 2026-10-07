@@ -28,11 +28,37 @@ final class CodexInstallationTests: XCTestCase {
     func testAutomaticDiscoverySkipsOldVersionButExplicitChoiceNeverFallsBack() async throws {
         let base = try root(); defer { try? FileManager.default.removeItem(at: base) }
         let old = try binary(base.appendingPathComponent("old/codex"), version: "0.143.0")
-        let qualified = try binary(base.appendingPathComponent("new/codex"), version: "0.159.2")
+        let qualified = try binary(base.appendingPathComponent("new/codex"), version: "0.160.1")
         let detected = try await CodexInstallation.qualifiedExecutable(candidates: [old, qualified])
         XCTAssertEqual(detected, qualified)
         do { _ = try await CodexInstallation.qualifiedExecutable(preferred: old, candidates: [qualified]); XCTFail("Explicit unsupported choice must not fall back") }
         catch { XCTAssertTrue(error.localizedDescription.contains("0.143.0")) }
+    }
+    func testBothQualifiedVersionsAreAcceptedAndReportedExactly() async throws {
+        let base = try root(); defer { try? FileManager.default.removeItem(at: base) }
+        XCTAssertEqual(CodexInstallation.supportedVersions, ["0.159.2", "0.160.1"])
+        for version in CodexInstallation.supportedVersions {
+            let installed = try binary(base.appendingPathComponent(version + "/codex"), version: version)
+            let chosen = try await CodexInstallation.qualifiedExecutable(preferred: installed)
+            XCTAssertEqual(chosen, installed)
+            let actual = try await CodexInvestigationPolicy.version(executable: chosen)
+            XCTAssertEqual(actual, version)
+        }
+    }
+    func testVersionAllowlistRejectsNeighboursPrereleasesAndUnknownVersions() async throws {
+        let base = try root(); defer { try? FileManager.default.removeItem(at: base) }
+        XCTAssertFalse(CodexInstallation.isSupportedVersion(nil))
+        for version in ["0.143.0", "0.159.1", "0.159.3", "0.160.0", "0.160.2", "0.161.0", "0.160.1-beta.1", "0.160.1+local"] {
+            XCTAssertFalse(CodexInstallation.isSupportedVersion(version), version)
+            let installed = try binary(base.appendingPathComponent(version + "/codex"), version: version)
+            do {
+                _ = try await CodexInstallation.qualifiedExecutable(preferred: installed)
+                XCTFail("Unqualified version must fail: " + version)
+            } catch {
+                XCTAssertTrue(error.localizedDescription.contains("0.159.2"))
+                XCTAssertTrue(error.localizedDescription.contains("0.160.1"))
+            }
+        }
     }
     func testMissingExplicitExecutablePreservesChoiceAndFails() async throws {
         do { _ = try await CodexInstallation.qualifiedExecutable(preferred: URL(fileURLWithPath: "/nonexistent/lens/codex")); XCTFail() }

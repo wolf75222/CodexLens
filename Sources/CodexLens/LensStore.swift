@@ -81,6 +81,7 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
                 presentation = nil; timelineProjection = nil; timelineWindow = nil; timelineOrigin = .zero; timelinePosition = nil; timelineFocus = nil
                 timelineZoomLimit = TimelineInteraction.zoomRange.upperBound; timelineZoom = 1
                 trendMetric = .toolCalls; trendCumulative = false; trendSelectedDate = nil; trendValuesVisible = false
+                resetChangesOverview()
             }
             schedulePresentation(coalescingLiveUpdate: oldValue?.root.id == snapshot?.root.id)
             if !query.isEmpty { search() }
@@ -89,6 +90,12 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
     }
     @Published var section: LensSection = .activity
     @Published var activityMode: ActivityInspectionMode = .chronology
+    @Published var changesPresentation: ChangesPresentationMode = .overview
+    @Published var changesOverviewMode: ChangesOverviewMode = .files
+    @Published var changesOverviewEnvironmentID: String?
+    @Published var changesOverviewFileID: String?
+    @Published var changesOverviewDetailMode: ChangesOverviewDetailMode = .recorded
+    @Published var changesKindFilter: ChangeKind? { didSet { if oldValue != changesKindFilter { schedulePresentation() } } }
     @Published var trendMetric: SessionTrendMetric = .toolCalls
     @Published var trendCumulative = false
     @Published var trendSelectedDate: Date?
@@ -322,6 +329,11 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
         let agentFilters: AgentFilters
         let section: LensSection
         let activityMode: ActivityInspectionMode
+        let changesPresentation: ChangesPresentationMode
+        let changesOverviewMode: ChangesOverviewMode
+        let changesOverviewEnvironmentID: String?
+        let changesOverviewFileID: String?
+        let changesOverviewDetailMode: ChangesOverviewDetailMode
         let trendMetric: SessionTrendMetric
         let trendCumulative: Bool
         let trendSelectedDate: Date?
@@ -436,8 +448,8 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
         persistTabs()
     }
     func setNavigationScope(_ value: String) { guard !started, UUID(uuidString: value) != nil else { return }; navigationScope = value }
-    private var currentFilters: EventFilters { EventFilters(agentID: agentFilter, environmentID: environmentFilter, resourceID: resourceFilter, kind: kindFilter, period: period, query: query, sourceMatches: searchMatches, originInstructionID: originInstructionFilter) }
-    private func checkpoint(_ destination: Destination?) -> Checkpoint { Checkpoint(destination: destination, filters: currentFilters, agentFilters: AgentFilters(query: agentQuery, sourceMatches: agentSearchMatches), section: section, activityMode: activityMode, trendMetric: trendMetric, trendCumulative: trendCumulative, trendSelectedDate: trendSelectedDate, trendValuesVisible: trendValuesVisible, timelineWindow: timelineWindow, timelineZoom: timelineZoom, timelineZoomLimit: timelineZoomLimit, timelineOrigin: timelineOrigin, timelinePosition: timelinePosition, livePreview: livePreview, previewOrigin: previewOrigin, activeTab: activeTab, activeTabDestination: tabs.first(where: { $0.id == activeTab })?.destination, tabContentVisible: tabContentVisible, timelineVisible: timelineVisible, liveTimelineVisible: liveTimelineVisible, follow: follow, liveState: liveState, listViewports: eventListViewports) }
+    private var currentFilters: EventFilters { EventFilters(agentID: agentFilter, environmentID: environmentFilter, resourceID: resourceFilter, kind: kindFilter, period: period, query: query, sourceMatches: searchMatches, originInstructionID: originInstructionFilter, changeKind: changesKindFilter) }
+    private func checkpoint(_ destination: Destination?) -> Checkpoint { Checkpoint(destination: destination, filters: currentFilters, agentFilters: AgentFilters(query: agentQuery, sourceMatches: agentSearchMatches), section: section, activityMode: activityMode, changesPresentation: changesPresentation, changesOverviewMode: changesOverviewMode, changesOverviewEnvironmentID: changesOverviewEnvironmentID, changesOverviewFileID: changesOverviewFileID, changesOverviewDetailMode: changesOverviewDetailMode, trendMetric: trendMetric, trendCumulative: trendCumulative, trendSelectedDate: trendSelectedDate, trendValuesVisible: trendValuesVisible, timelineWindow: timelineWindow, timelineZoom: timelineZoom, timelineZoomLimit: timelineZoomLimit, timelineOrigin: timelineOrigin, timelinePosition: timelinePosition, livePreview: livePreview, previewOrigin: previewOrigin, activeTab: activeTab, activeTabDestination: tabs.first(where: { $0.id == activeTab })?.destination, tabContentVisible: tabContentVisible, timelineVisible: timelineVisible, liveTimelineVisible: liveTimelineVisible, follow: follow, liveState: liveState, listViewports: eventListViewports) }
     private func restore(_ entry: Checkpoint) {
         timelineFocus = nil
         activeTab = tabs.contains(where: { $0.id == entry.activeTab }) ? entry.activeTab : nil
@@ -450,6 +462,9 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
         agentQuery = entry.agentFilters.query; agentSearchMatches = entry.agentFilters.sourceMatches
         section = entry.section; activityMode = entry.activityMode; timelineWindow = entry.timelineWindow; timelineZoomLimit = entry.timelineZoomLimit; timelineZoom = entry.timelineZoom; timelineOrigin = entry.timelineOrigin; timelinePosition = entry.timelinePosition; timelineReset &+= 1; livePreview = entry.livePreview; tabContentVisible = entry.tabContentVisible
         trendMetric = entry.trendMetric; trendCumulative = entry.trendCumulative; trendSelectedDate = entry.trendSelectedDate; trendValuesVisible = entry.trendValuesVisible
+        changesPresentation = entry.changesPresentation; changesOverviewMode = entry.changesOverviewMode
+        changesOverviewEnvironmentID = entry.changesOverviewEnvironmentID; changesOverviewFileID = entry.changesOverviewFileID
+        changesOverviewDetailMode = entry.changesOverviewDetailMode; changesKindFilter = entry.filters.changeKind
         timelineVisible = entry.timelineVisible; liveTimelineVisible = entry.liveTimelineVisible
         follow = entry.follow; liveClock.restore(entry.liveState)
         previewOrigin = entry.livePreview == nil ? nil : entry.previewOrigin
@@ -838,6 +853,7 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
             workspaceCheckpoint = nil; readerCheckpoints = [:]; eventListViewports = [:]; eventListRestoration &+= 1
             timelineWindow = nil; timelineZoom = 1; timelineZoomLimit = TimelineInteraction.zoomRange.upperBound; timelineOrigin = .zero; timelinePosition = nil; timelineFocus = nil; timelineReset &+= 1
             trendMetric = .toolCalls; trendCumulative = false; trendSelectedDate = nil; trendValuesVisible = false
+                resetChangesOverview()
             livePreview = nil; previewOrigin = nil; liveClock.reset()
             resetFilters(); originCodeReferences = [:]; agentQuery = ""; follow = true; waitingEvents = 0; waitingUpdates = false; section = .activity
             if liveTimelineVisible { liveClock.resume(at: Date()) }
@@ -877,7 +893,8 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
         if liveTimelineVisible { resumeLiveTimeline(); return }
         if !follow { toggleFollow() }; period = nil; scheduleReturnToPresent()
     }
-    func resetFilters() { query = ""; searchMatches = nil; agentFilter = nil; environmentFilter = nil; resourceFilter = nil; kindFilter = nil; period = nil; originInstructionFilter = nil }
+    private func resetChangesOverview() { changesPresentation = .overview; changesOverviewMode = .files; changesOverviewEnvironmentID = nil; changesOverviewFileID = nil; changesOverviewDetailMode = .recorded; changesKindFilter = nil }
+    func resetFilters() { changesKindFilter = nil; query = ""; searchMatches = nil; agentFilter = nil; environmentFilter = nil; resourceFilter = nil; kindFilter = nil; period = nil; originInstructionFilter = nil }
     func showInstructionActivity(_ id: String) {
         guard presentation?.originInspection.associatedEventIDsByInstruction[id] != nil, event(id) != nil else { return }
         if let current = selection { back.append(checkpoint(current)); if back.count > 64 { back.removeFirst() }; forward = [] }

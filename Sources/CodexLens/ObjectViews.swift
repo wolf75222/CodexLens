@@ -709,25 +709,38 @@ struct PDFPreview: NSViewRepresentable {
     func updateNSView(_ view: PDFView, context: Context) { if view.document !== document { view.document = document } }
 }
 
+enum ChangesPresentationMode: String, Codable { case overview, actions }
+private enum ChangesReviewLayout: String { case files, worktrees, actions }
+
 struct ChangesView: View {
     @Environment(\.lensAccent) private var accent
     @EnvironmentObject var store: LensStore
     @Environment(\.lensWindowContext) private var windowContext
-    @State private var kind: ChangeKind?
-    private var changes: [ChangeRecord] {
-        (store.snapshot?.changes ?? []).filter { c in
-            (kind == nil || c.kind == kind) && (store.agentFilter == nil || c.agentID == store.agentFilter) && (store.environmentFilter == nil || c.environmentID == store.environmentFilter) && store.matches(c.path + c.evidence, eventIDs: [c.eventID]) && (store.period == nil || store.event(c.eventID).map { $0.overlaps(store.period!) } == true)
-        }
+    private var kind: ChangeKind? { store.changesKindFilter }
+    private var changes: [ChangeRecord] { store.presentation?.filteredChanges ?? [] }
+    private var reviewLayout: Binding<ChangesReviewLayout> {
+        Binding(get: {
+            store.changesPresentation == .actions ? .actions : store.changesOverviewMode == .files ? .files : .worktrees
+        }, set: { value in
+            store.changesPresentation = value == .actions ? .actions : .overview
+            if value == .files { store.changesOverviewMode = .files }
+            if value == .worktrees { store.changesOverviewMode = .activity }
+        })
     }
     var body: some View {
         let filtered = changes
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Text(LensUI.count(filtered.count, singular: "modification", plural: "modifications")).font(LensUI.metadata).foregroundStyle(.secondary)
-                if let kind { Text(changeLabel(kind)).font(LensUI.metadata).foregroundStyle(.secondary).lineLimit(1) }
+                Picker(LensL10n.text("Présentation des modifications"), selection: reviewLayout) {
+                    Text(LensL10n.text("Fichiers")).tag(ChangesReviewLayout.files)
+                    Text(LensL10n.text("Worktrees")).tag(ChangesReviewLayout.worktrees)
+                    Text(LensL10n.text("Actions")).tag(ChangesReviewLayout.actions)
+                }.pickerStyle(.segmented).labelsHidden().frame(width: 250)
+                    .accessibilityIdentifier("lens-changes-presentation")
+                if let kind { Text(changeLabel(kind)).font(LensUI.metadata).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: 140, alignment: .leading) }
                 Spacer(minLength: 8)
                 Menu {
-                    Picker(LensL10n.text("Nature de la trace"), selection: $kind) {
+                    Picker(LensL10n.text("Nature de la trace"), selection: $store.changesKindFilter) {
                         Text(LensL10n.text("Toutes les traces")).tag(ChangeKind?.none)
                         Text(LensL10n.text("Patch demandé")).tag(Optional(ChangeKind.requestedPatch))
                         Text(LensL10n.text("Résultat enregistré")).tag(Optional(ChangeKind.recordedResult))
@@ -741,7 +754,10 @@ struct ChangesView: View {
             if store.period != nil, store.isProjecting {
                 HStack { LensProgressIndicator().controlSize(.small); Text(LensL10n.text("Préparation des correspondances avec la période sélectionnée…")).font(LensUI.metadata).foregroundStyle(.secondary); Spacer() }.padding(.horizontal, 14).padding(.bottom, 8).fixedSize(horizontal: false, vertical: true)
             }
-            if case .change(let id) = store.selection, let change = store.snapshot?.changes.first(where: { $0.id == id }) {
+            if store.changesPresentation == .overview, let projection = store.presentation?.changesOverview {
+                ChangesOverviewView(projection: projection, environmentID: $store.changesOverviewEnvironmentID,
+                    fileID: $store.changesOverviewFileID, mode: $store.changesOverviewMode, detailMode: $store.changesOverviewDetailMode, showsModeControls: false)
+            } else if case .change(let id) = store.selection, let change = store.change(id) {
                 if !filtered.contains(where: { $0.id == id }) {
                     Label(LensL10n.text("Cette modification ne correspond pas aux filtres de la liste."), systemImage: LensSymbols.name("line.3.horizontal.decrease"))
                         .font(LensUI.metadata).foregroundStyle(.secondary)
@@ -783,7 +799,7 @@ struct ChangesView: View {
                     let hasChanges = !(store.snapshot?.changes.isEmpty ?? true)
                     LensCollectionEmptyState(title: LensL10n.text(hasChanges ? "Aucune modification correspondante" : "Aucune modification enregistrée"),
                         detail: LensL10n.text(hasChanges ? "Vérifiez la nature de la trace, la recherche et les filtres d’agent, d’environnement ou de période. Ces filtres restent conservés." : "Les données disponibles ne contiennent aucune trace de modification. Le diff Git actuel reste distinct et accessible dans chaque environnement."), symbol: "plus.forwardslash.minus",
-                        onClear: hasChanges && (kind != nil || !store.query.isEmpty) ? { kind = nil; store.query = "" } : nil)
+                        onClear: hasChanges && (kind != nil || !store.query.isEmpty) ? { store.changesKindFilter = nil; store.query = "" } : nil)
                 }
             }
             .task(id: store.selection) {
@@ -806,21 +822,27 @@ struct CurrentDiffView: View {
     @State private var diff: CurrentDiff?
     @State private var issue: String?
     @State private var staged = false
+    @State private var recordedBaseline = false
     @State private var loading = false
     @State private var parsed: RecordedDiffPresentation?
     @State private var loadGeneration: UInt64 = 0
     @State private var loadTask: Task<Void, Never>?
     @State private var loadedIdentity: CurrentDiffReadIdentity?
-    private var readIdentity: CurrentDiffReadIdentity { CurrentDiffReadIdentity(rootID: store.snapshot?.root.id, environmentID: environment.id, staged: staged) }
+    private var readIdentity: CurrentDiffReadIdentity { CurrentDiffReadIdentity(rootID: store.snapshot?.root.id, environmentID: environment.id, staged: staged, recordedReference: recordedBaseline ? environment.recordedRef : nil) }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 if parsed == nil { Text(LensL10n.text("Diff Git actuel")).font(LensUI.metadata.weight(.semibold)) }
                 Spacer(minLength: 8)
                 Button(LensL10n.text("Lire le diff")) { startLoad() }.buttonStyle(LensQuietButtonStyle()).controlSize(.small).disabled(loading)
+                    .accessibilityIdentifier("lens-current-diff-read")
                 Menu {
                     Toggle(LensL10n.text("Index Git"), isOn: $staged)
+                        .disabled(recordedBaseline)
                         .help(LensL10n.text("Comparer les changements préparés pour commit. Choisissez Lire le diff pour charger cette comparaison."))
+                    Toggle(LensL10n.text("Depuis le commit enregistré"), isOn: $recordedBaseline)
+                        .disabled(environment.recordedRef == nil)
+                        .help(LensL10n.text("Comparer le commit enregistré aux fichiers actuels, y compris les changements déjà commités. Le contenu non commité de l’ancienne session reste inconnu."))
                 } label: { LensIconMenuLabel() }
                     .lensIconMenu("Options du diff Git actuel")
                     .accessibilityIdentifier("lens-current-diff-options")
@@ -831,7 +853,7 @@ struct CurrentDiffView: View {
             if let issue { Text(LensL10n.display(issue)).font(.caption).foregroundStyle(LensAppearance.warningText).textSelection(.enabled) }
             if let diff {
                 if let loadedIdentity {
-                    Label(loadedIdentity.staged ? LensL10n.text("Diff chargé : index Git") : LensL10n.text("Diff chargé : fichiers de travail"), systemImage: LensSymbols.name("doc.text")).font(.caption)
+                    Label(loadedIdentity.recordedReference != nil ? LensL10n.text("Diff chargé : commit enregistré → fichiers actuels") : loadedIdentity.staged ? LensL10n.text("Diff chargé : index Git") : LensL10n.text("Diff chargé : fichiers de travail"), systemImage: LensSymbols.name("doc.text")).font(.caption)
                     if loadedIdentity != readIdentity { Text(LensL10n.text("Les paramètres ont changé. Lire le diff pour actualiser ; la comparaison précédente reste affichée.")).font(.caption).foregroundStyle(.secondary) }
                 }
                 if parsed == nil { Text(diff.reference).font(.system(size: 11, design: .monospaced)).textSelection(.enabled) }
@@ -840,11 +862,16 @@ struct CurrentDiffView: View {
                 if let parsed { RecordedDiffView(document: parsed.document).id(parsed.identity).frame(minHeight: 300) }
                 else { PagedTextView(text: diff.text.nonempty ?? LensL10n.text("Aucune différence observée pour cette référence."), identity: environment.id + staged.description).frame(minHeight: 170) }
             }
-        }.onChange(of: readIdentity) { _, _ in invalidateLoad() }.onDisappear { invalidateLoad() }
+        }.onChange(of: readIdentity) { _, _ in invalidateLoad() }
+            .onChange(of: recordedBaseline) { _, enabled in if enabled { staged = false } }
+            .onDisappear { invalidateLoad() }
     }
     private func invalidateLoad() { loadTask?.cancel(); loadGeneration &+= 1; loading = false }
     private func startLoad() {
         guard !loading else { return }
+        guard !recordedBaseline || environment.recordedRef != nil else {
+            issue = LensL10n.text("Le commit enregistré est indisponible pour cet environnement."); return
+        }
         invalidateLoad(); loading = true; issue = nil
         let generation = loadGeneration, identity = readIdentity, capturedEnvironment = environment
         loadTask = Task { await load(environment: capturedEnvironment, identity: identity, generation: generation) }
@@ -853,7 +880,7 @@ struct CurrentDiffView: View {
     private func load(environment: EnvironmentRecord, identity: CurrentDiffReadIdentity, generation: UInt64) async {
         let span = LensSignposts.begin("CurrentDiffLoad"); defer { span.end(); if generation == loadGeneration { loading = false } }
         do {
-            let current = try await store.files.currentDiff(environment: environment, staged: identity.staged)
+            let current = try await store.files.currentDiff(environment: environment, staged: identity.staged, recordedReference: identity.recordedReference)
             guard isCurrent(identity, generation: generation) else { return }
             var document: RecordedDiffPresentation?, parseIssue: String?
             if !current.text.isEmpty {
@@ -875,6 +902,7 @@ struct CurrentDiffReadIdentity: Hashable {
     let rootID: String?
     let environmentID: String
     let staged: Bool
+    var recordedReference: String? = nil
 }
 @ViewBuilder func paneHeader(_ title: String, subtitle: String, showsTitle: Bool = true) -> some View {
     if showsTitle {

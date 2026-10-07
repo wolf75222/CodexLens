@@ -25,7 +25,7 @@ enum LensUI {
 
     /// The supplied words are known UI labels; recorded identifiers and content are never counted here.
     static func count(_ value: Int, singular: String, plural: String) -> String {
-        LensL10n.text("{0} {1}", String(value), LensL10n.display(value == 1 ? singular : plural))
+        LensL10n.text("{0} {1}", value.formatted(.number.locale(Locale(identifier: LensL10n.resolvedLanguage == .fr ? "fr" : "en"))), LensL10n.display(value == 1 ? singular : plural))
     }
 
     /// UI duration formatting follows Lens's selected language, not a C format

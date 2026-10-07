@@ -54,6 +54,23 @@ jobs:
           python3 -m unittest discover -s scripts/tests -v
       - name: Swift tests
         run: bash scripts/test.sh -c release -Xswiftc -g --jobs 3
+      - name: Qualified Codex permission profiles
+        run: |
+          for entry in \
+            "0.159.2:025deffd84cbc99d88ef952e585dc67c7c94e4273f89ba3d45f7e5799743c13c" \
+            "0.160.1:670af2b049d9c95afb74d7da385f30c5033d13a07175001dd8958c51944984d0"; do
+            version="${entry%%:*}"
+            digest="${entry#*:}"
+            directory="$RUNNER_TEMP/codex-policy-$version"
+            mkdir -p "$directory"
+            curl --fail --location --proto '=https' --tlsv1.2 \
+              --output "$directory/codex.tar.gz" \
+              "https://github.com/openai/codex/releases/download/rust-v$version/codex-aarch64-apple-darwin.tar.gz"
+            printf '%s  %s\n' "$digest" "$directory/codex.tar.gz" | shasum -a 256 --check
+            tar -xzf "$directory/codex.tar.gz" -C "$directory"
+            LENS_POLICY_TEST_EXECUTABLE="$directory/codex-aarch64-apple-darwin" \
+              bash scripts/test.sh -c release -Xswiftc -g --skip-build --filter CodexInvestigationPolicyTests
+          done
       - name: Build native app with symbols
         run: bash scripts/build.sh --profile
       - name: Native AppKit icon tests
@@ -121,6 +138,14 @@ jobs:
           for image in "$loading/"*.png; do
             if [ -f "$image" ]; then cp "$image" dist/ui-validation/loading/; fi
           done
+      - name: Changes overview regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          changes="/private/tmp/lens-ci-changes-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$changes" --corpus "$corpus" --entrypoint ChangesOverviewMain.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/changes
+          cp "$changes/native-design-v07-receipt.json" dist/ui-validation/changes/receipt.json
+          cp "$changes/"*.png dist/ui-validation/changes/
       - name: Control color regression
         run: |
           corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
