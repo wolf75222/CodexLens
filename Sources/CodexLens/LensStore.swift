@@ -301,6 +301,9 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
         return investigation.inspectedPiece
     }
     @Published private(set) var catalogLoading = false
+    @Published private(set) var catalogProgress: SessionLoadingProgress?
+    @Published private(set) var openingProgress: SessionLoadingProgress?
+    var catalogLoadingIdentity: UUID { catalogGeneration }
     @Published private(set) var localActionNotice: String?
     private var localNoticeTask: Task<Void, Never>?
     var investigationPreparationTask: Task<Void, Never>?
@@ -542,7 +545,7 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
         projectionTask?.cancel(); projectionTask = nil; projectionNeedsRefresh = false; projectionReaderID = nil
         returnToPresentTask?.cancel(); returnToPresentTask = nil
         selectionGeneration = UUID(); selectionTask?.cancel(); selectionTask = nil
-        busy = false; catalogLoading = false; isProjecting = false; timelinePreparing = false
+        busy = false; catalogLoading = false; openingProgress = nil; catalogProgress = nil; isProjecting = false; timelinePreparing = false
     }
     func stopObserving() {
         persistWindowRoot(); persistTabs()
@@ -718,8 +721,9 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
         guard !isStopped else { return }
         let lifecycle = lifecycleGeneration, generation = UUID()
         catalogTask?.cancel(); catalogGeneration = generation
-        catalogLoading = true
-        defer { if generation == catalogGeneration { catalogLoading = false } }
+        let opening = busy ? openGeneration : nil
+        catalogLoading = true; catalogProgress = .init(stage: .discoveringSessions)
+        defer { if generation == catalogGeneration { catalogLoading = false; catalogProgress = nil } }
         do {
             if catalogueLease == nil {
                 let lease = try await readerPool.acquire(home: sourceHome, cacheDirectory: cacheDirectory)
@@ -727,7 +731,13 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
                 catalogueLease = lease; fallbackEngine = nil
             }
             guard let lease = catalogueLease else { return }
-            let task = Task { try await lease.reader.catalog() }; catalogTask = task
+            let task = Task { try await lease.reader.catalog(progress: { [weak self] progress in
+                Task { @MainActor [weak self] in
+                    guard let self, !self.isStopped, self.catalogLoading, self.lifecycleGeneration == lifecycle, self.catalogGeneration == generation else { return }
+                    self.catalogProgress = progress
+                    if let opening, self.busy, self.openGeneration == opening { self.openingProgress = progress }
+                }
+            }) }; catalogTask = task
             let next = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
             guard !Task.isCancelled, !isStopped, lifecycle == lifecycleGeneration, generation == catalogGeneration else { return }
             let publishSpan = LensSignposts.begin("CatalogPublish")
@@ -752,7 +762,7 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
     func cancelSessionOpening() {
         openGeneration = UUID(); loadTask?.cancel(); loadTask = nil
         if let pendingReaderLease { releaseReader(pendingReaderLease); self.pendingReaderLease = nil }
-        busy = false; error = nil
+        busy = false; error = nil; openingProgress = nil
         if !query.isEmpty, searchMatches == nil { search() }
         if !agentQuery.isEmpty, agentSearchMatches == nil { searchAgents() }
     }
@@ -774,7 +784,7 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
         let lifecycle = lifecycleGeneration, previousRoot = snapshot?.root.id, openingHome = sourceHome; openGeneration = generation
         searchGeneration = UUID(); searchTask?.cancel(); returnToPresentTask?.cancel()
         agentSearchGeneration = UUID(); agentSearchTask?.cancel(); agentSearchTask = nil; agentSearchPending = false
-        busy = true; error = nil
+        busy = true; error = nil; openingProgress = .init(stage: .discoveringSessions)
         loadTask?.cancel()
         if let pendingReaderLease { releaseReader(pendingReaderLease); self.pendingReaderLease = nil }
         var candidate: SessionReaderLease?
@@ -784,7 +794,7 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
                 releaseReader(candidate)
             }
             if !isStopped, lifecycle == lifecycleGeneration, generation == openGeneration {
-                busy = false; loadTask = nil
+                busy = false; loadTask = nil; openingProgress = nil
                 if snapshot?.root.id == previousRoot, !query.isEmpty, searchMatches == nil { search() }
                 if snapshot?.root.id == previousRoot, !agentQuery.isEmpty, agentSearchMatches == nil { searchAgents() }
             }
@@ -798,9 +808,16 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
             candidate = lease
             guard !Task.isCancelled, !isStopped, lifecycle == lifecycleGeneration, generation == openGeneration else { await lease.release(); return }
             pendingReaderLease = lease
-            let task = Task { try await lease.reader.load() }; loadTask = task
+            let task = Task { try await lease.reader.load(progress: { [weak self] progress in
+                Task { @MainActor [weak self] in
+                    guard let self, !self.isStopped, self.busy, self.loadTask != nil, self.lifecycleGeneration == lifecycle, self.openGeneration == generation else { return }
+                    self.openingProgress = progress
+                }
+            }) }; loadTask = task
             let publication = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
             guard !Task.isCancelled, !isStopped, lifecycle == lifecycleGeneration, generation == openGeneration else { return }
+            loadTask = nil
+            openingProgress = .init(stage: .restoringWorkspace)
             if let previousRoot = snapshot?.root.id, previousRoot != publication.snapshot.root.id {
                 await investigation.flushAndStop()
                 guard !Task.isCancelled, !isStopped, lifecycle == lifecycleGeneration, generation == openGeneration else { return }

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import LensCore
 
 private struct LensReduceMotionOverrideKey: EnvironmentKey {
     static let defaultValue: Bool? = nil
@@ -74,14 +75,15 @@ struct LensProgressIndicator: View {
     }
 }
 
-/// A content-area loading state. Slow operations use a native indeterminate bar;
-/// no elapsed time is converted into an invented completion percentage.
+/// Measured stages use a native determinate bar immediately. Unknown totals use
+/// an indeterminate indicator; elapsed time never invents a completion fraction.
 struct LensLoadingState: View {
     let title: String
     var cancelTitle: String? = nil
     var onCancel: (() -> Void)? = nil
     var longRunningDelay: Duration = .milliseconds(1500)
     var operationID: UUID? = nil
+    var progress: SessionLoadingProgress? = nil
     @State private var showsProgressBar = false
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.lensReduceMotionOverride) private var override
@@ -89,23 +91,36 @@ struct LensLoadingState: View {
     var body: some View {
         VStack(spacing: 12) {
             Group {
-                if showsProgressBar {
-                    LensLoadingBar(animationEnabled: !(override ?? systemReduceMotion))
+                if showsProgressBar || progress?.fraction != nil {
+                    LensLoadingBar(animationEnabled: !(override ?? systemReduceMotion), fraction: progress?.fraction)
+                        // A new measured stage/file resets AppKit's retained fill.
+                        .id(LoadingBarIdentity(stage: progress?.stage, fileName: progress?.fileName))
                         // The small AppKit control reserves 12 pt for its thin track.
                         .frame(height: 12)
                         .accessibilityIdentifier("lens-progress-long-running")
-                        .accessibilityLabel(title)
-                        .accessibilityValue(LensL10n.text("En cours"))
+                        .accessibilityLabel(progress?.stageTitle ?? title)
+                        .accessibilityValue(progress?.counterTitle ?? LensL10n.text("En cours"))
                 } else {
                     LensProgressIndicator(accessibilityLabel: title)
                 }
             }
             .frame(maxWidth: 240)
             .frame(height: 20)
-            Text(title).font(.callout).foregroundStyle(.secondary)
+            Text(progress?.stageTitle ?? title).font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 420)
+            if let progress {
+                if let counter = progress.counterTitle {
+                    Text(counter).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                        .accessibilityIdentifier("lens-progress-counter")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let fileName = progress.fileName {
+                    Text(fileName).font(.caption2).foregroundStyle(.tertiary)
+                        .lineLimit(1).truncationMode(.middle).frame(maxWidth: 320).help(fileName)
+                }
+            }
             if let cancelTitle, let onCancel {
                 Button(cancelTitle, action: onCancel).controlSize(.small)
             }
@@ -130,11 +145,17 @@ struct LensLoadingState: View {
     }
 }
 
+private struct LoadingBarIdentity: Hashable {
+    let stage: SessionLoadingProgress.Stage?
+    let fileName: String?
+}
+
 /// Native animation stays in AppKit, with no repeating SwiftUI timer or extra I/O.
 /// Keeping an indeterminate control stopped also respects Reduce Motion without
 /// falsely presenting a measured fraction of completion.
 private struct LensLoadingBar: NSViewRepresentable {
     let animationEnabled: Bool
+    let fraction: Double?
 
     func makeNSView(context: Context) -> LensLoadingBarIndicator {
         let indicator = LensLoadingBarIndicator()
@@ -147,11 +168,61 @@ private struct LensLoadingBar: NSViewRepresentable {
     }
 
     func updateNSView(_ indicator: LensLoadingBarIndicator, context: Context) {
-        indicator.setAnimationEnabled(animationEnabled)
+        indicator.isIndeterminate = fraction == nil
+        indicator.minValue = 0; indicator.maxValue = 1
+        if let fraction { indicator.doubleValue = fraction }
+        indicator.setAnimationEnabled(animationEnabled && fraction == nil)
     }
 
     static func dismantleNSView(_ indicator: LensLoadingBarIndicator, coordinator: ()) {
         indicator.setAnimationEnabled(false)
+    }
+}
+
+/// A refresh keeps valid rows available while reporting its measured work.
+struct LensSessionProgressLine: View {
+    let progress: SessionLoadingProgress
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        HStack(spacing: 10) {
+            LensLoadingBar(animationEnabled: !reduceMotion, fraction: progress.fraction)
+                .id(LoadingBarIdentity(stage: progress.stage, fileName: progress.fileName))
+                .frame(width: 120, height: 12)
+                .accessibilityLabel(progress.stageTitle)
+                .accessibilityValue(progress.counterTitle ?? LensL10n.text("En cours"))
+            Text(progress.counterTitle ?? progress.stageTitle).font(.caption).monospacedDigit()
+                .foregroundStyle(.secondary).lineLimit(1)
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+extension SessionLoadingProgress {
+    var stageTitle: String {
+        switch stage {
+        case .discoveringSessions: LensL10n.text("Recherche des sessions…")
+        case .readingMetadata: LensL10n.text("Lecture du catalogue…")
+        case .restoringIndex: LensL10n.text("Chargement de l’index…")
+        case .readingHistory: LensL10n.text("Lecture de l’historique…")
+        case .organizingEvents: LensL10n.text("Organisation des événements…")
+        case .linkingEvents: LensL10n.text("Association des actions…")
+        case .savingIndex: LensL10n.text("Enregistrement de l’index…")
+        case .restoringWorkspace: LensL10n.text("Restauration de la session…")
+        }
+    }
+
+    var counterTitle: String? {
+        switch stage {
+        case .discoveringSessions:
+            completed > 0 ? LensL10n.text("{0} fichiers trouvés", completed.formatted()) : nil
+        case .readingMetadata:
+            total.map { LensL10n.text("{0} / {1} fichiers traités", completed.formatted(), $0.formatted()) }
+        case .readingHistory:
+            total.map { LensL10n.text("{0} / {1} · fichier en cours", ByteCountFormatter.string(fromByteCount: completed, countStyle: .file), ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)) }
+        case .organizingEvents:
+            total.map { LensL10n.text("{0} / {1} événements traités", completed.formatted(), $0.formatted()) }
+        default: nil
+        }
     }
 }
 

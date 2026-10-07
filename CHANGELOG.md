@@ -6,6 +6,12 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+## [0.42.6] - 2026-10-07
+
+### Changed
+
+- Connect session loading indicators to measured work: catalog files processed, current journal byte extent and events organized. Show named stages for discovery, index restoration, linking and saving when totals are unknown. Refresh keeps existing rows available; cancellation and shared-reader isolation remain intact. Progress describes the current stage, not an estimated whole-operation percentage.
+
 ## [0.42.5] - 2026-10-07
 
 ### Changed

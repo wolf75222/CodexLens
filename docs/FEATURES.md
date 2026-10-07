@@ -69,7 +69,7 @@ Entry points: **File → Open Session…**, the toolbar's session action, **Comm
 | Source location | The picker displays the Codex directory being consulted | “My Codex sessions” appears when this differs from the personal source |
 | Refresh | Reload the available session catalogue | No Codex session is started |
 | Row context menu | Open session, copy its ID, or copy its initial directory | An absent initial directory cannot be copied as if known |
-| Loading and cancellation | A centered state covers the catalogue during opening; Cancel Opening remains available | Cancelling does not discard the previous successfully opened session |
+| Loading and cancellation | Named stages and a measured native bar show catalog files processed, bytes in the current history file and events organized; Cancel Opening remains available | The bar measures the current stage. Discovery, cache restoration, linking and saving use an indeterminate indicator when no total is available. Refresh preserves existing rows; cancellation retains the previously opened session |
 | Opening failure | Show the error while preserving the existing session | An ambiguous session-to-thread mapping requires the exact thread ID |
 
 The catalogue displays a session's title, identifier, date, and initial directory when recorded. Long paths and titles retain full text through tooltips or copy actions.

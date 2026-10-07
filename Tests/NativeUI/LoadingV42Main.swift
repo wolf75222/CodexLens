@@ -197,6 +197,34 @@ import LensCore
             && !descendants(transition).contains { $0 is LensLoadingBarIndicator })
         state.visible = false; await settle(transition)
 
+        // Measured fractions are injected into the product component; engine
+        // measurements and shared-reader cancellation have separate Core tests.
+        state.delay = .seconds(10); state.reducedMotion = false
+        state.progress = .init(stage: .readingMetadata, completed: 25, total: 100)
+        state.visible = true; await settle(transition)
+        let measuredBar = try require(descendants(transition).compactMap { $0 as? LensLoadingBarIndicator }.first, "measured bar")
+        check("measured-progress-visible-without-delay", !measuredBar.isIndeterminate && abs(measuredBar.doubleValue - 0.25) < 0.001 && !measuredBar.animationEnabled)
+        renders.append(try capture(transition, name: "measured-catalog-quarter", output: output))
+        state.progress = .init(stage: .readingMetadata, completed: 75, total: 100)
+        await settle(transition)
+        check("measured-progress-follows-work-keeps-control", descendants(transition).contains { $0 === measuredBar } && abs(measuredBar.doubleValue - 0.75) < 0.001)
+        state.reducedMotion = true
+        state.progress = .init(stage: .readingHistory, completed: 524288, total: 1048576, fileName: "fixture-history.jsonl")
+        await settle(transition)
+        let historyBar = try require(descendants(transition).compactMap { $0 as? LensLoadingBarIndicator }.first, "history bar")
+        check("stage-change-resets-native-fill", historyBar !== measuredBar)
+        check("reduce-motion-retains-measured-value", !historyBar.isIndeterminate && abs(historyBar.doubleValue - 0.5) < 0.001 && !historyBar.animationEnabled)
+        renders.append(try capture(transition, name: "measured-history-half-reduced-motion", output: output))
+        state.progress = .init(stage: .savingIndex)
+        state.delay = .zero
+        await settle(transition)
+        let unknownBar = try require(descendants(transition).compactMap { $0 as? LensLoadingBarIndicator }.first, "unknown stage bar")
+        check("unknown-stage-clears-measured-fraction", unknownBar.isIndeterminate && !unknownBar.animationEnabled)
+        let cancelsBefore = state.cancelCount
+        try await press(window, label: state.cancelTitle)
+        try await wait("measured-cancel-hides-loader") { !state.visible }
+        check("measured-progress-cancel-remains-accessible", state.cancelCount == cancelsBefore + 1 && !state.visible)
+
         let receipt: [String: Any] = ["checks": checks, "observations": observations, "renders": renders, "completed": true,
             "allExecutedChecksPassed": checks.allSatisfy { $0["passed"] as? Bool == true },
             "scope": "Actual product SessionPickerView and loading component in a native fixture; production @main replaced.",
@@ -379,6 +407,7 @@ import LensCore
     var visible = true
     var reducedMotion = false
     var operationID = UUID()
+    var progress: SessionLoadingProgress?
     var layoutRevision = 0
     var cancelCount = 0
     var delay: Duration
@@ -394,7 +423,7 @@ import LensCore
             if state.visible {
                 LensLoadingState(title: state.title, cancelTitle: state.cancelTitle,
                     onCancel: { state.cancelCount += 1; state.visible = false },
-                    longRunningDelay: state.delay, operationID: state.operationID)
+                    longRunningDelay: state.delay, operationID: state.operationID, progress: state.progress)
                     .padding(.horizontal, CGFloat(state.layoutRevision % 2))
             } else { Color.clear }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)

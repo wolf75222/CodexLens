@@ -482,7 +482,7 @@ struct MainView: View {
             if store.busy {
                 LensLoadingState(title: LensL10n.text("Lecture des traces de la session…"),
                     cancelTitle: LensL10n.text("Annuler l’ouverture"), onCancel: { store.cancelSessionOpening() },
-                    operationID: store.openingIdentity)
+                    operationID: store.openingIdentity, progress: store.openingProgress)
             } else {
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 7) {
@@ -576,7 +576,6 @@ struct SessionPickerView: View {
             }
             HStack {
                 Toggle(LensL10n.text("Inclure les sous-agents et reprises"), isOn: $showDescendants).help(LensL10n.text("Ajouter les historiques descendants au catalogue ; cela ne change pas leurs liens enregistrés"))
-                if store.catalogLoading { LensProgressIndicator(LensL10n.text("Actualisation…")).controlSize(.mini) }
                 Spacer()
             }.font(.caption)
             HStack(spacing: 8) {
@@ -593,6 +592,9 @@ struct SessionPickerView: View {
                 }
             }.font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("lens-session-source")
             if let error = store.error { Label(LensL10n.display(error), systemImage: LensSymbols.name("exclamationmark.triangle")).foregroundStyle(LensAppearance.errorText).textSelection(.enabled) }
+            if store.catalogLoading, !store.busy, !choices.isEmpty, let progress = store.catalogProgress {
+                LensSessionProgressLine(progress: progress)
+            }
             List(choices, selection: $selectedSessionID) { session in
                 Button {
                     selectedSessionID = session.id
@@ -629,10 +631,10 @@ struct SessionPickerView: View {
                 if store.busy {
                     LensLoadingState(title: LensL10n.text("Lecture des traces…"),
                         cancelTitle: LensL10n.text("Annuler l’ouverture"), onCancel: { store.cancelSessionOpening() },
-                        operationID: store.openingIdentity)
+                        operationID: store.openingIdentity, progress: store.openingProgress)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if choices.isEmpty {
-                    if store.catalogLoading { LensLoadingState(title: LensL10n.text("Recherche des sessions locales…")) }
+                    if store.catalogLoading { LensLoadingState(title: LensL10n.text("Recherche des sessions locales…"), operationID: store.catalogLoadingIdentity, progress: store.catalogProgress) }
                     else { Text(store.catalog.isEmpty ? LensL10n.text("Aucune session locale accessible. Collez un ID complet ou actualisez la liste.") : LensL10n.text("Aucune session ne correspond. Essayez un autre terme ou collez un ID complet.")).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(24).allowsHitTesting(false) }
                 }
             }

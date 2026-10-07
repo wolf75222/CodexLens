@@ -43,8 +43,10 @@ public actor SessionEngine {
         self.investigationConnectionProbeRoot = CodexInvestigationRegistry.workspaceRoot(directory: investigationRegistryDirectory).deletingLastPathComponent().appendingPathComponent("ConnectionProbe", isDirectory: true).path
     }
 
-    public func catalog() async throws -> [SessionSummary] {
+    public func catalog(progress: SessionProgressHandler? = nil) async throws -> [SessionSummary] {
         let span = LensSignposts.begin("SessionCatalog"); defer { span.end() }
+        let reporter = SessionProgressReporter(progress)
+        reporter.send(.init(stage: .discoveringSessions))
         relationSources = [:]
         try Task.checkCancellation()
         catalogIssues = []
@@ -88,16 +90,28 @@ public actor SessionEngine {
         }
         databaseSpan.end()
         let enumerationSpan = LensSignposts.begin("CatalogEnumeration")
+        var discoveredFiles: Int64 = 0
         for directory in ["sessions", "archived_sessions"] {
             let url = home.appendingPathComponent(directory)
-            candidatePaths.formUnion(Self.rolloutPaths(in: url))
+            candidatePaths.formUnion(try Self.rolloutPaths(in: url, onFile: {
+                try Task.checkCancellation()
+                discoveredFiles += 1
+                reporter.send(.init(stage: .discoveringSessions, completed: discoveredFiles))
+            }))
         }
         enumerationSpan.end()
+        var processedFiles: Int64 = 0
+        let totalFiles = Int64(candidatePaths.count)
+        reporter.send(.init(stage: .readingMetadata, total: totalFiles))
         catalogHeaderCache.prepare(paths: candidatePaths)
         let headerSpan = LensSignposts.begin("CatalogHeaders")
         // First record is the file owner. Later copied session_meta records are inherited context.
         for path in candidatePaths.sorted() {
             try Task.checkCancellation()
+            defer {
+                processedFiles += 1
+                reporter.send(.init(stage: .readingMetadata, completed: processedFiles, total: totalFiles))
+            }
             guard FileManager.default.fileExists(atPath: path) else { continue }
             do {
                 let stamp = try SessionCatalogStamp.read(path: path)
@@ -167,10 +181,10 @@ public actor SessionEngine {
         return found.values.sorted { $0.modifiedAt > $1.modifiedAt }
     }
 
-    public func open(id: String) async throws -> SessionSnapshot {
+    public func open(id: String, progress: SessionProgressHandler? = nil) async throws -> SessionSnapshot {
         let span = LensSignposts.begin("SessionLoad"); defer { span.end() }
         try Task.checkCancellation()
-        _ = try await catalog()
+        _ = try await catalog(progress: progress)
         let requestedID = SessionPickerTarget.sessionID(from: id) ?? id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !excludedInvestigationIDs.contains(where: { SessionPickerTarget.sameIdentity($0, requestedID) }) else { throw LensError.unavailable("Ce thread appartient à une investigation Lens ; il est exclu des sources observées.") }
         var cleanID = summaries[requestedID] != nil ? requestedID : summaries.keys.first(where: { SessionPickerTarget.sameIdentity($0, requestedID) }) ?? requestedID
@@ -185,7 +199,7 @@ public actor SessionEngine {
         let previousLoaded = loadedCache, previousCollectionSignature = lastCollectionSignature, previousSelectedSignature = lastSelectedSignature
         if selectedID != cleanID { files = [:]; eventsByID = [:]; fingerprintsBySource = [:]; loadedCache = false }
         selectedID = cleanID
-        do { return try collect() }
+        do { return try collect(progress: progress) }
         catch {
             // A cancelled/failed load must not silently change the session subsequently polled by this engine.
             selectedID = previousID; files = previousFiles; eventsByID = previousEvents; fingerprintsBySource = previousFingerprints
@@ -295,14 +309,18 @@ public actor SessionEngine {
         return Set(ids)
     }
 
-    private func collect() throws -> SessionSnapshot {
+    private func collect(progress: SessionProgressHandler? = nil) throws -> SessionSnapshot {
+        let reporter = SessionProgressReporter(progress)
         try Task.checkCancellation()
         guard let selectedID, let root = summaries[selectedID] else { throw LensError.unavailable("Aucune session sélectionnée.") }
         guard !excludedInvestigationIDs.contains(selectedID), !isInvestigationWorkspace(root.cwd) else { throw LensError.unavailable("Chat d’enquête exclu de l’historique de session.") }
         let collectionSignature = Self.sourceSignature(home: home)
         let selectedCollectionSignature = selectedSignature(root: selectedID)
         var memberIDs = descendants(of: selectedID)
-        if !loadedCache { restore(root: selectedID); loadedCache = true }
+        if !loadedCache {
+            reporter.send(.init(stage: .restoringIndex))
+            restore(root: selectedID); loadedCache = true
+        }
         var readOwners = Set<String>()
         while !memberIDs.isSubset(of: readOwners) {
             try Task.checkCancellation()
@@ -310,7 +328,7 @@ public actor SessionEngine {
                 readOwners.insert(id)
                 guard let summary = summaries[id] else { continue }
                 for path in summary.paths where FileManager.default.fileExists(atPath: path) {
-                    do { try update(path: path, owner: id) }
+                    do { try update(path: path, owner: id, reporter: reporter) }
                     catch is CancellationError { throw CancellationError() }
                     catch { var index = files[path] ?? FileIndex(owner: id); index.issues.append(CoverageIssue("lecture", error.localizedDescription, source: path)); files[path] = index }
                 }
@@ -325,6 +343,7 @@ public actor SessionEngine {
             coverage += file.issues
             if file.pendingBytes > 0 { coverage.append(CoverageIssue("ligne partielle", "\(file.pendingBytes) octets en fin de journal attendent une ligne JSON complète ; la collecte reprendra sans doublon.", source: path)) }
         }
+        reporter.send(.init(stage: .organizingEvents, total: Int64(all.count)))
         all.sort { $0.event.timestamp == $1.event.timestamp ? ($0.event.agentID == $1.event.agentID ? $0.event.source.offset < $1.event.source.offset : $0.event.agentID < $1.event.agentID) : $0.event.timestamp < $1.event.timestamp }
         var events: [LensEvent] = []
         var recordForID: [String: IndexedEvent] = [:]
@@ -332,7 +351,10 @@ public actor SessionEngine {
         var itemIDs: [String: Int] = [:]
         // Stable protocol IDs deduplicate copied/supplementary records; equal text alone never does.
         for (recordIndex, record) in all.enumerated() {
-            if recordIndex.isMultiple(of: 1024) { try Task.checkCancellation() }
+            if recordIndex.isMultiple(of: 1024) {
+                try Task.checkCancellation()
+                reporter.send(.init(stage: .organizingEvents, completed: Int64(recordIndex), total: Int64(all.count)))
+            }
             let event = record.event
             let identity = record.protocolID.map { event.agentID + ":" + $0 }
             if let identity, let existing = itemIDs[identity] {
@@ -392,6 +414,8 @@ public actor SessionEngine {
         }
         events.sort { $0.timestamp == $1.timestamp ? ($0.agentID == $1.agentID ? $0.source.offset < $1.source.offset : $0.agentID < $1.agentID) : $0.timestamp < $1.timestamp }
         var calls: [String: Int] = [:]
+        reporter.send(.init(stage: .organizingEvents, completed: Int64(all.count), total: Int64(all.count)))
+        reporter.send(.init(stage: .linkingEvents))
         for i in events.indices where events[i].kind == .toolCall || events[i].kind == .delegation || events[i].kind == .wait {
             if let callID = events[i].callID { calls[events[i].agentID + ":" + callID] = i }
         }
@@ -480,6 +504,7 @@ public actor SessionEngine {
         coverage.append(CoverageIssue("historique", "L’explorateur affiche les fichiers actuels. Un instantané Git n’est proposé que si le commit enregistré et son fichier sont vérifiés. L’état non commité à l’époque reste inconnu. Les sorties et patches restent accessibles dans les traces ; les périodes sans traces ne sont pas reconstituées."))
         var snapshot = SessionSnapshot(root: root, agents: agents, events: events, environments: environments.values.sorted { $0.path < $1.path }, resources: resources.values.sorted { $0.location < $1.location }, changes: changes, coverage: Array(Set(coverage)).sorted { $0.category < $1.category }, collectedAt: Date())
         try Task.checkCancellation()
+        reporter.send(.init(stage: .savingIndex))
         if let cacheIssue = persist(root: selectedID) { snapshot.coverage.append(cacheIssue) }
         try Task.checkCancellation()
         eventsByID = Dictionary(events.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -522,7 +547,7 @@ public actor SessionEngine {
         return [investigationWorkspaceRoot, investigationConnectionProbeRoot].contains { path == $0 || path.hasPrefix($0 + "/") }
     }
 
-    private func update(path: String, owner: String) throws {
+    private func update(path: String, owner: String, reporter: SessionProgressReporter? = nil) throws {
         try LocalContentGuard.requireResident(path: path)
         let attrs = try FileManager.default.attributesOfItem(atPath: path)
         let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
@@ -535,6 +560,11 @@ public actor SessionEngine {
             file.issues.append(CoverageIssue("rotation/troncature", "Le journal a changé d'identité ou raccourci. Index relu depuis le début ; anciennes données non vérifiables remplacées.", source: path))
         }
         file.inode = inode
+        let fileName = URL(fileURLWithPath: path).lastPathComponent
+        func report(_ offset: UInt64) {
+            reporter?.send(.init(stage: .readingHistory, completed: Int64(clamping: offset), total: Int64(clamping: max(size, offset)), fileName: fileName))
+        }
+        report(file.offset)
         guard size > file.offset else { file.pendingBytes = 0; files[path] = file; return }
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path)); defer { try? handle.close() }
         try handle.seek(toOffset: file.offset)
@@ -556,6 +586,7 @@ public actor SessionEngine {
                 file.offset = cursor
             }
             if buffer.count > maximumLineBytes { dropping = true; cursor += UInt64(buffer.count); buffer.removeAll(keepingCapacity: false) }
+            report(readEnd)
         }
         // Active rollouts may grow after attributesOfItem. Count bytes actually read,
         // never subtract a stale pre-read size from a later (larger) parsed offset.
@@ -944,9 +975,13 @@ public actor SessionEngine {
         }
         return ((try JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:], SourceRef(path: path, offset: 0, length: data.count, line: 1, sha256: Self.digest(data)))
     }
-    private static func rolloutPaths(in directory: URL) -> Set<String> {
+    private static func rolloutPaths(in directory: URL, onFile: (() throws -> Void)? = nil) rethrows -> Set<String> {
         var paths = Set<String>()
-        if let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) { for case let file as URL in enumerator where file.pathExtension == "jsonl" { paths.insert(file.path) } }
+        if let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
+            for case let file as URL in enumerator where file.pathExtension == "jsonl" {
+                paths.insert(file.path); try onFile?()
+            }
+        }
         return paths
     }
     private static func sourceSignature(home: URL) -> String {

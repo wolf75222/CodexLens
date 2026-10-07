@@ -17,6 +17,10 @@ public actor SessionReader {
     private var catalogFlight: Flight?
     private var retiringCatalogFlights: [UUID: Task<Void, Never>] = [:]
     private var catalogWaiters: [UUID: CheckedContinuation<[SessionSummary], Error>] = [:]
+    private var catalogObservers: [UUID: SessionProgressHandler] = [:]
+    private var loadObservers: [UUID: SessionProgressHandler] = [:]
+    private var catalogProgress: SessionLoadingProgress?
+    private var loadProgress: SessionLoadingProgress?
     private var closed = false
     private var closingTask: Task<Void, Never>?
     internal private(set) var startedCollections = 0
@@ -24,7 +28,7 @@ public actor SessionReader {
 
     fileprivate init(engine: SessionEngine, rootID: String?) { self.engine = engine; self.rootID = rootID }
 
-    public func catalog() async throws -> [SessionSummary] {
+    public func catalog(progress: SessionProgressHandler? = nil) async throws -> [SessionSummary] {
         try Task.checkCancellation()
         guard !closed else { throw CancellationError() }
         let waiterID = UUID()
@@ -32,6 +36,8 @@ public actor SessionReader {
             try await withCheckedThrowingContinuation { continuation in
                 guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
                 catalogWaiters[waiterID] = continuation
+                catalogObservers[waiterID] = progress
+                if let catalogProgress { progress?(catalogProgress) }
                 if catalogFlight == nil { beginCatalog() }
             }
         }, onCancel: { Task { await self.cancelCatalogWaiter(waiterID) } })
@@ -42,9 +48,17 @@ public actor SessionReader {
 
     private func beginCatalog() {
         let engine = self.engine, id = UUID()
+        let (updates, continuation) = AsyncStream<SessionLoadingProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let observer = Task { [weak self] in
+            for await progress in updates { await self?.publishProgress(progress, id: id, catalog: true) }
+        }
         let task = Task { [weak self] in
-            do { let result = try await engine.catalog(); await self?.finishCatalog(id: id, result: .success(result)) }
-            catch { await self?.finishCatalog(id: id, result: .failure(error)) }
+            let result: Result<[SessionSummary], Error>
+            do { result = .success(try await engine.catalog(progress: { continuation.yield($0) })) }
+            catch { result = .failure(error) }
+            continuation.finish()
+            await observer.value
+            await self?.finishCatalog(id: id, result: result)
         }
         catalogFlight = Flight(id: id, task: task); startedCatalogs += 1
     }
@@ -52,20 +66,23 @@ public actor SessionReader {
         retiringCatalogFlights[id] = nil
         guard !closed, catalogFlight?.id == id else { return }
         catalogFlight = nil
+        catalogObservers = [:]; catalogProgress = nil
         let pending = catalogWaiters; catalogWaiters = [:]
         for continuation in pending.values { continuation.resume(with: result) }
     }
     private func cancelCatalogWaiter(_ id: UUID) {
+        catalogObservers[id] = nil
         catalogWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
         if catalogWaiters.isEmpty, let flight = catalogFlight {
             flight.task.cancel(); retiringCatalogFlights[flight.id] = flight.task; catalogFlight = nil
+            catalogProgress = nil
         }
     }
 
-    public func load() async throws -> SessionReaderUpdate { try await collect(refresh: false) }
+    public func load(progress: SessionProgressHandler? = nil) async throws -> SessionReaderUpdate { try await collect(refresh: false, progress: progress) }
     public func refresh() async throws -> SessionReaderUpdate { try await collect(refresh: true) }
 
-    private func collect(refresh: Bool) async throws -> SessionReaderUpdate {
+    private func collect(refresh: Bool, progress: SessionProgressHandler? = nil) async throws -> SessionReaderUpdate {
         try Task.checkCancellation()
         guard !closed, let rootID else { throw LensError.unavailable("Lecteur de session fermé ou réservé au catalogue.") }
         if !refresh, let latest { return latest }
@@ -74,6 +91,8 @@ public actor SessionReader {
             try await withCheckedThrowingContinuation { continuation in
                 guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
                 waiters[waiterID] = continuation
+                loadObservers[waiterID] = progress
+                if let loadProgress { progress?(loadProgress) }
                 if flight == nil { beginCollection(rootID: rootID) }
             }
         }, onCancel: { Task { await self.cancelWaiter(waiterID) } })
@@ -81,13 +100,20 @@ public actor SessionReader {
 
     private func beginCollection(rootID: String) {
         let engine = self.engine, initial = latest == nil, id = UUID()
+        let (updates, continuation) = AsyncStream<SessionLoadingProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let observer = Task { [weak self] in
+            for await progress in updates { await self?.publishProgress(progress, id: id, catalog: false) }
+        }
         // The task belongs to the reader. A cancelled waiter is resumed immediately,
         // while a peer's in-flight collection remains alive until its last lease is released.
         let task = Task { [weak self] in
+            let result: Result<SessionSnapshot?, Error>
             do {
-                let result = initial ? try await engine.open(id: rootID) : try await engine.refresh()
-                await self?.finishCollection(id: id, result: .success(result))
-            } catch { await self?.finishCollection(id: id, result: .failure(error)) }
+                result = .success(initial ? try await engine.open(id: rootID, progress: { continuation.yield($0) }) : try await engine.refresh())
+            } catch { result = .failure(error) }
+            continuation.finish()
+            await observer.value
+            await self?.finishCollection(id: id, result: result)
         }
         flight = Flight(id: id, task: task); startedCollections += 1
     }
@@ -95,6 +121,7 @@ public actor SessionReader {
     private func finishCollection(id: UUID, result: Result<SessionSnapshot?, Error>) {
         guard !closed, flight?.id == id else { return }
         flight = nil
+        loadObservers = [:]; loadProgress = nil
         let publication: Result<SessionReaderUpdate, Error>
         switch result {
         case .success(let snapshot):
@@ -106,7 +133,18 @@ public actor SessionReader {
         for continuation in pending.values { continuation.resume(with: publication) }
     }
 
-    private func cancelWaiter(_ id: UUID) { waiters.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
+    private func cancelWaiter(_ id: UUID) { loadObservers[id] = nil; waiters.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
+
+    private func publishProgress(_ progress: SessionLoadingProgress, id: UUID, catalog: Bool) {
+        guard !closed, (catalog ? catalogFlight?.id : flight?.id) == id else { return }
+        if catalog {
+            catalogProgress = progress
+            for observer in catalogObservers.values { observer(progress) }
+        } else {
+            loadProgress = progress
+            for observer in loadObservers.values { observer(progress) }
+        }
+    }
 
     fileprivate func close() async {
         if closed { await closingTask?.value; return }
@@ -115,6 +153,7 @@ public actor SessionReader {
         for task in tasks { task.cancel() }
         closingTask = Task { for task in tasks { await task.value } }
         flight = nil; catalogFlight = nil; retiringCatalogFlights = [:]; latest = nil
+        loadObservers = [:]; catalogObservers = [:]; loadProgress = nil; catalogProgress = nil
         let pending = waiters; waiters = [:]
         for continuation in pending.values { continuation.resume(throwing: CancellationError()) }
         let pendingCatalogs = catalogWaiters; catalogWaiters = [:]
