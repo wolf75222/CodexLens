@@ -165,6 +165,58 @@ import SwiftUI
         try await wait("row-information-target") { store.agentMetadataRequest?.agentID == custom.id }
         check("native-row-info-action-targets-custom-agent", store.selection == .agent(custom.id) && store.agentMetadataRequest?.id != requestBeforeButton)
 
+        mark("hot-language-same-metadata-leaves")
+        // Mount once. Preference changes must update the existing leaf bodies;
+        // rebuilding with .id(language) would hide the observed regression.
+        var requestedOnly = explorer
+        requestedOnly.metadata = [requested]
+        let hot = mount(AnyView(VStack(alignment: .leading, spacing: 10) {
+            AgentRoleCaption(agent: explorer)
+            AgentRoleCaption(agent: requestedOnly)
+            AgentMetadataView(agent: explorer).environmentObject(store)
+        }), width: 390, height: 950, dark: true)
+        defer { unmount(hot.window) }
+        try await settle(hot.host)
+        try press(hot.host, label: "Sources"); try await settle(hot.host)
+        try await wait("hot-source-disclosure-expanded") { disclosureExpanded(hot.host, label: "Sources") == true }
+        let hotWindowID = hot.window.accessibilityIdentifier()
+        let hotSelection = store.selection, hotRequest = store.agentMetadataRequest?.id
+        let hotTabs = store.tabs.map(\.id)
+        let retainedPath = try require(explorer.metadata?.first { $0.source != nil }?.source?.path, "hot-language source path")
+        for (step, language) in [LensL10n.Language.en, .fr, .en].enumerated() {
+            // Only this disposable probe's preferences are changed. Do not set
+            // LensL10n.language here: the new leaves resolve their AppStorage value.
+            UserDefaults.standard.set(language.rawValue, forKey: "lens.language")
+            let recorded = language == .fr ? "Rôle enregistré : explorer" : "Recorded role: explorer"
+            let requestedRole = language == .fr ? "Rôle demandé : worker" : "Requested role: worker"
+            let heading = language == .fr ? "Informations sur l’agent" : "Agent information"
+            let requestedOrigin = language == .fr ? "Demandé" : "Requested"
+            let excerpt = language == .fr ? "Extrait" : "Excerpt"
+            let staleRole = language == .fr ? "Recorded role: explorer" : "Rôle enregistré : explorer"
+            let staleHeading = language == .fr ? "Agent information" : "Informations sur l’agent"
+            let name = "hot-agent-language-\(step)-\(language.rawValue)"
+            try await wait(name + "-current-labels") {
+                let text = Set(strings(hot.host))
+                let content = text.joined(separator: "\n")
+                return text.contains(recorded) && text.contains(requestedRole) && text.contains(heading)
+                    && content.contains(requestedOrigin) && content.contains(excerpt)
+                    && !text.contains(staleRole) && !text.contains(staleHeading)
+            }
+            let text = Set(strings(hot.host))
+            let content = text.joined(separator: "\n")
+            check(name + "-role-AX-and-metadata-text-refresh", text.contains(recorded) && text.contains(requestedRole)
+                && text.contains(heading) && content.contains(requestedOrigin) && content.contains(excerpt)
+                && !text.contains(staleRole) && !text.contains(staleHeading))
+            check(name + "-mounted-leaves-open-sources-and-navigation-preserved", hot.window.accessibilityIdentifier() == hotWindowID
+                && disclosureExpanded(hot.host, label: "Sources") == true
+                && content.contains(retainedPath) && store.selection == hotSelection && store.agentMetadataRequest?.id == hotRequest
+                && store.tabs.map(\.id) == hotTabs)
+            observations.append(["scenario": name, "sourceLanguage": UserDefaults.standard.string(forKey: "lens.language") ?? "unavailable",
+                "windowIdentifier": hotWindowID, "sameMountedLeafViews": true, "strings": text.sorted(),
+                "accessibility": accessibilityRecords(hot.host), "sourceDisclosureRetained": disclosureExpanded(hot.host, label: "Sources") == true])
+        }
+        configureLanguage(.en)
+
         mark("language-theme-and-width-renders")
         for language in [LensL10n.Language.en, .fr] {
             configureLanguage(language)
@@ -208,10 +260,11 @@ import SwiftUI
     }
     @MainActor private static func configureLanguage(_ language: LensL10n.Language) {
         UserDefaults.standard.setVolatileDomain([
-            "lensLanguage": language.rawValue, "lensControlAccent": "lens", "lensReduceMotionOverride": true,
+            "lensControlAccent": "lens", "lensReduceMotionOverride": true,
             "lensRootByWindow": [String: String](), "lensTabsByRoot": [String: Data](), "lensChatByRoot": [String: String](),
             "lensBookmarks": Data(), "LensCodexModel": "", "LensCodexExecutablePath": ""
         ], forName: UserDefaults.argumentDomain)
+        UserDefaults.standard.set(language.rawValue, forKey: "lens.language")
         LensL10n.language = language
     }
     private static func require<T>(_ value: T?, _ label: String) throws -> T {
@@ -328,6 +381,14 @@ import SwiftUI
         }
         walk(match, depth: 0)
         return (nodes, ["Own-process public AX nodes visited: \(nodes.count)"])
+    }
+    @MainActor private static func disclosureExpanded(_ root: NSView, label: String) -> Bool? {
+        let candidates = ownAXNodes(root).nodes.filter { element in
+            axValue(element, kAXRoleAttribute).1 as? String == kAXDisclosureTriangleRole
+                && [kAXTitleAttribute, kAXDescriptionAttribute].compactMap { axValue(element, $0).1 as? String }.contains(label)
+        }
+        guard candidates.count == 1, let element = candidates.first else { return nil }
+        return (axValue(element, kAXValueAttribute).1 as? NSNumber)?.boolValue
     }
     @MainActor private static func accessibilityRecords(_ root: NSView) -> [[String: String]] {
         var records = accessibilityObjects(root).map { element -> [String: String] in
