@@ -251,7 +251,9 @@ struct ChangesOverviewView: View {
     private func treePane(_ scope: Scope) -> some View {
         let request = currentTreeFilterRequest
         let direct = request.environmentID == nil && request.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let tree = direct ? projection.fileTree : treeFilterRequest == request ? filteredTree : nil
+        let sameReader = treeFilterRequest?.rootID == request.rootID && treeFilterRequest?.source == request.source
+        let tree = direct ? projection.fileTree : sameReader ? filteredTree ?? projection.fileTree : projection.fileTree
+        let pending = !direct && treeFilterRequest != request
         return VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Text(LensL10n.text("Fichiers")).font(LensUI.metadata.weight(.semibold))
@@ -267,7 +269,6 @@ struct ChangesOverviewView: View {
                 text: $store.changesFileTreeQuery, accessibilityLabel: LensL10n.text("Filtrer l’arborescence des fichiers"))
                 .frame(height: 28).padding(.horizontal, 8).padding(.bottom, 8)
             Divider()
-            if let tree {
                 ChangesFileTreeView(tree: tree, selectedFileID: fileID, state: store.changesFileTreeState,
                     onSelectFile: { id in if let file = scope.filesByID[id] { selectFile(file) } },
                     onOpenCurrentFile: { id in
@@ -276,15 +277,14 @@ struct ChangesOverviewView: View {
                         }
                     })
                     .overlay {
-                        if tree.roots.isEmpty {
+                        if tree.roots.isEmpty && !pending {
                             LensCollectionEmptyState(title: LensL10n.text("Aucun fichier correspondant"),
                                 detail: LensL10n.text("Modifiez le filtre des fichiers ou les filtres de la session."), symbol: "doc.text")
                         }
                     }
-            } else {
-                LensLoadingState(title: LensL10n.text("Filtrage des fichiers…"))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+                    .overlay(alignment: .top) {
+                        if pending { LensProgressIndicator(LensL10n.text("Filtrage des fichiers…")).padding(6) }
+                    }
         }.accessibilityElement(children: .contain).accessibilityIdentifier("lens-changes-files")
     }
 

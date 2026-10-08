@@ -631,33 +631,58 @@ import SwiftUI
         let right: Bool, below: Bool, fits: Bool
         let observation: [String: Any]
     }
+    @MainActor private static func treeViewportFrame(_ tree: NSOutlineView, in host: NSView) -> NSRect? {
+        guard let scroll = tree.enclosingScrollView, !scroll.isHiddenOrHasHiddenAncestor else { return nil }
+        // The outline's bounds describe the entire scrolling document. Its clip
+        // bounds, converted from the clip's own coordinate system, describe the
+        // actual viewport even after scrolling a long tree.
+        return host.convert(scroll.contentView.bounds, from: scroll.contentView)
+    }
     @MainActor private static func treeLayout(in host: NSView) -> TreeLayout {
         guard let tree = fileTree(in: host) else {
             return TreeLayout(right: false, below: false, fits: false, observation: ["nativeTreeFound": false])
         }
         var parent: NSView? = tree.superview
+        var nativeSplits: [[String: Any]] = []
         while let current = parent {
-            if let split = current as? NSSplitView, split.subviews.count == 2,
-               let first = split.subviews.first, let last = split.subviews.last,
+            if let split = current as? NSSplitView {
+                nativeSplits.append(["class": String(describing: type(of: split)),
+                    "subviewCount": split.subviews.count, "arrangedPaneCount": split.arrangedSubviews.count,
+                    "splitIsVertical": split.isVertical, "hostFrame": NSStringFromRect(host.convert(split.bounds, from: split))])
+            }
+            // SwiftUI can add auxiliary divider views to an NSSplitView.
+            // arrangedSubviews identifies the actual panes, as production pane
+            // sizing does, rather than assuming every raw subview is a pane.
+            if let split = current as? NSSplitView, split.arrangedSubviews.count == 2,
+               let first = split.arrangedSubviews.first, let last = split.arrangedSubviews.last,
                descendants(last).contains(where: { $0 === tree }) {
                 let reading = host.convert(first.bounds, from: first)
                 let navigation = host.convert(last.bounds, from: last)
                 let visible = host.bounds.intersection(host.visibleRect)
-                let fits = !visible.isNull && navigation.width > 0 && navigation.height > 0
-                    && navigation.minX >= visible.minX - 2 && navigation.maxX <= visible.maxX + 2
-                    && navigation.minY >= visible.minY - 2 && navigation.maxY <= visible.maxY + 2
+                let viewport = treeViewportFrame(tree, in: host)
+                let fits = viewport.map {
+                    !visible.isNull && $0.width > 0 && $0.height > 0
+                        && [$0.minX, $0.maxX, $0.minY, $0.maxY].allSatisfy(\.isFinite)
+                        && $0.minX >= visible.minX - 2 && $0.maxX <= visible.maxX + 2
+                        && $0.minY >= visible.minY - 2 && $0.maxY <= visible.maxY + 2
+                        && $0.minX >= navigation.minX - 2 && $0.maxX <= navigation.maxX + 2
+                        && $0.minY >= navigation.minY - 2 && $0.maxY <= navigation.maxY + 2
+                } ?? false
                 let right = split.isVertical && navigation.minX >= reading.maxX - 2
                 let below = !split.isVertical && (host.isFlipped
                     ? navigation.minY >= reading.maxY - 2 : navigation.maxY <= reading.minY + 2)
                 return TreeLayout(right: right, below: below, fits: fits, observation: [
                     "nativeTreeFound": true, "nativeResizableSplit": true, "splitIsVertical": split.isVertical,
                     "readingPaneFrame": NSStringFromRect(reading), "treePaneFrame": NSStringFromRect(navigation),
+                    "treeViewportFrame": viewport.map(NSStringFromRect) ?? "<unavailable>",
+                    "treeDocumentFrame": NSStringFromRect(host.convert(tree.bounds, from: tree)),
                     "hostVisibleRect": NSStringFromRect(visible), "treeIsRight": right, "treeIsBelow": below,
-                    "treeFitsVisibleContent": fits])
+                    "treeFitsVisibleContent": fits, "nativeSplits": nativeSplits])
             }
             parent = current.superview
         }
-        return TreeLayout(right: false, below: false, fits: false, observation: ["nativeTreeFound": true, "nativeResizableSplit": false])
+        return TreeLayout(right: false, below: false, fits: false, observation: ["nativeTreeFound": true,
+            "nativeResizableSplit": false, "nativeSplits": nativeSplits])
     }
     private static func axValue(_ element: AXUIElement, _ key: String) -> (AXError, CFTypeRef?) {
         var value: CFTypeRef?
