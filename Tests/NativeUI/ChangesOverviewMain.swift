@@ -565,7 +565,7 @@ import SwiftUI
     }
     @MainActor private static func fileTree(in host: NSView) -> NSOutlineView? {
         let matches = descendants(host).compactMap { $0 as? NSOutlineView }.filter {
-            !$0.isHiddenOrHasHiddenAncestor && $0.accessibilityIdentifier() == "lens-changes-file-tree"
+            !$0.isHiddenOrHasHiddenAncestor && $0.identifier?.rawValue == "lens-changes-file-tree-native"
         }
         return matches.count == 1 ? matches.first : nil
     }

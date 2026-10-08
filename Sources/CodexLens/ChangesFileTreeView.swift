@@ -57,6 +57,7 @@ struct ChangesFileTreeView: View {
         NativeChangesFileTree(tree: tree, selectedFileID: selectedFileID, state: state,
                               revealRevision: state.revealRevision, accent: accent,
                               onSelectFile: onSelectFile, onOpenCurrentFile: onOpenCurrentFile)
+            .accessibilityIdentifier("lens-changes-file-tree")
     }
 }
 
@@ -106,6 +107,8 @@ private struct NativeChangesFileTree: NSViewRepresentable {
         outline.allowsEmptySelection = true
         outline.autoresizingMask = [.width]
         outline.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        // Native identity is independent of SwiftUI's inherited AX identifiers.
+        outline.identifier = NSUserInterfaceItemIdentifier("lens-changes-file-tree-native")
         outline.setAccessibilityIdentifier("lens-changes-file-tree")
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("changed-file"))
         column.minWidth = 100
@@ -237,6 +240,7 @@ private struct NativeChangesFileTree: NSViewRepresentable {
                     }
                 }
             }
+            outline.setAccessibilityIdentifier("lens-changes-file-tree")
             outline.setAccessibilityLabel(LensL10n.text("Arborescence des fichiers modifiés"))
             // Layout can be unavailable during updateNSView. All persistence is
             // deferred; AppKit callbacks fired by restoration stay suppressed.
