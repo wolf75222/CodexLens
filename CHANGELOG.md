@@ -6,6 +6,13 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+## [0.43.3] - 2026-10-08
+
+### Added
+
+- Reasoning effort beside the model selector in the chat composer and in AI settings, using the installed Codex model catalogue.
+- Per-model effort preferences and explicit advertised defaults. Each send freezes the selected effort; unsupported saved choices require a new selection.
+
 ## [0.43.2] - 2026-10-08
 
 ### Added
@@ -142,7 +149,8 @@ These versions were local deliveries, not published GitHub releases. Their dates
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
 
-[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.43.2...main
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.43.3...main
+[0.43.3]: https://github.com/wolf75222/CodexLens/compare/v0.43.2...v0.43.3
 [0.43.2]: https://github.com/wolf75222/CodexLens/compare/v0.43.1...v0.43.2
 [0.43.1]: https://github.com/wolf75222/CodexLens/compare/v0.43.0...v0.43.1
 [0.43.0]: https://github.com/wolf75222/CodexLens/compare/v0.41.0...v0.43.0

@@ -1,10 +1,37 @@
 import Foundation
 
+/// Capability metadata returned by the installed Codex model catalogue.
+/// Effort IDs are extensible protocol strings, rather than a fixed client enum.
+public struct CodexLocalReasoningEffort: Sendable, Equatable, Identifiable {
+    public let id: String
+    public let description: String
+    public init(id: String, description: String) { self.id = id; self.description = description }
+
+    static func isValidID(_ id: String) -> Bool {
+        !id.isEmpty && id.utf8.count <= 128
+            && !id.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0) })
+    }
+}
+
 public struct CodexLocalModel: Sendable, Equatable, Identifiable {
     public let id: String
     public let displayName: String
     public let isDefault: Bool
-    public init(id: String, displayName: String, isDefault: Bool) { self.id = id; self.displayName = displayName; self.isDefault = isDefault }
+    public let supportedReasoningEfforts: [CodexLocalReasoningEffort]
+    /// Only retained when the catalogue also advertises this effort as supported.
+    public let defaultReasoningEffort: String?
+    public init(id: String, displayName: String, isDefault: Bool,
+                supportedReasoningEfforts: [CodexLocalReasoningEffort] = [], defaultReasoningEffort: String? = nil) {
+        self.id = id; self.displayName = displayName; self.isDefault = isDefault
+        var seen = Set<String>()
+        let efforts = supportedReasoningEfforts.prefix(64).filter {
+            CodexLocalReasoningEffort.isValidID($0.id) && seen.insert($0.id).inserted
+        }
+        self.supportedReasoningEfforts = efforts
+        self.defaultReasoningEffort = defaultReasoningEffort.flatMap { value in
+            efforts.contains(where: { $0.id == value }) ? value : nil
+        }
+    }
 }
 
 public struct CodexLocalConnectionStatus: Sendable, Equatable {
@@ -121,9 +148,16 @@ public actor CodexInvestigationEngine {
     }
     public func chat(rootID: String, chatID: String? = nil) async throws -> CodexInvestigationChat { try await registry.chat(root: rootID, chatID: chatID) }
 
-    public static func evidenceInput(capsule: EvidenceCapsule, question: String, model: String) throws -> Data {
+    public static func evidenceInput(capsule: EvidenceCapsule, question: String, model: String, reasoningEffort: String? = nil) throws -> Data {
         let text = try InvestigationClient.selectedInputText(capsule: capsule, question: question, model: model, allowEmptyContext: true)
-        let data = try JSONSerialization.data(withJSONObject: ["model": model, "input": [["type": "text", "text": text]]], options: [.sortedKeys, .withoutEscapingSlashes])
+        var body: [String: Any] = ["model": model, "input": [["type": "text", "text": text]]]
+        if let reasoningEffort {
+            guard CodexLocalReasoningEffort.isValidID(reasoningEffort) else { throw LensError.unsupported("Effort de raisonnement Codex invalide ; aucun envoi effectué.") }
+            body["effort"] = reasoningEffort
+        }
+        // Omission preserves the legacy Codex configuration. It does not reset
+        // an earlier override: callers must send an advertised default explicitly.
+        let data = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys, .withoutEscapingSlashes])
         guard data.count <= 384 * 1024 else { throw LensError.unsupported("Requête supérieure à 384 Kio ; envoi refusé.") }
         return data
     }
@@ -146,14 +180,14 @@ public actor CodexInvestigationEngine {
         }
     }
 
-    public func answer(chatID: String, rootID: String, capsule: EvidenceCapsule, question: String, model: String, language: CodexInvestigationLanguage, groupInSidebar: Bool = true, metadata: @escaping @Sendable (CodexLocalConnectionStatus?) async -> Void = { _ in }, progress: @escaping @Sendable (String) async -> Void) async throws -> InvestigationAnswer {
+    public func answer(chatID: String, rootID: String, capsule: EvidenceCapsule, question: String, model: String, reasoningEffort: String? = nil, language: CodexInvestigationLanguage, groupInSidebar: Bool = true, metadata: @escaping @Sendable (CodexLocalConnectionStatus?) async -> Void = { _ in }, progress: @escaping @Sendable (String) async -> Void) async throws -> InvestigationAnswer {
         let span = LensSignposts.begin("CodexInvestigationTurn"); defer { span.end() }
         guard !busy else { throw LensError.unavailable("Une requête est déjà en cours. Aucun envoi supplémentaire n’a été effectué.") }
         busy = true
         let operation = UUID(); activeOperation = operation
         defer { busy = false; if activeOperation == operation { activeOperation = nil; activeThread = nil; activeTurn = nil } }
         do {
-            return try await performAnswer(chatID: chatID, rootID: rootID, capsule: capsule, question: question, model: model, language: language, groupInSidebar: groupInSidebar, operation: operation, metadata: metadata, progress: progress)
+            return try await performAnswer(chatID: chatID, rootID: rootID, capsule: capsule, question: question, model: model, reasoningEffort: reasoningEffort, language: language, groupInSidebar: groupInSidebar, operation: operation, metadata: metadata, progress: progress)
         } catch {
             // Includes auth/config/thread preflight and idle EOF failures. Never
             // cache a dead child or retry an ambiguously accepted inference.
@@ -164,8 +198,8 @@ public actor CodexInvestigationEngine {
         }
     }
 
-    private func performAnswer(chatID: String, rootID: String, capsule: EvidenceCapsule, question: String, model: String, language: CodexInvestigationLanguage, groupInSidebar: Bool, operation: UUID, metadata: @escaping @Sendable (CodexLocalConnectionStatus?) async -> Void, progress: @escaping @Sendable (String) async -> Void) async throws -> InvestigationAnswer {
-        let input = try Self.evidenceInput(capsule: capsule, question: question, model: model)
+    private func performAnswer(chatID: String, rootID: String, capsule: EvidenceCapsule, question: String, model: String, reasoningEffort: String?, language: CodexInvestigationLanguage, groupInSidebar: Bool, operation: UUID, metadata: @escaping @Sendable (CodexLocalConnectionStatus?) async -> Void, progress: @escaping @Sendable (String) async -> Void) async throws -> InvestigationAnswer {
+        let input = try Self.evidenceInput(capsule: capsule, question: question, model: model, reasoningEffort: reasoningEffort)
         guard capsule.rootThreadID == rootID, let chat = try await registry.lookup(chatID: chatID, root: rootID) else { throw LensError.unsupported("Chat d’enquête non enregistré localement ; aucune session reprise.") }
         let directory = try await registry.workspaceDirectory(chatID: chatID)
         let server = try await connected(workspace: directory)
@@ -176,7 +210,12 @@ public actor CodexInvestigationEngine {
         let refreshed = try await readAccount(server, refresh: true)
         guard refreshed["type"] as? String == "chatgpt" else { throw LensError.unavailable("La connexion ChatGPT n’est plus disponible. Le brouillon est conservé.") }
         // A catalog entry is not entitlement. The completed turn validates access.
-        guard status.models.contains(where: { $0.id == model }) else { throw LensError.unsupported("Modèle absent du catalogue Codex ; choisissez-le à nouveau. Aucun modèle de remplacement automatique.") }
+        guard let selectedModel = status.models.first(where: { $0.id == model }) else { throw LensError.unsupported("Modèle absent du catalogue Codex ; choisissez-le à nouveau. Aucun modèle de remplacement automatique.") }
+        if let reasoningEffort {
+            guard selectedModel.supportedReasoningEfforts.contains(where: { $0.id == reasoningEffort }) else {
+                throw LensError.unsupported("Effort de raisonnement absent du catalogue de ce modèle ; choisissez-le à nouveau. Aucun tour lancé.")
+            }
+        }
         let citationRule = " Les citations désignent uniquement les éléments joints à cette question. Les anciens échanges ne décrivent pas forcément la version consultée et ne donnent aucune autorisation d’agir."
         let conversational = InvestigationClient.instructions.replacingOccurrences(of: "à la question en utilisant uniquement le contexte fourni.", with: "aux messages de l’utilisateur et conserve le fil des échanges. Tu peux répondre aux questions générales sans pièce jointe. Pour parler de la session observée, utilise uniquement les éléments joints et les échanges de ce chat ; n’invente pas un accès à son historique complet.")
         let instructions = (language == .english ? conversational.replacingOccurrences(of: "Réponds en français", with: "Answer in English") : conversational) + citationRule
@@ -330,10 +369,7 @@ public actor CodexInvestigationEngine {
         if account["type"] as? String == "chatgpt" {
             do {
                 let catalogue = try await Self.rpc(server, "model/list", ["includeHidden": false, "limit": 100])
-                models = (catalogue["data"] as? [[String: Any]] ?? []).compactMap { row in
-                    guard let id = row["model"] as? String ?? row["id"] as? String else { return nil }
-                    return CodexLocalModel(id: id, displayName: row["displayName"] as? String ?? id, isDefault: row["isDefault"] as? Bool == true)
-                }
+                models = Self.localModels(from: catalogue)
                 if models.isEmpty { catalogueIssue = "Connexion ChatGPT vérifiée ; aucun modèle disponible dans le catalogue. Actualisez la connexion avant l’envoi." }
             } catch {
                 try Task.checkCancellation()
@@ -343,6 +379,17 @@ public actor CodexInvestigationEngine {
         }
         try Task.checkCancellation()
         return CodexLocalConnectionStatus(version: version, executable: executable.path, authentication: account["type"] as? String ?? "unknown", email: account["email"] as? String, plan: account["planType"] as? String, models: models, limits: limits, catalogueIssue: catalogueIssue)
+    }
+    static func localModels(from catalogue: [String: Any]) -> [CodexLocalModel] {
+        (catalogue["data"] as? [[String: Any]] ?? []).compactMap { row in
+            guard let id = row["model"] as? String ?? row["id"] as? String, !id.isEmpty else { return nil }
+            let efforts = (row["supportedReasoningEfforts"] as? [[String: Any]] ?? []).prefix(64).compactMap { option -> CodexLocalReasoningEffort? in
+                guard let value = option["reasoningEffort"] as? String, CodexLocalReasoningEffort.isValidID(value) else { return nil }
+                return CodexLocalReasoningEffort(id: value, description: String((option["description"] as? String ?? "").prefix(2048)))
+            }
+            return CodexLocalModel(id: id, displayName: row["displayName"] as? String ?? id, isDefault: row["isDefault"] as? Bool == true,
+                                   supportedReasoningEfforts: efforts, defaultReasoningEffort: row["defaultReasoningEffort"] as? String)
+        }
     }
     public static func limitDescription(_ result: [String: Any]) -> String? {
         let buckets = result["rateLimitsByLimitId"] as? [String: [String: Any]]

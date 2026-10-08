@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "captureMethod": "Offscreen AppKit NSHostingView cacheDisplay PNG with production chat views and a replacement qualification entrypoint; public AX reads targeted only the owned probe process/window.",
+  "sourceCommit": "da2311db23dfa08939f7a8623d042f9853695de7",
+  "fixture": "Anonymous local Codex capability metadata; unsent question; no account identity.",
+  "modelRequests": 0,
+  "networkDeniedByOS": true,
+  "images": [
+    {
+      "file": "chat-effort.png",
+      "sha256": "733c7bcd0c8401e6f48a56abf1f6edf4a7172bdc9585cbfa6cda6f78cbef28a8",
+      "logicalWidth": 360,
+      "logicalHeight": 650,
+      "language": "en",
+      "appearance": "dark"
+    }
+  ],
+  "unqualified": [
+    "Authenticated inference",
+    "Physical input",
+    "VoiceOver",
+    "Production compositor"
+  ]
+}

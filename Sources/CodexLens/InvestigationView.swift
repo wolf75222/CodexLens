@@ -46,6 +46,7 @@ enum InvestigationConnectionMode: String, CaseIterable { case codex, chatgpt, ap
     init(archive: InvestigationArchive = InvestigationArchive(), statusProvider: (@Sendable (URL?) async throws -> CodexLocalConnectionStatus)? = nil) {
         self.archive = archive
         self.statusProvider = statusProvider
+        loadReasoningEffortPreference()
         codexConnectionObservation = CodexLocalConnectionPresentation.shared.$status.sink { [weak self] in self?.codexStatus = $0 }
         codexCompletionObservation = CodexLocalConnectionPresentation.shared.$completedModel.sink { [weak self] in self?.completedModel = $0 }
         codexModelObservation = CodexLocalConnectionPresentation.shared.$model.sink { [weak self] value in
@@ -74,10 +75,53 @@ enum InvestigationConnectionMode: String, CaseIterable { case codex, chatgpt, ap
     @Published var notice: String?
     @Published var apiKey = "" // RAM only; never UserDefaults, archive, or log.
     @Published var model = UserDefaults.standard.string(forKey: "LensCodexModel") ?? "" { didSet { if connectionMode == .codex {
+        loadReasoningEffortPreference()
         UserDefaults.standard.set(model, forKey: "LensCodexModel")
         if CodexLocalConnectionPresentation.shared.model != model { CodexLocalConnectionPresentation.shared.model = model }
     } } }
-    @Published var connectionMode: InvestigationConnectionMode = .codex
+    @Published var connectionMode: InvestigationConnectionMode = .codex {
+        didSet { if connectionMode == .codex { loadReasoningEffortPreference() } }
+    }
+    /// A nil preference follows the selected model's advertised default.
+    @Published private(set) var reasoningEffort: String?
+    var selectedCodexModel: CodexLocalModel? { codexStatus?.models.first { $0.id == model } }
+    var availableReasoningEfforts: [CodexLocalReasoningEffort] { selectedCodexModel?.supportedReasoningEfforts ?? [] }
+    var effectiveReasoningEffort: String? {
+        connectionMode == .codex ? reasoningEffort ?? selectedCodexModel?.defaultReasoningEffort : nil
+    }
+    var reasoningEffortSelectionValid: Bool {
+        connectionMode != .codex || reasoningEffort == nil || availableReasoningEfforts.contains { $0.id == reasoningEffort }
+    }
+    var reasoningEffortUnavailableMessage: String {
+        LensL10n.text(availableReasoningEfforts.isEmpty
+            ? "L’effort enregistré est indisponible. Effacez ce choix ou actualisez Codex."
+            : "Cet effort n’est plus disponible. Choisissez un autre niveau.")
+    }
+    func chooseReasoningEffort(_ value: String?) {
+        guard connectionMode == .codex, !sending, !connecting, !model.isEmpty,
+              value == nil ? selectedCodexModel?.defaultReasoningEffort != nil : availableReasoningEfforts.contains(where: { $0.id == value }) else { return }
+        saveReasoningEffortPreference(value)
+    }
+    /// Clears a Lens preference; omission is not a reset of the Codex thread.
+    func clearUnavailableReasoningEffort() {
+        guard connectionMode == .codex, !sending, !connecting, !reasoningEffortSelectionValid else { return }
+        saveReasoningEffortPreference(nil)
+    }
+    private func saveReasoningEffortPreference(_ value: String?) {
+        let effortErrors = ["Cet effort n’est plus disponible. Choisissez un autre niveau.",
+                            "L’effort enregistré est indisponible. Effacez ce choix ou actualisez Codex.",
+                            "Effort de raisonnement absent du catalogue de ce modèle ; choisissez-le à nouveau. Aucun tour lancé.",
+                            "Effort de raisonnement Codex invalide ; aucun envoi effectué."]
+        let clearIssue = effortErrors.contains { issue == $0 || issue == LensL10n.text($0) }
+        var preferences = UserDefaults.standard.dictionary(forKey: "LensCodexReasoningEfforts") as? [String: String] ?? [:]
+        if let value { preferences[model] = value } else { preferences.removeValue(forKey: model) }
+        UserDefaults.standard.set(preferences, forKey: "LensCodexReasoningEfforts")
+        reasoningEffort = value
+        if clearIssue { issue = nil }
+    }
+    private func loadReasoningEffortPreference() {
+        reasoningEffort = (UserDefaults.standard.dictionary(forKey: "LensCodexReasoningEfforts") as? [String: String])?[model]
+    }
     @Published private(set) var chatGPTAccount: CodexInvestigationAccount?
     @Published private(set) var chatGPTModels: [CodexInvestigationModel] = []
     @Published private(set) var connecting = false
@@ -156,7 +200,7 @@ enum InvestigationConnectionMode: String, CaseIterable { case codex, chatgpt, ap
     }
 
     var canSendChatMessage: Bool {
-        !sending && !preparing && !connecting && !responseComplete && connectionReady && !model.isEmpty
+        !sending && !preparing && !connecting && !responseComplete && connectionReady && !model.isEmpty && reasoningEffortSelectionValid
             && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && capsule.map { connectionMode == .codex || !$0.pieces.isEmpty } == true
     }
@@ -443,13 +487,18 @@ enum InvestigationConnectionMode: String, CaseIterable { case codex, chatgpt, ap
     }
     func send() {
         guard !sending, !preparing, let frozen = capsule else { return }
+        guard reasoningEffortSelectionValid else {
+            issue = reasoningEffortUnavailableMessage
+            return
+        }
         let frozenQuestion = question, frozenKey = apiKey, frozenModel = model, revision = contextRevision
+        let frozenEffort = effectiveReasoningEffort
         let previousChatID = codexChatID
         let frozenMode = connectionMode, language: CodexInvestigationLanguage = LensL10n.resolvedLanguage == .en ? .english : .french
         let frozenGroupInSidebar = UserDefaults.standard.object(forKey: "LensGroupCodexInvestigations") as? Bool ?? true
         let frozenExecutable = preferredCodexExecutable
         do {
-            let body = try frozenMode == .codex ? CodexInvestigationEngine.evidenceInput(capsule: frozen, question: frozenQuestion, model: frozenModel) : frozenMode == .chatgpt ? CodexInvestigationClient.requestBody(capsule: frozen, question: frozenQuestion, model: frozenModel, language: language) : InvestigationClient.requestBody(capsule: frozen, question: frozenQuestion, model: frozenModel)
+            let body = try frozenMode == .codex ? CodexInvestigationEngine.evidenceInput(capsule: frozen, question: frozenQuestion, model: frozenModel, reasoningEffort: frozenEffort) : frozenMode == .chatgpt ? CodexInvestigationClient.requestBody(capsule: frozen, question: frozenQuestion, model: frozenModel, language: language) : InvestigationClient.requestBody(capsule: frozen, question: frozenQuestion, model: frozenModel)
             cancelDraftSave(); savedDraft = nil; draftSaveState = .saving; evidenceRemoval = nil
             sending = true; issue = nil; response = nil; responseComplete = false
             sendTask = Task {
@@ -476,7 +525,7 @@ enum InvestigationConnectionMode: String, CaseIterable { case codex, chatgpt, ap
                     let answer: InvestigationAnswer
                     if frozenMode == .codex {
                         guard let chatID = frozenChatID else { throw LensError.corrupt("Chat d’enquête absent.") }
-                        answer = try await codexEngine.answer(chatID: chatID, rootID: frozen.rootThreadID, capsule: frozen, question: frozenQuestion, model: frozenModel, language: language, groupInSidebar: frozenGroupInSidebar, metadata: { [weak self] status in
+                        answer = try await codexEngine.answer(chatID: chatID, rootID: frozen.rootThreadID, capsule: frozen, question: frozenQuestion, model: frozenModel, reasoningEffort: frozenEffort, language: language, groupInSidebar: frozenGroupInSidebar, metadata: { [weak self] status in
                             await self?.receiveCodexMetadata(status, revision: revision, capsuleID: frozen.id)
                         }) { [weak self] text in
                             await self?.receiveCodexProgress(text, revision: revision, capsuleID: frozen.id)
@@ -744,6 +793,7 @@ struct InvestigationView: View {
         .onChange(of: investigator.recordID) { _, _ in updateTranscriptInput() }
         .onChange(of: investigator.capsule?.rootThreadID) { _, _ in updateTranscriptInput() }
         .sheet(isPresented: $showConnectionSettings) { connectionSettings }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("lens-side-chat")
     }
 
@@ -988,6 +1038,9 @@ struct InvestigationView: View {
                         .accessibilityLabel(LensL10n.text("Ajouter la sélection"))
                         .accessibilityIdentifier("lens-chat-add-selection")
                     modelControl
+                    if investigator.connectionMode == .codex, investigator.codexStatus?.isChatGPT == true {
+                        CodexReasoningEffortControl(investigator: investigator)
+                    }
                     Image(systemName: LensSymbols.name(investigator.isCurrentDraftSaved ? "checkmark.circle" : "circle.dotted"))
                         .font(LensUI.metadata).foregroundStyle(.secondary)
                         .help(investigator.draftSaveLabel).accessibilityLabel(investigator.draftSaveLabel)
@@ -1269,6 +1322,7 @@ struct InvestigationView: View {
         if investigator.sending { return LensL10n.text("Réponse en cours. La question et son contexte restent inchangés.") }
         if investigator.responseComplete { return nil }
         if investigator.connecting { return LensL10n.text("Connexion en cours ; vous pouvez l’annuler dans Configurer l’envoi.") }
+        if !investigator.reasoningEffortSelectionValid { return investigator.reasoningEffortUnavailableMessage }
         if !investigator.connectionReady { return nil }
         if investigator.model.isEmpty { return LensL10n.text("Choisissez un modèle dans Configurer l’envoi.") }
         if capsule.pieces.isEmpty, investigator.connectionMode != .codex { return LensL10n.text("Ajoutez un élément avant d’envoyer.") }

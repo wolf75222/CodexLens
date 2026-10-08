@@ -139,6 +139,105 @@ final class CodexInvestigationEngineTests: XCTestCase {
         XCTAssertTrue((input[0]["text"] as? String)?.contains("CAPSULE JSON") == true)
         XCTAssertTrue((input[0]["text"] as? String)?.contains("oldValue") == true)
     }
+    func testCatalogueUsesAdvertisedEffortsAndDefaultWithoutInventingCapabilities() throws {
+        let catalogue: [String: Any] = ["data": [
+            ["model": "fixture-model", "id": "catalogue-identity", "displayName": "Fixture", "isDefault": true,
+             "supportedReasoningEfforts": [
+                ["reasoningEffort": "low", "description": "Faster"],
+                ["reasoningEffort": "medium", "description": "Balanced"],
+                ["reasoningEffort": "ultra", "description": "Installed protocol extension"],
+                ["reasoningEffort": "medium", "description": "Duplicate"],
+                ["reasoningEffort": "", "description": "Empty"],
+                ["reasoningEffort": "bad value", "description": "Invalid token"]],
+             "defaultReasoningEffort": "medium"],
+            ["id": "legacy-model", "defaultReasoningEffort": "high"],
+            ["id": "inconsistent-default", "supportedReasoningEfforts": [["reasoningEffort": "low"]], "defaultReasoningEffort": "high"],
+            ["id": "missing-default", "supportedReasoningEfforts": [["reasoningEffort": "low", "description": NSNull()]]],
+            ["id": ""]
+        ]]
+        let models = CodexInvestigationEngine.localModels(from: catalogue)
+        XCTAssertEqual(models.map(\.id), ["fixture-model", "legacy-model", "inconsistent-default", "missing-default"])
+        XCTAssertEqual(models[0].supportedReasoningEfforts.map(\.id), ["low", "medium", "ultra"])
+        XCTAssertEqual(models[0].supportedReasoningEfforts[1].description, "Balanced")
+        XCTAssertEqual(models[0].defaultReasoningEffort, "medium")
+        XCTAssertTrue(models[1].supportedReasoningEfforts.isEmpty)
+        XCTAssertNil(models[1].defaultReasoningEffort, "A default alone must not manufacture a supported option")
+        XCTAssertNil(models[2].defaultReasoningEffort)
+        XCTAssertNil(models[3].defaultReasoningEffort)
+        XCTAssertEqual(models[3].supportedReasoningEfforts.first?.description, "")
+        let oldFixture = CodexLocalModel(id: "legacy", displayName: "Legacy", isDefault: false)
+        XCTAssertTrue(oldFixture.supportedReasoningEfforts.isEmpty)
+        XCTAssertNil(oldFixture.defaultReasoningEffort)
+    }
+    func testFrozenPreviewContainsExactCodexTurnEffortAndRejectsInvalidTokens() throws {
+        let capsule = try fixture()
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: CodexInvestigationEngine.evidenceInput(
+            capsule: capsule, question: "Explain", model: "fixture-model", reasoningEffort: "xhigh")) as? [String: Any])
+        XCTAssertEqual(Set(body.keys), ["model", "input", "effort"])
+        XCTAssertEqual(body["effort"] as? String, "xhigh")
+        XCTAssertNil(body["reasoningEffort"], "The Codex turn parameter is effort")
+        for invalid in ["", " ", "high\n", String(repeating: "a", count: 129)] {
+            XCTAssertThrowsError(try CodexInvestigationEngine.evidenceInput(capsule: capsule,
+                question: "Explain", model: "fixture-model", reasoningEffort: invalid))
+        }
+    }
+    func testSelectedEffortReachesNewAndResumedOwnedThreadTurnsExactly() async throws {
+        let capsule = try fixture()
+        let transportFixture = try EngineReasoningEffortFixture(catalogueData: event(["data": [
+            ["model": "fixture-model", "isDefault": true, "defaultReasoningEffort": "medium",
+             "supportedReasoningEfforts": [["reasoningEffort": "low", "description": "Fast"],
+                                           ["reasoningEffort": "medium", "description": "Balanced"],
+                                           ["reasoningEffort": "xhigh", "description": "More reasoning"]]]]]))
+        let registry = await transportFixture.registry
+        let chat = try await registry.chat(root: capsule.rootThreadID)
+        let first = CodexInvestigationEngine(registry: registry, testingConnectionFactory: { workspace in try await transportFixture.start(workspace: workspace) })
+        let status = try await first.status()
+        XCTAssertEqual(status.models.first?.defaultReasoningEffort, "medium")
+        XCTAssertEqual(status.models.first?.supportedReasoningEfforts.map(\.id), ["low", "medium", "xhigh"])
+        let reply = try await first.answer(chatID: chat.chatID, rootID: capsule.rootThreadID, capsule: capsule,
+            question: "First", model: "fixture-model", reasoningEffort: "low", language: .english, groupInSidebar: false) { _ in }
+        XCTAssertEqual(reply.text, "Anonymous answer [E001]")
+        await first.shutdown()
+        let second = CodexInvestigationEngine(registry: registry, testingConnectionFactory: { workspace in try await transportFixture.start(workspace: workspace) })
+        _ = try await second.answer(chatID: chat.chatID, rootID: capsule.rootThreadID, capsule: capsule,
+            question: "Follow up", model: "fixture-model", reasoningEffort: "xhigh", language: .english, groupInSidebar: false) { _ in }
+        // Selecting the catalogue default must override the earlier effort,
+        // rather than relying on omission to reset Codex's persisted setting.
+        _ = try await second.answer(chatID: chat.chatID, rootID: capsule.rootThreadID, capsule: capsule,
+            question: "Default again", model: "fixture-model", reasoningEffort: "medium", language: .english, groupInSidebar: false) { _ in }
+        await second.shutdown()
+        let requests = try await transportFixture.requests()
+        let turns = requests.filter { $0.method == "turn/start" }
+        XCTAssertEqual(turns.map { $0.params["effort"] as? String }, ["low", "xhigh", "medium"])
+        XCTAssertEqual(Set(turns.compactMap { $0.params["threadId"] as? String }), ["anonymous-owned-effort-thread"])
+        XCTAssertTrue(turns.allSatisfy { $0.params["environments"] as? [String] == [] })
+        XCTAssertEqual(requests.count(where: { $0.method == "thread/start" }), 1)
+        XCTAssertEqual(requests.count(where: { $0.method == "thread/resume" }), 1)
+        XCTAssertFalse(requests.contains { $0.params["threadId"] as? String == capsule.rootThreadID })
+        XCTAssertFalse(requests.contains { ["thread/inject_items", "thread/interrupt", "thread/rollback"].contains($0.method) })
+        try await transportFixture.cleanup()
+    }
+    func testUnsupportedOrMissingEffortCapabilityRefusesTurnBeforeThreadCreation() async throws {
+        let capsule = try fixture()
+        for catalogue in [
+            ["data": [["model": "fixture-model", "supportedReasoningEfforts": [["reasoningEffort": "low", "description": "Fast"]]]]],
+            ["data": [["model": "fixture-model"]]]
+        ] as [[String: Any]] {
+            let transportFixture = try EngineReasoningEffortFixture(catalogueData: event(catalogue))
+            let registry = await transportFixture.registry
+            let chat = try await registry.chat(root: capsule.rootThreadID)
+            let engine = CodexInvestigationEngine(registry: registry, testingConnectionFactory: { workspace in try await transportFixture.start(workspace: workspace) })
+            do {
+                _ = try await engine.answer(chatID: chat.chatID, rootID: capsule.rootThreadID, capsule: capsule,
+                    question: "Explain", model: "fixture-model", reasoningEffort: "high", language: .english, groupInSidebar: false) { _ in }
+                XCTFail("An unsupported explicit effort must never silently fall back")
+            } catch { XCTAssertTrue(error.localizedDescription.contains("Effort de raisonnement absent")) }
+            await engine.shutdown()
+            let requests = try await transportFixture.requests()
+            XCTAssertFalse(requests.contains { ["thread/start", "thread/resume", "turn/start"].contains($0.method) })
+            try await transportFixture.cleanup()
+        }
+    }
     func testMissingLimitsAreUnknownNotZero() {
         XCTAssertNil(CodexInvestigationEngine.limitDescription([:]))
         XCTAssertNil(CodexInvestigationEngine.limitDescription(["rateLimits": ["primary": NSNull()]]))
@@ -376,4 +475,117 @@ private actor EngineCatalogueFixture {
         try await transport.start()
         return transport
     }
+}
+
+private struct EngineReasoningEffortRequest: Sendable {
+    let method: String
+    let paramsData: Data
+    var params: [String: Any] { (try? JSONSerialization.jsonObject(with: paramsData)) as? [String: Any] ?? [:] }
+}
+
+/// An isolated protocol double. No real Codex launch, credentials, observed
+/// source reads or model inference are involved in these effort-routing checks.
+private actor EngineReasoningEffortFixture {
+    let registry: CodexInvestigationRegistry
+    private let directory: URL
+    private let logURL: URL
+    private let catalogueData: Data
+
+    init(catalogueData: Data) throws {
+        // The ownership registry rejects symlinks in every ancestor. macOS's
+        // temporaryDirectory spelling can begin with the /var symlink.
+        let directory = URL(fileURLWithPath: "/private/tmp", isDirectory: true).appendingPathComponent("lens-effort-test-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        self.directory = directory
+        logURL = directory.appendingPathComponent("requests.jsonl")
+        self.catalogueData = catalogueData
+        registry = CodexInvestigationRegistry(directory: directory.appendingPathComponent("registry", isDirectory: true))
+    }
+
+    func start(workspace: URL?) async throws -> CodexAppServerTransport {
+        let cwd = workspace ?? directory
+        let configuration: [String: Any] = [
+            "settings": CodexInvestigationPolicy.threadConfiguration(workspace: cwd),
+            "catalogue": try JSONSerialization.jsonObject(with: catalogueData),
+            "logPath": logURL.path
+        ]
+        let configURL = directory.appendingPathComponent("fixture-" + UUID().uuidString + ".json")
+        try JSONSerialization.data(withJSONObject: configuration).write(to: configURL)
+        let server = CodexAppServerTransport(executableURL: URL(fileURLWithPath: "/usr/bin/python3"),
+            arguments: ["-u", "-c", Self.python, configURL.path], currentDirectoryURL: cwd,
+            environment: ["PATH": "/usr/bin:/bin", "PYTHONUNBUFFERED": "1"], requestTimeoutSeconds: 3)
+        try await server.start()
+        return server
+    }
+
+    func requests() throws -> [EngineReasoningEffortRequest] {
+        try String(contentsOf: logURL, encoding: .utf8).split(separator: "\n").map { line in
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+            return EngineReasoningEffortRequest(method: try XCTUnwrap(object["method"] as? String),
+                paramsData: try JSONSerialization.data(withJSONObject: object["params"] ?? [String: Any]()))
+        }
+    }
+
+    func cleanup() throws { try FileManager.default.removeItem(at: directory) }
+
+    private static let python = #"""
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as f:
+    fixture = json.load(f)
+config = {}
+for key, value in fixture['settings'].items():
+    parts = key.split('.')
+    node = config
+    for part in parts[:-1]:
+        node = node.setdefault(part, {})
+    node[parts[-1]] = value
+owned = 'anonymous-owned-effort-thread'
+counter = 0
+for line in sys.stdin:
+    request = json.loads(line)
+    method, params = request['method'], request.get('params', {})
+    with open(fixture['logPath'], 'a', encoding='utf-8') as log:
+        log.write(json.dumps({'method': method, 'params': params})+'\n')
+    result = {}
+    error = None
+    if method == 'config/read':
+        result = {'config': config, 'layers': [{'name': {'type': 'sessionFlags'}, 'config': config}]}
+    elif method == 'configRequirements/read':
+        result = {'requirements': None}
+    elif method == 'permissionProfile/list':
+        result = {'data': [{'id': config['default_permissions'], 'allowed': True}]}
+    elif method == 'account/read':
+        result = {'account': {'type': 'chatgpt', 'email': 'anonymous@example.invalid'}}
+    elif method == 'model/list':
+        result = fixture['catalogue']
+    elif method == 'account/rateLimits/read':
+        result = {}
+    elif method in ['thread/start', 'thread/resume']:
+        if method == 'thread/resume' and params['threadId'] != owned:
+            error = {'code': -1, 'message': 'Unowned fixture thread'}
+        result = {'thread': {'id': owned}, 'activePermissionProfile': {'id': params['permissions']},
+                  'model': params['model'], 'modelProvider': 'openai', 'cwd': params['cwd'],
+                  'approvalPolicy': 'never', 'approvalsReviewer': 'user', 'runtimeWorkspaceRoots': [params['cwd']],
+                  'instructionSources': []}
+    elif method == 'thread/read':
+        result = {'thread': {'id': owned, 'name': 'Anonymous fixture chat'}}
+    elif method == 'thread/name/set':
+        result = {}
+    elif method == 'turn/start':
+        if params['threadId'] != owned:
+            error = {'code': -1, 'message': 'Unowned fixture turn'}
+        turn = 'anonymous-turn-' + str(counter)
+        counter += 1
+        result = {'turn': {'id': turn, 'status': 'inProgress'}}
+    else:
+        error = {'code': -32601, 'message': 'Unsupported fixture request'}
+    response = {'id': request['id'], 'error': error} if error else {'id': request['id'], 'result': result}
+    print(json.dumps(response), flush=True)
+    if method == 'turn/start' and not error:
+        print(json.dumps({'method': 'item/completed', 'params': {'threadId': owned, 'turnId': turn,
+                         'item': {'id': 'reply-'+turn, 'type': 'agentMessage', 'phase': 'final_answer',
+                                  'text': 'Anonymous answer [E001]'}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'threadId': owned,
+                         'turn': {'id': turn, 'status': 'completed', 'error': None}}}), flush=True)
+"""#
 }

@@ -2378,6 +2378,23 @@
     "Arborescence des fichiers modifiés": "Changed file tree",
     "Copier le chemin enregistré": "Copy recorded path",
     "Hors du worktree": "Outside worktree",
-    "Environnement inconnu": "Unknown environment"
+    "Environnement inconnu": "Unknown environment",
+    "Aucun": "None",
+    "Minimal": "Minimal",
+    "Faible": "Low",
+    "Moyen": "Medium",
+    "Élevé": "High",
+    "Très élevé": "Extra high",
+    "Par défaut dans Codex": "Codex default",
+    "Par défaut · {0}": "Default · {0}",
+    "{0} · indisponible": "{0} · unavailable",
+    "Cet effort n’est plus disponible. Choisissez un autre niveau.": "This effort is no longer available. Choose another level.",
+    "Cette version de Codex ne fournit pas les niveaux d’effort de ce modèle.": "This version of Codex does not provide this model’s effort levels.",
+    "Choisir l’effort de raisonnement. Un effort plus élevé peut prendre plus de temps.": "Choose reasoning effort. Higher effort may take longer.",
+    "L’effort enregistré est indisponible. Effacez ce choix ou actualisez Codex.": "The saved effort is unavailable. Clear this choice or refresh Codex.",
+    "Effacer l’effort enregistré": "Clear saved effort",
+    "Retirer le choix de Lens. Sans valeur par défaut annoncée, Codex conserve son réglage courant.": "Remove the Lens choice. When no default is reported, Codex keeps its current setting.",
+    "Effort de raisonnement absent du catalogue de ce modèle ; choisissez-le à nouveau. Aucun tour lancé.": "This effort is not in the model’s catalogue. Choose another level. No turn was started.",
+    "Effort de raisonnement Codex invalide ; aucun envoi effectué.": "Invalid Codex reasoning effort. Nothing was sent."
   }
 }
