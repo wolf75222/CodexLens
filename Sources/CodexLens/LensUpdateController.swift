@@ -148,7 +148,7 @@ extension LensUpdateController: SPUUpdaterDelegate {
             Text("\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"))")
                 .monospacedDigit().textSelection(.enabled)
         }
-        Toggle(label("Rechercher automatiquement les mises à jour"), isOn: Binding(get: { updater.automaticChecks }, set: updater.setAutomaticChecks))
+        Toggle(label("Rechercher automatiquement les mises à jour"), isOn: Binding(get: { updater.automaticChecks }, set: { updater.setAutomaticChecks($0) }))
             .disabled(updater.unavailableReason != nil)
         HStack {
             LensUpdateButton(updater: updater, identifier: "lens-check-updates").buttonStyle(.borderedProminent)
