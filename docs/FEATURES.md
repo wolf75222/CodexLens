@@ -1,10 +1,10 @@
 # Feature catalogue
 
-This is the detailed catalogue of the existing Codex Lens app, reviewed on **2026-10-06** against source commit **`5378bd5`**, app **0.41.0**, build **75**. It describes implemented entry points and the conditions under which their data is available. It is not a roadmap or a claim that every workflow has been retested on every macOS version.
+This catalogue describes implemented entry points and their availability boundaries through **0.43.4**. Its original review used source commit **`5378bd5`**, app **0.41.0**, build **75**, on **2026-10-06**; later sections document subsequent additions. Each capture retains its stated source and fixture version. This does not mean every workflow has been retested on every macOS version.
 
-The navigation section also includes the current unreleased workspace-return fixes. Their baseline, verification and separate captures are documented in the [navigation audit](QA/WORKSPACE_NAVIGATION.md).
+The navigation section includes the workspace-return fixes released in 0.43.0. Their baseline, verification and separate captures are documented in the [navigation audit](QA/WORKSPACE_NAVIGATION.md).
 
-The current unreleased **session curves** are described separately below and in their [model and verification notes](QA/SESSION_CURVES.md).
+The **session curves** released in 0.43.0 are described below and in their [model and verification notes](QA/SESSION_CURVES.md).
 
 The images show native macOS windows from an isolated QA app with anonymous session data. New captures in `images/features/` use CUA's native-window screenshot API; earlier images retain their documented capture methods. See the [capture notes](images/features/README.md) for methods and provenance. Recorded fixture text keeps its original language; some macOS-owned menus may be French. The chat image shows a prepared, unsent question. No personal account identity or live model answer is shown.
 
@@ -743,7 +743,8 @@ For a specific failure or unavailable record, inspect Sources and limitations an
 
 ## Application updates and removal
 
-- **Codex Lens → Check for Updates…** checks the signed stable GitHub feed. **Settings → General → Updates** offers optional automatic checks and the installed version. Installation needs your confirmation and replaces the current app in place, then relaunches it.
+- The toolbar’s download-arrow button and **Settings → General → Update app…** open the native update flow. **Codex Lens → Check for Updates…** offers the same command. The signed stable GitHub feed supplies the latest compatible release; confirmation replaces the current app in place and relaunches it.
+- During an update, **Show update…** returns to the existing progress window. Repeated clicks preserve the offered version and use current updater state. General settings also show the installed version and optional automatic checks.
 - **Settings → General → Maintenance** opens an uninstall review. Local Lens data stays by default. Optional cleanup lists only default Lens-owned folders and preferences; custom storage, Codex credentials, observed sessions, repositories and exports remain. Items move to Trash for recovery.
 - Sparkle 2.10.0 is pinned. Feed and archive signatures are verified before extraction; release-note WebViews and system profiling are disabled. Developer/QA copies cannot use the uninstall command. See [updates and removal](UPDATES.md) for installation requirements and verification limits.
 

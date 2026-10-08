@@ -176,6 +176,14 @@ jobs:
           mkdir -p dist/ui-validation/agents
           cp "$agents/native-design-v07-receipt.json" dist/ui-validation/agents/receipt.json
           cp "$agents/"*.png dist/ui-validation/agents/
+      - name: Direct update button regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          update_button="/private/tmp/lens-ci-update-button-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$update_button" --corpus "$corpus" --entrypoint UpdateButtonMain.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/update-button
+          cp "$update_button/native-design-v07-receipt.json" dist/ui-validation/update-button/receipt.json
+          cp "$update_button/"*.png dist/ui-validation/update-button/
       - name: Signed update regression
         run: |
           updates="/private/tmp/lens-ci-updates-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

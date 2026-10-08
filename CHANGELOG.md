@@ -6,17 +6,13 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
-## [0.43.3] - 2026-10-08
+## [0.43.4] - 2026-10-08
 
 ### Added
 
+- A direct Update app toolbar button and a prominent equivalent in General settings, both using the existing signed GitHub release updater.
 - Reasoning effort beside the model selector in the chat composer and in AI settings, using the installed Codex model catalogue.
 - Per-model effort preferences and explicit advertised defaults. Each send freezes the selected effort; unsupported saved choices require a new selection.
-
-## [0.43.2] - 2026-10-08
-
-### Added
-
 - A native changed-file tree grouped by worktree and folder, beside the selected diff. The resizable right pane moves below the reading area in compact windows and can be hidden.
 - File-tree filtering, keyboard disclosure, recorded-path copy, current-file opening and explicit selected-file reveal.
 - Window-local expansion/viewport state and copied navigation checkpoints preserve context through refresh, hide/show and Back/Forward.
@@ -24,16 +20,18 @@ Compatibility and test coverage are documented in each release's notes. A listed
 ### Changed
 
 - Tree preparation/filtering uses existing immutable change projections without rereading session files or Git. The Files presentation skips activity-graph construction.
-
-## [0.43.1] - 2026-10-08
-
-### Changed
-
 - Native loading bars appear immediately with current phases, measured work and remaining counts.
 - Session linking, presentation, timeline and conversation exports report their actual preparation stages; unknown totals remain indeterminate.
 - File search shows files read and discovered queued directories without treating limits as completion percentages.
 - Loading animation respects Reduce Motion and cancellation; source/diff parsing cancels its detached worker.
 - Reuse first-winner agent indexes and avoid repeated descendant scans, unobserved progress accounting and unfiltered conversation work.
+
+### Fixed
+
+- Repeated update clicks use fresh Sparkle state and bring an existing update window forward without clearing its version or restarting the update flow.
+- Update-session state is observed directly so maintenance controls and button labels stay current.
+
+Versions 0.43.1–0.43.3 were development builds; this public release includes their changes.
 
 ## [0.43.0] - 2026-10-08
 
@@ -149,9 +147,7 @@ These versions were local deliveries, not published GitHub releases. Their dates
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
 
-[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.43.3...main
-[0.43.3]: https://github.com/wolf75222/CodexLens/compare/v0.43.2...v0.43.3
-[0.43.2]: https://github.com/wolf75222/CodexLens/compare/v0.43.1...v0.43.2
-[0.43.1]: https://github.com/wolf75222/CodexLens/compare/v0.43.0...v0.43.1
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.43.4...main
+[0.43.4]: https://github.com/wolf75222/CodexLens/compare/v0.43.0...v0.43.4
 [0.43.0]: https://github.com/wolf75222/CodexLens/compare/v0.41.0...v0.43.0
 [0.41.0]: https://github.com/wolf75222/CodexLens/releases/tag/v0.41.0

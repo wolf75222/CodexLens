@@ -2,8 +2,10 @@
 
 ## Updating an installed app
 
-Install Codex Lens in **Applications** and run that copy. **Codex Lens → Check
-for Updates…** checks the stable GitHub release feed. Update preferences are in
+Install Codex Lens in **Applications** and run that copy. Use the toolbar’s
+download-arrow button or **Settings → General → Update app…** to open the native
+update flow. **Codex Lens → Check for Updates…** offers the same command.
+The updater checks the stable GitHub release feed. Update preferences are in
 **Settings → General**. An update replaces the installed application in its
 current location; it does not create another version alongside it. Sparkle
 downloads, validates and installs the update, then relaunches Lens when you
