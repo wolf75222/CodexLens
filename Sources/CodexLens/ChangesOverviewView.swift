@@ -143,7 +143,7 @@ struct ChangesOverviewView: View {
                 Divider()
                     if horizontal {
                         HSplitView {
-                            readingPane(scope).accessibilityIdentifier("lens-changes-reading-pane").frame(minWidth: 280, idealWidth: 550, maxWidth: .infinity, maxHeight: .infinity)
+                            readingPane(scope).accessibilityElement(children: .contain).accessibilityIdentifier("lens-changes-reading-pane").frame(minWidth: 280, idealWidth: 550, maxWidth: .infinity, maxHeight: .infinity)
                             if store.changesFileTreeVisible {
                                 treePane(scope).frame(minWidth: 220, idealWidth: 280, maxWidth: 440)
                                     .background(LensPaneSizing(key: "changes-file-tree", preferredWidth: 280, context: windowContext))
@@ -151,7 +151,7 @@ struct ChangesOverviewView: View {
                         }
                     } else {
                         VSplitView {
-                            readingPane(scope).accessibilityIdentifier("lens-changes-reading-pane").frame(minHeight: 180, idealHeight: 380, maxHeight: .infinity)
+                            readingPane(scope).accessibilityElement(children: .contain).accessibilityIdentifier("lens-changes-reading-pane").frame(minHeight: 180, idealHeight: 380, maxHeight: .infinity)
                             if store.changesFileTreeVisible { treePane(scope).frame(minHeight: 120, idealHeight: 220, maxHeight: .infinity) }
                         }
                     }
@@ -285,7 +285,7 @@ struct ChangesOverviewView: View {
                 LensLoadingState(title: LensL10n.text("Filtrage des fichiers…"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        }.accessibilityIdentifier("lens-changes-files")
+        }.accessibilityElement(children: .contain).accessibilityIdentifier("lens-changes-files")
     }
 
     @MainActor private func filterTree() async {
