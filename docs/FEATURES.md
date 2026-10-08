@@ -457,6 +457,10 @@ Entry points: the chat toolbar action, **Option-Command-C**, **Command-7**, or *
 - Reported plan/rate-limit data is shown only when available. Account connection, catalogue availability, and completed model access are separate states.
 - Group Investigations in Codex creates a section for new investigation chats before sending; existing user moves or renames are respected.
 
+![Chat composer with model and reasoning effort selectors](images/chat-effort/chat-effort.png)
+
+*Anonymous capability metadata and an unsent question. This image is a source-matched offscreen AppKit component render, not a production desktop capture. See the [capture method](images/chat-effort/capture-method.json).*
+
 ### Questions, replies, and attached context
 
 | Feature | Available behavior | Boundary |
