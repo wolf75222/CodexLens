@@ -109,13 +109,13 @@ extension LensUpdateController: SPUUpdaterDelegate {
 }
 #endif
 
-struct LensUpdateButton: View {
+@MainActor struct LensUpdateButton: View {
     @State private var updater: LensUpdateController
     @ObservedObject private var application = LensApplicationCoordinator.shared
     var iconOnly = false
     var identifier = "lens-update-app"
-    init(updater: LensUpdateController = .shared, iconOnly: Bool = false, identifier: String = "lens-update-app") {
-        _updater = State(initialValue: updater); self.iconOnly = iconOnly; self.identifier = identifier
+    init(updater: LensUpdateController? = nil, iconOnly: Bool = false, identifier: String = "lens-update-app") {
+        _updater = State(initialValue: updater ?? .shared); self.iconOnly = iconOnly; self.identifier = identifier
     }
     var body: some View {
         Button { updater.check() } label: {
@@ -134,10 +134,10 @@ struct LensUpdateButton: View {
     private var symbol: String { updater.availableVersion == nil ? "arrow.down.circle" : "arrow.down.circle.fill" }
 }
 
-struct LensUpdateSettingsView: View {
+@MainActor struct LensUpdateSettingsView: View {
     @State private var updater: LensUpdateController
     @AppStorage("lens.language") private var language = "en"
-    init(updater: LensUpdateController = .shared) { _updater = State(initialValue: updater) }
+    init(updater: LensUpdateController? = nil) { _updater = State(initialValue: updater ?? .shared) }
     private func label(_ french: String, _ values: String...) -> String {
         var result = LensL10n.text(french, in: LensL10n.Language(rawValue: language) ?? .system)
         for (index, value) in values.enumerated() { result = result.replacingOccurrences(of: "{\(index)}", with: value) }
