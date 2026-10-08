@@ -123,8 +123,8 @@ private struct NativeChangesFileTree: NSViewRepresentable {
         outline.target = coordinator
         outline.doubleAction = #selector(Coordinator.toggleFolder(_:))
         outline.makeMenu = { [weak coordinator] row in coordinator?.menu(for: row) }
-        outline.onLayout = { [weak coordinator] in coordinator?.applyPendingPresentation() }
-        scroll.onLayout = { [weak coordinator] in coordinator?.applyPendingPresentation() }
+        outline.onLayout = { [weak coordinator] in coordinator?.schedulePendingPresentation() }
+        scroll.onLayout = { [weak coordinator] in coordinator?.schedulePendingPresentation() }
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(coordinator, selector: #selector(Coordinator.didScroll(_:)),
                                                name: NSView.boundsDidChangeNotification, object: scroll.contentView)
@@ -144,6 +144,7 @@ private struct NativeChangesFileTree: NSViewRepresentable {
         coordinator.outline?.delegate = nil
         coordinator.outline?.dataSource = nil
         coordinator.outline?.target = nil
+        coordinator.cancelNativeUpdates()
         coordinator.parent = nil
     }
 
@@ -165,13 +166,26 @@ private struct NativeChangesFileTree: NSViewRepresentable {
         private var suppressCallbacks = false
         private var applyingPresentation = false
         private var configuring = false
+        private var nativeCallbackDepth = 0
+        private var presentationAwaitingCallback = false
+        private var queuedConfiguration: NativeChangesFileTree?
+        private var configurationTask: Task<Void, Never>?
         private var persistenceTask: Task<Void, Never>?
         private var layoutTask: Task<Void, Never>?
 
         func configure(_ parent: NativeChangesFileTree) {
+            // A synchronous binding callback can publish SwiftUI's next view
+            // while AppKit still owns its selection delegate stack.
+            guard nativeCallbackDepth == 0, !configuring, !applyingPresentation else {
+                queuedConfiguration = parent
+                return
+            }
             guard let outline else { return }
+            queuedConfiguration = nil
+            configurationTask?.cancel()
+            configurationTask = nil
             configuring = true
-            defer { configuring = false }
+            defer { configuring = false; scheduleQueuedConfiguration() }
             let firstPresentation = self.parent == nil || self.parent?.state !== parent.state
             if firstPresentation {
                 expandedIDs = parent.state.expandedIDs
@@ -244,11 +258,51 @@ private struct NativeChangesFileTree: NSViewRepresentable {
             outline.setAccessibilityLabel(LensL10n.text("Arborescence des fichiers modifiés"))
             // Layout can be unavailable during updateNSView. All persistence is
             // deferred; AppKit callbacks fired by restoration stay suppressed.
+            schedulePendingPresentation()
+        }
+
+        private func scheduleQueuedConfiguration() {
+            guard nativeCallbackDepth == 0, !configuring, !applyingPresentation,
+                  queuedConfiguration != nil, configurationTask == nil else { return }
+            configurationTask = Task { @MainActor [weak self] in
+                guard !Task.isCancelled, let self else { return }
+                self.configurationTask = nil
+                guard self.nativeCallbackDepth == 0, !self.configuring, !self.applyingPresentation,
+                      let next = self.queuedConfiguration else { return }
+                self.queuedConfiguration = nil
+                self.configure(next)
+            }
+        }
+
+        func schedulePendingPresentation() {
+            guard pendingSelection || pendingViewport != nil || pendingReveal else { return }
             layoutTask?.cancel()
             layoutTask = Task { @MainActor [weak self] in
                 guard !Task.isCancelled else { return }
                 self?.applyPendingPresentation()
             }
+        }
+
+        private func nativeCallback<T>(_ body: () -> T) -> T {
+            nativeCallbackDepth += 1
+            defer {
+                nativeCallbackDepth -= 1
+                if nativeCallbackDepth == 0 {
+                    scheduleQueuedConfiguration()
+                    if presentationAwaitingCallback {
+                        presentationAwaitingCallback = false
+                        schedulePendingPresentation()
+                    }
+                }
+            }
+            return body()
+        }
+
+        func cancelNativeUpdates() {
+            configurationTask?.cancel()
+            layoutTask?.cancel()
+            queuedConfiguration = nil
+            presentationAwaitingCallback = false
         }
 
         private func restoreExpansion() {
@@ -266,6 +320,10 @@ private struct NativeChangesFileTree: NSViewRepresentable {
         }
 
         func applyPendingPresentation() {
+            guard nativeCallbackDepth == 0 else {
+                presentationAwaitingCallback = true
+                return
+            }
             guard !configuring, !applyingPresentation,
                   pendingSelection || pendingViewport != nil || pendingReveal,
                   let outline, let scroll, let parent,
@@ -273,7 +331,11 @@ private struct NativeChangesFileTree: NSViewRepresentable {
             applyingPresentation = true
             let oldSuppression = suppressCallbacks
             suppressCallbacks = true
-            defer { suppressCallbacks = oldSuppression; applyingPresentation = false }
+            defer {
+                suppressCallbacks = oldSuppression
+                applyingPresentation = false
+                scheduleQueuedConfiguration()
+            }
             if pendingReveal, let fileID = parent.selectedFileID, let id = fileNodeIDs[fileID], let item = items[id] {
                 for ancestorID in parent.tree.ancestorsByFileID[fileID] ?? [] {
                     guard let ancestor = items[ancestorID] else { continue }
@@ -322,74 +384,96 @@ private struct NativeChangesFileTree: NSViewRepresentable {
 
         func savePresentation() {
             guard let parent else { return }
+            // Native geometry queries can trigger table layout. Capture exact
+            // row anchors after its delegate unwinds, keeping a teardown fallback.
+            let viewport = pendingViewport ?? (nativeCallbackDepth == 0 ? captureViewport()
+                : ChangesTreeViewport(origin: scroll?.contentView.bounds.origin ?? .zero))
             let snapshot = ChangesTreeSnapshot(expandedIDs: expandedIDs,
-                                               viewport: pendingViewport ?? captureViewport(),
+                                               viewport: viewport,
                                                selectedItemID: selectedItemID, selectedFileID: selectedFileID,
                                                revealRevision: revealRevision, pendingReveal: pendingReveal,
                                                knownRootIDs: knownRootIDs)
             persistenceTask?.cancel()
             let state = parent.state
-            persistenceTask = Task { @MainActor in
+            persistenceTask = Task { @MainActor [weak self] in
                 guard !Task.isCancelled else { return }
-                state.save(snapshot)
+                var ready = snapshot
+                if let self, self.parent?.state === state, self.nativeCallbackDepth == 0,
+                   !self.configuring, !self.applyingPresentation {
+                    ready.viewport = self.pendingViewport ?? self.captureViewport()
+                }
+                state.save(ready)
             }
         }
 
         @objc func didScroll(_ notification: Notification) {
-            guard !suppressCallbacks, !applyingPresentation, !configuring else { return }
+            guard !suppressCallbacks, !applyingPresentation, !configuring, nativeCallbackDepth == 0 else { return }
             // A deliberate scroll wins over any outstanding layout restoration.
             pendingViewport = nil
             savePresentation()
         }
 
         func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-            (item as? ChangesTreeItem)?.presentation.childIDs.count ?? rootIDs.count
+            nativeCallback { (item as? ChangesTreeItem)?.presentation.childIDs.count ?? rootIDs.count }
         }
         func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-            let ids = (item as? ChangesTreeItem)?.presentation.childIDs ?? rootIDs
-            return items[ids[index]]!
+            nativeCallback {
+                let ids = (item as? ChangesTreeItem)?.presentation.childIDs ?? rootIDs
+                return items[ids[index]]!
+            }
         }
         func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-            guard let item = item as? ChangesTreeItem else { return false }
-            return !item.presentation.childIDs.isEmpty
+            nativeCallback {
+                guard let item = item as? ChangesTreeItem else { return false }
+                return !item.presentation.childIDs.isEmpty
+            }
         }
         func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
-            let id = NSUserInterfaceItemIdentifier("lens-changes-tree-row")
-            let row = outlineView.makeView(withIdentifier: id, owner: self) as? LensTableSelectionRowView ?? LensTableSelectionRowView()
-            row.identifier = id
-            row.accent = parent?.accent ?? .lens
-            return row
+            nativeCallback {
+                let row = LensTableSelectionRowView()
+                row.identifier = NSUserInterfaceItemIdentifier("lens-changes-tree-row")
+                row.accent = parent?.accent ?? .lens
+                return row
+            }
         }
         func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
-            guard let item = item as? ChangesTreeItem else { return nil }
-            let id = NSUserInterfaceItemIdentifier("lens-changes-tree-cell")
-            let cell = outlineView.makeView(withIdentifier: id, owner: self) as? ChangesTreeCellView ?? ChangesTreeCellView()
-            cell.identifier = id
-            cell.configure(item.presentation, accent: parent?.accent ?? .lens)
-            return cell
+            nativeCallback {
+                guard let item = item as? ChangesTreeItem else { return nil }
+                let id = NSUserInterfaceItemIdentifier("lens-changes-tree-cell")
+                let cell = outlineView.makeView(withIdentifier: id, owner: self) as? ChangesTreeCellView ?? ChangesTreeCellView()
+                cell.identifier = id
+                cell.configure(item.presentation, accent: parent?.accent ?? .lens)
+                return cell
+            }
         }
         func outlineViewSelectionDidChange(_ notification: Notification) {
             guard !suppressCallbacks, let outline, let parent else { return }
-            let item = outline.item(atRow: outline.selectedRow) as? ChangesTreeItem
-            selectedItemID = item?.presentation.id
-            if let item, item.presentation.kind == .file, let fileID = item.presentation.fileID {
-                selectedFileID = fileID
-                savePresentation()
-                parent.onSelectFile(fileID)
-            } else {
-                // Native folder keyboard navigation never clears the diff.
-                savePresentation()
+            nativeCallback {
+                let item = outline.item(atRow: outline.selectedRow) as? ChangesTreeItem
+                selectedItemID = item?.presentation.id
+                if let item, item.presentation.kind == .file, let fileID = item.presentation.fileID {
+                    selectedFileID = fileID
+                    savePresentation()
+                    parent.onSelectFile(fileID)
+                } else {
+                    // Native folder keyboard navigation never clears the diff.
+                    savePresentation()
+                }
             }
         }
         func outlineViewItemDidExpand(_ notification: Notification) {
             guard !suppressCallbacks, let item = notification.userInfo?["NSObject"] as? ChangesTreeItem else { return }
-            expandedIDs.insert(item.presentation.id)
-            savePresentation()
+            nativeCallback {
+                expandedIDs.insert(item.presentation.id)
+                savePresentation()
+            }
         }
         func outlineViewItemDidCollapse(_ notification: Notification) {
             guard !suppressCallbacks, let item = notification.userInfo?["NSObject"] as? ChangesTreeItem else { return }
-            expandedIDs.remove(item.presentation.id)
-            savePresentation()
+            nativeCallback {
+                expandedIDs.remove(item.presentation.id)
+                savePresentation()
+            }
         }
         @objc func toggleFolder(_ sender: NSOutlineView) {
             guard let item = sender.item(atRow: sender.clickedRow) as? ChangesTreeItem,

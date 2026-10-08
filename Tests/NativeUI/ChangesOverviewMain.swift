@@ -392,7 +392,7 @@ import SwiftUI
             }
             check(name + "-preserves-file-trace-and-mode", store.changesOverviewFileID == alphaFile.id
                 && store.selection == .change(alphaResult.id) && store.changesOverviewMode == .files)
-            let geometry = controlsGeometry(host, window: window,
+            let geometry = try await waitForPublicControlsGeometry(host, window: window,
                 selectors: ["lens-changes-presentation", "lens-changes-current-git", "lens-changes-tree-toggle"])
             check(name + "-overview-controls-stay-in-window", geometry.fits)
             let layout = treeLayout(in: host)
@@ -739,9 +739,38 @@ import SwiftUI
     }
     private struct ControlGeometry {
         let fits: Bool
+        let publicQualified: Bool
         let observation: [String: Any]
     }
     private static let interactiveRoles: Set<String> = ["AXButton", "AXRadioButton", "AXPopUpButton", "AXMenuButton", "AXCheckBox", "AXSwitch"]
+
+    @MainActor private static func waitForPublicControlsGeometry(_ host: NSView, window: NSWindow,
+                                                                selectors: [String]) async throws -> ControlGeometry {
+        // A root replacement/resize can precede registration of this exact
+        // window in its public AX tree. Let that owned tree catch up while
+        // retaining all selector, target-count and containment requirements.
+        // Other native wait/action helpers keep their existing fallback rules.
+        let started = ProcessInfo.processInfo.systemUptime
+        let deadline = started + 5
+        var attempts = 0
+        while true {
+            await Task.yield(); draw(host)
+            let geometry = controlsGeometry(host, window: window, selectors: selectors)
+            attempts += 1
+            let ready = geometry.fits && geometry.publicQualified
+            let now = ProcessInfo.processInfo.systemUptime
+            if ready || now >= deadline {
+                var observation = geometry.observation
+                observation["publicRegistrationWaitAttempts"] = attempts
+                observation["publicRegistrationWaitSeconds"] = now - started
+                observation["publicRegistrationWaitTimedOut"] = !ready
+                // Missing public registration or control geometry remains a
+                // failed check; a native fallback alone cannot satisfy this wait.
+                return ControlGeometry(fits: ready, publicQualified: geometry.publicQualified, observation: observation)
+            }
+            try await Task.sleep(nanoseconds: UInt64(min(0.02, deadline - now) * 1_000_000_000))
+        }
+    }
 
     @MainActor private static func controlsGeometry(_ host: NSView, window: NSWindow, selectors: [String]) -> ControlGeometry {
         let nativeNodes = elements(host), publicTree = ownAXNodes(host)
@@ -783,7 +812,7 @@ import SwiftUI
                 "screenFramePublicAX": frame.map(NSStringFromRect) ?? "<unavailable>",
                 "hostFrame": local.map(NSStringFromRect) ?? "<unavailable>", "fitsVisibleContent": fits(local)]
         }
-        var records: [[String: Any]] = [], passed = true
+        var records: [[String: Any]] = [], passed = true, publicQualified = true
         for selector in selectors {
             let nativeRoots = nativeNodes.filter { $0.accessibilityIdentifier() == selector }
             let publicRoots = publicTree.nodes.filter { axValue($0, kAXIdentifierAttribute).1 as? String == selector }
@@ -812,10 +841,13 @@ import SwiftUI
             // with all three required, rather than declare the group itself a button.
             let minimumTargets = selector == "lens-changes-presentation" ? 3 : 1
             let usePublic = !publicRoots.isEmpty
+            let publicSelectorPassed = usePublic && windowSizeMatches && publicTargets.count >= minimumTargets
+                && publicTargets.allSatisfy { fits(axFrame($0).flatMap(publicInHost)) }
             let selectorPassed = usePublic
-                ? windowSizeMatches && publicTargets.count >= minimumTargets && publicTargets.allSatisfy { fits(axFrame($0).flatMap(publicInHost)) }
+                ? publicSelectorPassed
                 : nativeTargets.count >= minimumTargets && nativeTargets.allSatisfy { fits(inHost($0.accessibilityFrame())) }
             passed = passed && selectorPassed
+            publicQualified = publicQualified && publicSelectorPassed
             records.append(["selector": selector, "passed": selectorPassed, "checkedProvider": usePublic ? "public-own-process-AX" : "NSAccessibilityProtocol",
                 "minimumInteractiveTargets": minimumTargets, "nativeCandidates": nativeRoots.map(nativeRecord),
                 "nativeInteractiveTargets": nativeTargets.map(nativeRecord), "publicCandidates": publicRoots.map(publicRecord),
@@ -828,7 +860,7 @@ import SwiftUI
             "hostFrame": NSStringFromRect(host.frame), "hostBounds": NSStringFromRect(host.bounds),
             "hostVisibleRect": NSStringFromRect(host.visibleRect), "windowFramePublicAX": publicWindowFrame.map(NSStringFromRect) ?? "<unavailable>",
             "publicWindowSizeMatchesAppKit": windowSizeMatches, "publicAXDiagnostics": publicTree.diagnostics, "controls": records]
-        return ControlGeometry(fits: passed, observation: value)
+        return ControlGeometry(fits: passed, publicQualified: publicQualified, observation: value)
     }
     private static func axFrame(_ element: AXUIElement) -> CGRect? {
         guard let position = axValue(element, kAXPositionAttribute).1, CFGetTypeID(position) == AXValueGetTypeID(),
