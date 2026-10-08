@@ -2363,6 +2363,21 @@
     "Dossiers déjà découverts ; cette file peut grandir pendant la recherche.": "Already discovered folders; this queue can grow during the search.",
     "Préparation du diff…": "Preparing diff…",
     "Désinstallation en cours…": "Uninstalling…",
-    "Choix de l’emplacement…": "Choosing destination…"
+    "Choix de l’emplacement…": "Choosing destination…",
+    "Masquer l’arborescence des fichiers": "Hide file tree",
+    "Afficher l’arborescence des fichiers": "Show file tree",
+    "Arborescence des fichiers": "File tree",
+    "Affichée": "Visible",
+    "Retrouver le fichier sélectionné dans l’arborescence": "Reveal the selected file in the tree",
+    "Retrouver le fichier sélectionné": "Reveal selected file",
+    "Filtrer les fichiers…": "Filter files…",
+    "Filtrer l’arborescence des fichiers": "Filter the file tree",
+    "Aucun fichier correspondant": "No matching files",
+    "Modifiez le filtre des fichiers ou les filtres de la session.": "Change the file filter or session filters.",
+    "Filtrage des fichiers…": "Filtering files…",
+    "Arborescence des fichiers modifiés": "Changed file tree",
+    "Copier le chemin enregistré": "Copy recorded path",
+    "Hors du worktree": "Outside worktree",
+    "Environnement inconnu": "Unknown environment"
   }
 }

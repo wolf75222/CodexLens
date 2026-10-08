@@ -6,6 +6,18 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+## [0.43.2] - 2026-10-08
+
+### Added
+
+- A native changed-file tree grouped by worktree and folder, beside the selected diff. The resizable right pane moves below the reading area in compact windows and can be hidden.
+- File-tree filtering, keyboard disclosure, recorded-path copy, current-file opening and explicit selected-file reveal.
+- Window-local expansion/viewport state and copied navigation checkpoints preserve context through refresh, hide/show and Back/Forward.
+
+### Changed
+
+- Tree preparation/filtering uses existing immutable change projections without rereading session files or Git. The Files presentation skips activity-graph construction.
+
 ## [0.43.1] - 2026-10-08
 
 ### Changed
@@ -130,7 +142,8 @@ These versions were local deliveries, not published GitHub releases. Their dates
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
 
-[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.43.1...main
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.43.2...main
+[0.43.2]: https://github.com/wolf75222/CodexLens/compare/v0.43.1...v0.43.2
 [0.43.1]: https://github.com/wolf75222/CodexLens/compare/v0.43.0...v0.43.1
 [0.43.0]: https://github.com/wolf75222/CodexLens/compare/v0.41.0...v0.43.0
 [0.41.0]: https://github.com/wolf75222/CodexLens/releases/tag/v0.41.0
