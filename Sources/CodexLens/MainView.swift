@@ -467,6 +467,11 @@ struct MainView: View {
         } else { collectionCenter }
     }
     @ViewBuilder private var collectionCenter: some View {
+        if store.presentation == nil, store.isProjecting || store.timelinePreparing {
+            LensLoadingState(title: LensL10n.text("Préparation de la session…"),
+                workProgress: store.projectionProgress)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
         switch store.section {
         case .activity: ActivityView()
         case .calls: EventListView(events: store.presentation?.filteredCalls ?? [], title: LensL10n.text("Appels d’outils"), isCalls: true)
@@ -475,6 +480,7 @@ struct MainView: View {
         case .resources: ResourcesView()
         case .changes: ChangesView()
         case .investigation: InvestigationEvidenceView(investigator: store.investigation)
+        }
         }
     }
     private var emptyState: some View {

@@ -3,6 +3,88 @@ import XCTest
 @testable import LensCore
 
 final class TimelineModelTests: XCTestCase {
+    func testTimelineProgressReportsMeasuredBuildAndCacheReusePaths() async throws {
+        let model = TimelineModel()
+        let rows = (0..<24).map { event("anonymous-\($0)", at: Double($0)) }
+        let agents = [AgentRecord(id: "root", name: "Anonymous")]
+        let cold = TimelineProgressCapture()
+        let first = try await model.prepare(events: rows, agents: agents, progress: { cold.append($0) })
+        XCTAssertEqual(cold.details, ["timeline.validate", "timeline.sort", "timeline.build", "timeline.lanes", "timeline.fingerprint", "timeline.retention"])
+        for detail in ["timeline.validate", "timeline.build", "timeline.fingerprint"] {
+            let completed = cold.values.last { $0.detail == detail }
+            XCTAssertEqual(completed?.completed, Int64(rows.count))
+            XCTAssertEqual(completed?.total, Int64(rows.count))
+            XCTAssertEqual(completed?.unit, .events)
+        }
+        XCTAssertEqual(cold.values.last?.step, 6)
+        XCTAssertEqual(cold.values.last?.stepCount, 6)
+        XCTAssertEqual(cold.values.last?.remaining, 0)
+
+        let warm = TimelineProgressCapture()
+        let reused = try await model.prepare(events: rows, agents: agents, progress: { warm.append($0) })
+        XCTAssertEqual(first.fingerprintSHA256, reused.fingerprintSHA256)
+        XCTAssertEqual(warm.details, ["timeline.cache"])
+        XCTAssertEqual(warm.values.last?.completed, Int64(rows.count))
+        XCTAssertEqual(warm.values.last?.step, 1)
+        XCTAssertEqual(warm.values.last?.stepCount, 1)
+        XCTAssertEqual(warm.values.last?.remaining, 0)
+        let count = await model.completedPreparations
+        XCTAssertEqual(count, 1, "Reporting a cache check must not rebuild the projection")
+    }
+
+    func testFailedAndCancelledTimelineBuildsDoNotReportFinalCompletion() async throws {
+        let invalid = TimelineProgressCapture()
+        let duplicate = event("duplicate", at: 1)
+        XCTAssertThrowsError(try TimelineProjection.prepare(events: [duplicate, duplicate], agents: [], progress: { invalid.append($0) }))
+        XCTAssertEqual(invalid.details, ["timeline.validate"])
+        XCTAssertEqual(invalid.values.last?.completed, 0)
+
+        let model = TimelineModel()
+        let rows = [event("anonymous", at: 1)]
+        let first = try await model.prepare(events: rows, agents: [])
+        let replacement = [event("anonymous", at: 2)]
+        let cancelled = TimelineProgressCapture()
+        let task = Task {
+            try await model.prepare(events: replacement, agents: [], progress: {
+                cancelled.append($0)
+                if $0.detail == "timeline.sort" && $0.completed == 0 { withUnsafeCurrentTask { $0?.cancel() } }
+            })
+        }
+        do { _ = try await task.value; XCTFail("Cancellation must prevent final completion") }
+        catch is CancellationError { }
+        XCTAssertEqual(cancelled.details, ["timeline.cache", "timeline.validate", "timeline.sort"])
+        XCTAssertEqual(cancelled.values.last?.remaining, 1)
+        XCTAssertFalse(cancelled.values.contains { $0.step == $0.stepCount && $0.remaining == 0 })
+        let retained = try await model.prepare(events: rows, agents: [])
+        XCTAssertEqual(retained.bounds, first.bounds)
+        let finalPhase = TimelineProgressCapture()
+        let finalTask = Task {
+            try await model.prepare(events: replacement, agents: [], progress: {
+                finalPhase.append($0)
+                if $0.detail == "timeline.retention" && $0.completed == 0 { withUnsafeCurrentTask { $0?.cancel() } }
+            })
+        }
+        do { _ = try await finalTask.value; XCTFail("A cancelled retention phase cannot publish completion") }
+        catch is CancellationError { }
+        XCTAssertEqual(finalPhase.values.last?.detail, "timeline.retention")
+        XCTAssertEqual(finalPhase.values.last?.remaining, 1)
+        XCTAssertFalse(finalPhase.values.contains { $0.step == 6 && $0.remaining == 0 })
+        let afterFinalCancellation = try await model.prepare(events: rows, agents: [])
+        XCTAssertEqual(afterFinalCancellation.bounds, first.bounds)
+        let count = await model.completedPreparations
+        XCTAssertEqual(count, 1)
+    }
+
+    func testEmptyTimelineCompletesStepsWithoutInventingProcessedEvents() throws {
+        let capture = TimelineProgressCapture()
+        let result = try TimelineProjection.prepare(events: [], agents: [], progress: { capture.append($0) })
+        XCTAssertEqual(result.eventCount, 0)
+        XCTAssertFalse(capture.values.contains { $0.unit == .events && $0.completed > 0 })
+        XCTAssertEqual(capture.values.last?.step, 5)
+        XCTAssertEqual(capture.values.last?.stepCount, 5)
+        XCTAssertEqual(capture.values.last?.remaining, 0)
+    }
+
     func testRetentionByteBudgetSkipsCachingWithoutDroppingLargeIdentifiers() async throws {
         let model = TimelineModel()
         let id = "large-" + String(repeating: "évidence", count: 2000)
@@ -222,5 +304,15 @@ final class TimelineModelTests: XCTestCase {
         XCTAssertEqual(retained, 0, "The oversized preparation must not create a second retained cache")
         XCTAssertEqual(TimelineBuildBudget().maxEvents, 500_000)
         XCTAssertEqual(TimelineBuildBudget().maxRetentionBytes, 64 * 1024 * 1024)
+    }
+}
+
+private final class TimelineProgressCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [OperationProgress] = []
+    func append(_ progress: OperationProgress) { lock.lock(); defer { lock.unlock() }; recorded.append(progress) }
+    var values: [OperationProgress] { lock.lock(); defer { lock.unlock() }; return recorded }
+    var details: [String] {
+        values.reduce(into: []) { if let detail = $1.detail, $0.last != detail { $0.append(detail) } }
     }
 }

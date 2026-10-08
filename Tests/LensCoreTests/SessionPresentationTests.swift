@@ -2,6 +2,85 @@ import XCTest
 @testable import LensCore
 
 final class SessionPresentationTests: XCTestCase {
+    func testPreparationProgressDistinguishesColdFilteredAndReusedPaths() async throws {
+        let builder = SessionPresentationBuilder()
+        let snapshot = LensDemoFixtures.snapshot(eventCount: 24)
+        let cold = PresentationProgressCapture()
+        let first = try await builder.prepare(snapshot: snapshot, revision: 1, filters: EventFilters(), progress: { cold.append($0) })
+        XCTAssertEqual(cold.stages, [.indexingEvents, .inspectingContext, .inspectingCommunications, .indexingChanges, .inspectingOrigin, .filteringEvents, .preparingTrends])
+        let eventCompletion = cold.values.last { $0.stage == .indexingEvents }
+        XCTAssertEqual(eventCompletion?.completed, Int64(snapshot.events.count))
+        XCTAssertEqual(eventCompletion?.total, Int64(snapshot.events.count))
+        XCTAssertEqual(eventCompletion?.unit, .events)
+        XCTAssertEqual(cold.values.last?.remaining, 0)
+        XCTAssertEqual(cold.values.last?.step, 7)
+        XCTAssertEqual(cold.values.last?.stepCount, 7)
+
+        let reuse = PresentationProgressCapture()
+        let repeated = try await builder.prepare(snapshot: snapshot, revision: 1, filters: EventFilters(), progress: { reuse.append($0) })
+        XCTAssertEqual(repeated.id, first.id)
+        XCTAssertEqual(reuse.values, [OperationProgress(stage: .filteringEvents, completed: 1, total: 1, detail: "presentation.reuse", step: 1, stepCount: 1)])
+
+        let filters = EventFilters(query: "recorded evidence")
+        let filtered = PresentationProgressCapture()
+        let changed = try await builder.prepare(snapshot: snapshot, revision: 1, filters: filters, progress: { filtered.append($0) })
+        XCTAssertEqual(filtered.stages, [.filteringEvents, .preparingTrends])
+        XCTAssertEqual(filtered.values.last?.step, 2)
+        XCTAssertEqual(filtered.values.last?.stepCount, 2)
+        XCTAssertEqual(filtered.values.last?.remaining, 0)
+        XCTAssertEqual(changed.eventsByID, first.eventsByID, "Filtering keeps the shared evidence index")
+
+        let graphOnly = PresentationProgressCapture()
+        let graphChanged = try await builder.prepare(snapshot: snapshot, revision: 1, filters: filters, agentFilters: AgentFilters(query: "anonymous"), progress: { graphOnly.append($0) })
+        XCTAssertEqual(graphOnly.stages, [.filteringEvents], "A graph query reuses the existing trends")
+        XCTAssertEqual(graphOnly.values.last?.stepCount, 1)
+        XCTAssertEqual(graphChanged.filteredEvents, changed.filteredEvents)
+    }
+
+    func testCancelledPreparationDoesNotReportFinalCompletionOrReplaceCachedPresentation() async throws {
+        let builder = SessionPresentationBuilder()
+        let snapshot = LensDemoFixtures.snapshot(eventCount: 24)
+        let existing = try await builder.prepare(snapshot: snapshot, revision: 1, filters: EventFilters())
+        let capture = PresentationProgressCapture()
+        let task = Task {
+            try await builder.prepare(snapshot: snapshot, revision: 2, filters: EventFilters(), progress: {
+                capture.append($0)
+                if $0.stage == .inspectingContext && $0.completed == 0 { withUnsafeCurrentTask { $0?.cancel() } }
+            })
+        }
+        do { _ = try await task.value; XCTFail("A cancelled phase must not finish preparation") }
+        catch is CancellationError { }
+        XCTAssertEqual(capture.stages, [.indexingEvents, .inspectingContext])
+        XCTAssertEqual(capture.values.last?.remaining, 1)
+        let retained = try await builder.prepare(snapshot: snapshot, revision: 1, filters: EventFilters())
+        XCTAssertEqual(retained.id, existing.id)
+
+        let finalPhase = PresentationProgressCapture()
+        let finalTask = Task {
+            try await builder.prepare(snapshot: snapshot, revision: 1, filters: EventFilters(query: "anonymous"), progress: {
+                finalPhase.append($0)
+                if $0.stage == .preparingTrends && $0.completed == 0 { withUnsafeCurrentTask { $0?.cancel() } }
+            })
+        }
+        do { _ = try await finalTask.value; XCTFail("The last phase must finish before reporting success") }
+        catch is CancellationError { }
+        XCTAssertEqual(finalPhase.stages, [.filteringEvents, .preparingTrends])
+        XCTAssertEqual(finalPhase.values.last?.remaining, 1)
+        XCTAssertFalse(finalPhase.values.contains { $0.stage == .preparingTrends && $0.remaining == 0 })
+        let afterFinalCancellation = try await builder.prepare(snapshot: snapshot, revision: 1, filters: EventFilters())
+        XCTAssertEqual(afterFinalCancellation.id, existing.id)
+    }
+
+    func testEmptyPresentationProgressCompletesActualTasksWithoutInventedEvents() async throws {
+        let capture = PresentationProgressCapture()
+        let snapshot = SessionSnapshot(root: SessionSummary(id: "anonymous"))
+        let result = try await SessionPresentationBuilder().prepare(snapshot: snapshot, revision: 1, filters: EventFilters(), progress: { capture.append($0) })
+        XCTAssertTrue(result.filteredEvents.isEmpty)
+        XCTAssertFalse(capture.values.contains { $0.unit == .events && $0.completed > 0 })
+        XCTAssertEqual(capture.values.last?.stage, .preparingTrends)
+        XCTAssertEqual(capture.values.last?.remaining, 0)
+    }
+
     func testPublishedGenerationIsBoundedAndInvalidatedOnClose() async throws {
         let builder = SessionPresentationBuilder()
         var snapshot = LensDemoFixtures.snapshot(eventCount: 24)
@@ -225,5 +304,15 @@ final class SessionPresentationTests: XCTestCase {
 
     private func recentChange(_ id: String, event: String, environment: String = "/fixture/alpha", kind: ChangeKind = .requestedPatch) -> ChangeRecord {
         ChangeRecord(id: id, path: "src/Same.swift", environmentID: environment, agentID: "root", eventID: event, kind: kind)
+    }
+}
+
+private final class PresentationProgressCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [OperationProgress] = []
+    func append(_ progress: OperationProgress) { lock.lock(); defer { lock.unlock() }; recorded.append(progress) }
+    var values: [OperationProgress] { lock.lock(); defer { lock.unlock() }; return recorded }
+    var stages: [OperationProgress.Stage] {
+        values.reduce(into: []) { if $0.last != $1.stage { $0.append($1.stage) } }
     }
 }

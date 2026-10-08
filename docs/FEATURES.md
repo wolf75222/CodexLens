@@ -69,7 +69,7 @@ Entry points: **File → Open Session…**, the toolbar's session action, **Comm
 | Source location | The picker displays the Codex directory being consulted | “My Codex sessions” appears when this differs from the personal source |
 | Refresh | Reload the available session catalogue | No Codex session is started |
 | Row context menu | Open session, copy its ID, or copy its initial directory | An absent initial directory cannot be copied as if known |
-| Loading and cancellation | A single native bar shows aggregate history bytes across all known journals, with the current file count/bytes below and the opening stage out of four; Cancel Opening remains available | Byte progress measures the history-reading stage across all known files, not estimated time remaining. Discovery, cache restoration, linking and saving use an indeterminate indicator when no total is available. Refresh preserves existing rows; cancellation retains the previously opened session |
+| Loading and cancellation | Native bars show the current phase immediately, aggregate known history bytes, work remaining and current file counters; opening steps expand on demand | Counts belong to their phase, not estimated duration. Linking, view preparation and exports report measured work where available. Unknown totals remain indeterminate. Refresh preserves existing rows; cancellation retains the previously opened session. [Progress behavior](QA/LOADING_PROGRESS.md) |
 | Opening failure | Show the error while preserving the existing session | An ambiguous session-to-thread mapping requires the exact thread ID |
 
 The catalogue displays a session's title, identifier, date, and initial directory when recorded. Long paths and titles retain full text through tooltips or copy actions.
@@ -497,6 +497,10 @@ Formatting is bounded to **512 KiB of source, 10,000 blocks, and 50,000 formatte
 Source: [chat and context tray](../Sources/CodexLens/InvestigationView.swift), [local connection UI](../Sources/CodexLens/CodexLocalConnectionView.swift), [Markdown](../Sources/CodexLens/LensChatMarkdownView.swift), [message context menu](../Sources/CodexLens/LensChatMessageMenu.swift).
 
 ## Conversation review and export
+
+Preparation and JSON/Markdown export show phase-local message counts and the
+remaining work. Saving finishes after the atomic destination commit. Cancelled
+or failed exports do not report a saved file.
 
 Entry point: **File → Conversation and Guidance…**, the session menu, or **Option-Command-E**.
 

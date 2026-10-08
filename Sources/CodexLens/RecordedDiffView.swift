@@ -11,6 +11,7 @@ struct RecordedChangeView: View {
     @State private var resultEvent: LensEvent?
     @State private var callEvent: LensEvent?
     @State private var loading = false
+    @State private var parsing = false
     @State private var loadGeneration: UInt64 = 0
     @State private var reloadTask: Task<Void, Never>?
     @State private var loadedSources: [SourceRef] = []
@@ -27,7 +28,7 @@ struct RecordedChangeView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             changeHeader.controlSize(.small).padding(.horizontal, 10).padding(.vertical, 6).fixedSize(horizontal: false, vertical: true)
-            if loading { LensProgressIndicator(LensL10n.text("Lecture du diff enregistré…")).controlSize(.small).frame(maxWidth: .infinity).padding(.horizontal, 10).padding(.vertical, 8).fixedSize(horizontal: false, vertical: true) }
+            if loading { LensProgressIndicator(LensL10n.text(parsing ? "Préparation du diff…" : "Lecture du diff enregistré…")).controlSize(.small).frame(maxWidth: .infinity).padding(.horizontal, 10).padding(.vertical, 8).fixedSize(horizontal: false, vertical: true) }
             if !loadedSources.isEmpty, loadedSources != availableSources { Button(LensL10n.text("Lire les nouvelles traces enregistrées")) { startLoad() }.controlSize(.small).padding(.horizontal, 10).padding(.bottom, 5).disabled(loading).fixedSize(horizontal: false, vertical: true) }
             VSplitView {
             Group {
@@ -155,7 +156,7 @@ struct RecordedChangeView: View {
     }
     private func load(generation: UInt64) async {
         let span = LensSignposts.begin("RecordedDiffLoad"); defer { span.end(); if generation == loadGeneration { loading = false } }
-        issue = nil; loading = true
+        issue = nil; loading = true; parsing = false
         guard let snap = store.snapshot, let event = sourceEvent else { issue = LensL10n.text("Événement d'origine inaccessible."); return }
         let rootID = snap.root.id
         let related = event.relatedEventID.flatMap { id in store.event(id) ?? snap.events.first { $0.id == id } }
@@ -167,10 +168,12 @@ struct RecordedChangeView: View {
         do {
             let detail = try await store.engine.sourceDetail(for: event)
             guard !Task.isCancelled, generation == loadGeneration, store.snapshot?.root.id == rootID else { return }
-            let parsed = try await Task.detached(priority: .userInitiated) {
+            parsing = true
+            let worker = Task.detached(priority: .userInitiated) {
                 try Task.checkCancellation()
                 return try RecordedChangeEvidence.documents(change: change, selection: selected, detail: detail).map { try RecordedDiffPresentation(document: $0) }
-            }.value
+            }
+            let parsed = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
             guard !Task.isCancelled, generation == loadGeneration, store.snapshot?.root.id == rootID else { return }
             documents = parsed; loadedSources = sources
             if parsed.isEmpty { issue = change.kind == .recordedResult ? LensL10n.text("Ce résultat ne contient aucun diff enregistré pour ce fichier. Consultez l’événement brut et, si disponible, l’appel associé. Ce résultat seul ne prouve pas un changement du contenu.") : LensL10n.text("Aucun patch ou diff interprétable pour ce fichier dans cette trace. La sortie et l'événement brut restent consultables.") }

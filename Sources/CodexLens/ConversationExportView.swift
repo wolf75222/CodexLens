@@ -83,7 +83,7 @@ struct ConversationExportView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(10)
             Divider()
-            if controller.isFiltering { ProgressView().controlSize(.small).padding(6) }
+            if controller.isFiltering, let progress = controller.filterProgress { LensOperationProgressLine(progress: progress).padding(6) }
             if controller.visibleMessages.isEmpty && !controller.isFiltering {
                 Text(LensL10n.text(review.messages.isEmpty ? "Aucun message principal indexé. Consultez la couverture et les traces anciennes signalées." : "Aucun résultat dans les aperçus avec ces filtres."))
                     .font(.caption).foregroundStyle(.secondary).padding(10)
@@ -170,7 +170,7 @@ struct ConversationExportView: View {
                     }
                 }.disabled(!matchesObservedRoot || message.text == nil || isAddingToQuestion)
                     .help(LensL10n.text("Ajoute ce message au chat, sans l’envoyer. Un extrait sera ajouté si le texte dépasse la limite du contexte."))
-                if isAddingToQuestion { ProgressView().controlSize(.small) }
+                if isAddingToQuestion { LensProgressIndicator(LensL10n.text("Préparation du contexte…")).controlSize(.small) }
                 Spacer()
             }.controlSize(.small)
             Text(LensL10n.text("Agent : {0} · Tour : {1}", message.agentID, message.turnID ?? LensL10n.text("Non enregistré")))
@@ -233,7 +233,7 @@ struct ConversationExportView: View {
         VStack(spacing: 12) {
             if controller.isPreparing {
                 LensLoadingState(title: LensL10n.text("Préparation de la conversation…"),
-                    cancelTitle: LensL10n.text("Annuler le chargement"), onCancel: { controller.cancelPreparation() })
+                    cancelTitle: LensL10n.text("Annuler le chargement"), onCancel: { controller.cancelPreparation() }, workProgress: controller.preparationProgress)
             } else {
                 Image(systemName: "text.bubble").font(.title2).foregroundStyle(.secondary)
                 Text(controller.issue ?? LensL10n.text("La préparation est suspendue. Aucun fichier exporté."))
@@ -292,7 +292,8 @@ struct ConversationExportView: View {
             } trailing: {
                 HStack(spacing: 9) {
                 if controller.isExporting || controller.isChoosingDestination {
-                    ProgressView().controlSize(.small)
+                    if let progress = controller.exportProgress { LensOperationProgressLine(progress: progress) }
+                    else { LensProgressIndicator(LensL10n.text("Choix de l’emplacement…")).controlSize(.small) }
                     Button(LensL10n.text("Annuler l’export")) { controller.cancelExport() }
                 } else {
                     Button(LensL10n.text("Exporter JSON…")) { controller.chooseDestination(format: .json) }
@@ -367,14 +368,20 @@ private struct ConversationMessageRow: View {
     @Published var isFiltering = false
     @Published var isChoosingDestination = false
     @Published var isExporting = false
+    @Published private(set) var preparationProgress: OperationProgress?
+    @Published private(set) var filterProgress: OperationProgress?
+    @Published private(set) var exportProgress: OperationProgress?
     weak var window: NSWindow?
     private var panel: NSSavePanel?
     private var prepareTask: Task<Void, Never>?
     private var messageTask: Task<Void, Never>?
     private var filterTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
+    private var indexingProgressTask: Task<Void, Never>?
+    private var indexingProgress = OperationProgress(stage: .indexingConversation, unit: .events, step: 1, stepCount: 2)
     private var generation = 0
     private var filterGeneration = 0
+    private var exportGeneration = 0
     private var loadingMessageID: String?
     private var closed = false
     private var activeFilter: ConversationReviewFilter = .all
@@ -384,13 +391,23 @@ private struct ConversationMessageRow: View {
         rootThreadID = snapshot.root.id
         title = snapshot.root.title
         collectedAt = snapshot.collectedAt
+        indexingProgress = .init(stage: .indexingConversation, total: Int64(snapshot.events.count), unit: .events, step: 1, stepCount: 2)
+        let (updates, continuation) = AsyncStream<OperationProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
         // The Sendable snapshot is captured once; even index construction stays off the UI executor.
         exporterTask = Task.detached(priority: .userInitiated) {
+            defer { continuation.finish() }
             try Task.checkCancellation()
             let span = LensSignposts.begin("ConversationIndex"); defer { span.end() }
-            let plan = ConversationExportPlan(snapshot: snapshot)
+            let plan = ConversationExportPlan(snapshot: snapshot, progress: { continuation.yield($0) })
             try Task.checkCancellation()
             return (ConversationExporter(plan: plan), Self.isBackgroundThread())
+        }
+        indexingProgressTask = Task { [weak self] in
+            for await progress in updates {
+                guard !Task.isCancelled, let self, !self.closed else { return }
+                self.indexingProgress = progress
+                if self.isPreparing, self.preparationProgress?.stage == .indexingConversation { self.preparationProgress = progress }
+            }
         }
     }
 
@@ -402,63 +419,94 @@ private struct ConversationMessageRow: View {
         generation += 1
         let ticket = generation
         let previous = prepareTask
-        isPreparing = true; issue = nil
+        isPreparing = true; issue = nil; preparationProgress = indexingProgress
         prepareTask = Task { [weak self, exporterTask] in
+            let (updates, continuation) = AsyncStream<OperationProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let publishing = Task { @MainActor [weak self] in
+                for await progress in updates {
+                    guard !Task.isCancelled, let self, !self.closed, self.generation == ticket, self.isPreparing else { return }
+                    self.preparationProgress = progress
+                }
+            }
+            defer { continuation.finish(); publishing.cancel() }
             do {
                 await previous?.value
                 try Task.checkCancellation()
                 let (exporter, offMain) = try await exporterTask.value
                 try Task.checkCancellation()
-                let review = try await exporter.prepare()
+                let review = try await exporter.prepare(progress: { continuation.yield($0) })
                 try Task.checkCancellation()
                 guard let self, !self.closed, self.generation == ticket else { return }
                 self.planPreparedOffMainThread = offMain
-                self.review = review; self.isPreparing = false
+                self.review = review; self.isPreparing = false; self.preparationProgress = nil
                 self.apply(filter: self.activeFilter, query: self.activeQuery)
                 self.selectedID = review.messages.first?.id
                 self.loadMessage(self.selectedID)
             } catch is CancellationError {
             } catch {
                 guard let self, !self.closed, self.generation == ticket else { return }
-                self.isPreparing = false; self.issue = error.localizedDescription
+                self.isPreparing = false; self.preparationProgress = nil; self.issue = error.localizedDescription
             }
         }
     }
 
     func cancelPreparation() {
         // Retain the cancelled task so Retry waits for its spool cleanup before a new prepare.
-        generation += 1; prepareTask?.cancel(); isPreparing = false
+        generation += 1; prepareTask?.cancel(); isPreparing = false; preparationProgress = nil
     }
 
     func apply(filter: ConversationReviewFilter, query: String) {
         activeFilter = filter; activeQuery = query
         filterTask?.cancel(); filterGeneration += 1
         guard let messages = review?.messages, !closed else { return }
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if filter == .all, needle.isEmpty {
+            visibleMessages = messages; isFiltering = false; filterProgress = nil
+            return
+        }
         let ticket = filterGeneration
-        isFiltering = true
+        isFiltering = true; filterProgress = .init(stage: .filteringEvents, total: Int64(messages.count), unit: .messages)
         filterTask = Task { [weak self] in
+            let (updates, continuation) = AsyncStream<OperationProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let publishing = Task { @MainActor [weak self] in
+                for await progress in updates {
+                    guard !Task.isCancelled, let self, !self.closed, self.filterGeneration == ticket, self.isFiltering else { return }
+                    self.filterProgress = progress
+                }
+            }
+            defer { continuation.finish(); publishing.cancel() }
             do {
-                if !query.isEmpty { try await Task.sleep(for: .milliseconds(160)) }
+                if !needle.isEmpty { try await Task.sleep(for: .milliseconds(160)) }
                 let worker = Task.detached(priority: .userInitiated) {
                     let span = LensSignposts.begin("ConversationSearch"); defer { span.end() }
+                    var publishedAt = ContinuousClock.now
+                    continuation.yield(.init(stage: .filteringEvents, total: Int64(messages.count), unit: .messages))
                     var result: [ConversationMessageSummary] = []
                     result.reserveCapacity(messages.count)
-                    let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
                     for (index, message) in messages.enumerated() {
-                        if index % 128 == 0 { try Task.checkCancellation() }
+                        if index % 128 == 0 {
+                            try Task.checkCancellation()
+                            let now = ContinuousClock.now
+                            if now - publishedAt >= .milliseconds(100) {
+                                continuation.yield(.init(stage: .filteringEvents, completed: Int64(index), total: Int64(messages.count), unit: .messages))
+                                publishedAt = now
+                            }
+                        }
                         let included = filter == .all || (filter == .user && message.role == .user) || (filter == .orientation && !message.signals.isEmpty)
                         if included && (needle.isEmpty || message.preview.localizedStandardContains(needle)) { result.append(message) }
                     }
+                    try Task.checkCancellation()
+                    continuation.yield(.init(stage: .filteringEvents, completed: Int64(messages.count), total: Int64(messages.count), unit: .messages))
                     return result
                 }
                 let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
                 try Task.checkCancellation()
                 guard let self, !self.closed, self.filterGeneration == ticket else { return }
-                self.visibleMessages = result; self.isFiltering = false
+                self.visibleMessages = result; self.isFiltering = false; self.filterProgress = nil
             } catch is CancellationError {
             } catch {
                 guard let self, !self.closed, self.filterGeneration == ticket else { return }
-                self.isFiltering = false; self.issue = error.localizedDescription
+                self.isFiltering = false; self.filterProgress = nil; self.issue = error.localizedDescription
             }
         }
     }
@@ -488,7 +536,9 @@ private struct ConversationMessageRow: View {
         guard !closed, review != nil, !isExporting, !isChoosingDestination else { return }
         guard let window else { issue = LensL10n.text("La fenêtre d’export n’est pas disponible. Réessayez depuis cette fenêtre."); return }
         let panel = NSSavePanel()
-        self.panel = panel; isChoosingDestination = true; issue = nil; receipt = nil
+        exportGeneration += 1
+        let ticket = exportGeneration
+        self.panel = panel; isChoosingDestination = true; issue = nil; receipt = nil; exportProgress = nil
         let suffix = format == .json ? "json" : "md"
         panel.allowedContentTypes = [format == .json ? .json : (UTType(filenameExtension: "md") ?? .plainText)]
         panel.nameFieldStringValue = "CodexLens-conversation-" + String(rootThreadID.prefix(8)) + "." + suffix
@@ -502,35 +552,45 @@ private struct ConversationMessageRow: View {
             guard let self, !self.closed else { return }
             self.panel = nil; self.isChoosingDestination = false
             guard !Task.isCancelled, result == .OK, let destination = panel.url else { return }
-            self.isExporting = true
+            self.isExporting = true; self.exportProgress = .init(stage: .writingMessages, total: self.review.map { Int64($0.messages.count) }, unit: .messages, step: 1, stepCount: 2)
+            let (updates, continuation) = AsyncStream<OperationProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let publishing = Task { @MainActor [weak self] in
+                for await progress in updates {
+                    guard !Task.isCancelled, let self, !self.closed, self.exportGeneration == ticket, self.isExporting else { return }
+                    self.exportProgress = progress
+                }
+            }
+            defer { continuation.finish(); publishing.cancel() }
             let scoped = destination.startAccessingSecurityScopedResource()
             defer { if scoped { destination.stopAccessingSecurityScopedResource() } }
             do {
                 let (exporter, _) = try await exporterTask.value
-                let receipt = try await exporter.export(to: destination, format: format, replaceExisting: true)
+                let receipt = try await exporter.export(to: destination, format: format, replaceExisting: true, progress: { continuation.yield($0) })
                 // A completed receipt means the atomic export committed, even if Cancel was pressed just after commit.
                 guard !self.closed else { return }
-                self.receipt = receipt; self.isExporting = false
+                self.receipt = receipt; self.isExporting = false; self.exportProgress = nil
             } catch is CancellationError {
-                if !self.closed { self.isExporting = false; self.issue = LensL10n.text("Export annulé. Aucun nouvel envoi ni réessai automatique.") }
+                if !self.closed { self.isExporting = false; self.exportProgress = nil; self.issue = LensL10n.text("Export annulé. Aucun nouvel envoi ni réessai automatique.") }
             } catch {
-                if !self.closed { self.isExporting = false; self.issue = error.localizedDescription }
+                if !self.closed { self.isExporting = false; self.exportProgress = nil; self.issue = error.localizedDescription }
             }
         }
     }
 
-    func cancelExport() { panel?.cancel(nil); exportTask?.cancel() }
+    func cancelExport() { exportGeneration += 1; panel?.cancel(nil); exportTask?.cancel() }
     func close() {
         guard !closed else { return }
-        closed = true; generation += 1; filterGeneration += 1
+        closed = true; generation += 1; filterGeneration += 1; exportGeneration += 1
         panel?.cancel(nil); panel = nil
         prepareTask?.cancel(); messageTask?.cancel(); filterTask?.cancel(); exportTask?.cancel()
+        indexingProgressTask?.cancel()
         exporterTask.cancel()
         let exporterTask = exporterTask
         Task { if let (exporter, _) = try? await exporterTask.value { await exporter.dispose() } }
     }
     deinit {
         prepareTask?.cancel(); messageTask?.cancel(); filterTask?.cancel(); exportTask?.cancel()
+        indexingProgressTask?.cancel()
         exporterTask.cancel()
         let exporterTask = exporterTask
         Task { if let (exporter, _) = try? await exporterTask.value { await exporter.dispose() } }

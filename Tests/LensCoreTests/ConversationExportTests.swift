@@ -23,10 +23,10 @@ final class ConversationExportTests: XCTestCase {
         return LensEvent(id: id, timestamp: timestamp, agentID: agent, turnID: "turn-" + id, kind: role, preview: "INDEX-PREVIEW-MUST-NOT-REPLACE-TEXT",
             source: SourceRef(path: source.path, length: data.count, line: 1, sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()))
     }
-    private func plan(_ events: [LensEvent], resources: [ResourceRecord] = [], coverage: [CoverageIssue] = []) -> ConversationExportPlan {
+    private func plan(_ events: [LensEvent], resources: [ResourceRecord] = [], coverage: [CoverageIssue] = [], progress: OperationProgressHandler? = nil) -> ConversationExportPlan {
         ConversationExportPlan(snapshot: SessionSnapshot(root: SessionSummary(id: "root", sessionID: "session-1", title: "Anonyme", cwd: sources.path),
             agents: [AgentRecord(id: "root"), AgentRecord(id: "child", parentID: "root", relation: .subagent)], events: events,
-            environments: [EnvironmentRecord(path: sources.path)], resources: resources, coverage: coverage, collectedAt: Date(timeIntervalSince1970: 1000)))
+            environments: [EnvironmentRecord(path: sources.path)], resources: resources, coverage: coverage, collectedAt: Date(timeIntervalSince1970: 1000)), progress: progress)
     }
     private func expectFailure(_ operation: () async throws -> Void, file: StaticString = #filePath, line: UInt = #line) async {
         do { try await operation(); XCTFail("Operation should fail", file: file, line: line) } catch { }
@@ -396,6 +396,103 @@ final class ConversationExportTests: XCTestCase {
         await exporter.dispose()
     }
 
+    func testMeasuredProgressCountsSelectedMessagesAndCompletesOnlyAfterCommit() async throws {
+        let first = try event("Anonymous request", id: "progress-user")
+        let second = try event("Anonymous response", id: "progress-assistant", role: .assistant)
+        let excluded = try event("Tool trace", id: "progress-tool", role: .toolCall)
+        let originals = try [first, second, excluded].map { try Data(contentsOf: URL(fileURLWithPath: $0.source.path)) }
+        let indexing = ConversationProgressCapture()
+        let exporter = ConversationExporter(plan: plan([first, excluded, second], progress: { indexing.append($0) }))
+        XCTAssertEqual(indexing.values.first?.completed, 0)
+        XCTAssertEqual(indexing.values.last?.completed, 3)
+        XCTAssertTrue(indexing.values.allSatisfy { $0.stage == .indexingConversation && $0.total == 3 && $0.unit == .events })
+        let preparation = ConversationProgressCapture()
+        let review = try await exporter.prepare(progress: { preparation.append($0) })
+        XCTAssertEqual(review.messages.count, 2)
+        XCTAssertEqual(preparation.values.first?.completed, 0)
+        XCTAssertEqual(preparation.values.last?.completed, 2)
+        XCTAssertTrue(preparation.values.allSatisfy { $0.stage == .readingMessages && $0.total == 2 && $0.unit == .messages })
+        for format in [ConversationExportFormat.json, .markdown] {
+            let destination = exports.appendingPathComponent("progress-" + format.rawValue)
+            let writing = ConversationProgressCapture()
+            let receipt = try await exporter.export(to: destination, format: format, progress: { update in
+                writing.append(update, committedDestinationExists: update.stage == .savingExport && update.completed == 1 ? FileManager.default.fileExists(atPath: destination.path) : nil)
+            })
+            XCTAssertEqual(receipt.messageCount, 2)
+            let values = writing.values
+            XCTAssertEqual(values.first?.stage, .writingMessages)
+            XCTAssertEqual(values.first?.completed, 0)
+            XCTAssertEqual(values.filter { $0.stage == .writingMessages }.last?.completed, 2)
+            XCTAssertEqual(values.suffix(2).map(\.stage), [.savingExport, .savingExport])
+            XCTAssertEqual(values.suffix(2).map(\.completed), [0, 1])
+            XCTAssertEqual(writing.committedDestinations, [true])
+            XCTAssertTrue(zip(values, values.dropFirst()).allSatisfy { earlier, later in earlier.stage != later.stage || earlier.completed <= later.completed })
+        }
+        XCTAssertEqual(try [first, second, excluded].map { try Data(contentsOf: URL(fileURLWithPath: $0.source.path)) }, originals)
+        await exporter.dispose()
+    }
+
+    func testProgressCancellationDuringPreparationAndBeforeCommitNeverReportsSaved() async throws {
+        let item = try event("A bounded anonymous message", id: "progress-cancel")
+        let original = try Data(contentsOf: URL(fileURLWithPath: item.source.path))
+        let exporter = ConversationExporter(plan: plan([item]))
+        let preparing = ConversationProgressCapture()
+        let cancelledPreparation = Task {
+            try await exporter.prepare(progress: { update in
+                preparing.append(update)
+                if update.stage == .readingMessages && update.completed == 0 { withUnsafeCurrentTask { $0?.cancel() } }
+            })
+        }
+        do {
+            _ = try await cancelledPreparation.value
+            XCTFail("Preparation must observe cancellation before capturing a message")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertFalse(preparing.values.contains { $0.remaining == 0 })
+        _ = try await exporter.prepare()
+        let destination = exports.appendingPathComponent("progress-cancel.json")
+        try Data("CANCEL-SENTINEL".utf8).write(to: destination)
+        let saving = ConversationProgressCapture()
+        let cancelledExport = Task {
+            try await exporter.export(to: destination, format: .json, replaceExisting: true, progress: { update in
+                saving.append(update)
+                if update.stage == .savingExport && update.completed == 0 { withUnsafeCurrentTask { $0?.cancel() } }
+            })
+        }
+        do {
+            _ = try await cancelledExport.value
+            XCTFail("Cancellation before commit must preserve the existing destination")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(saving.values.last?.stage, .savingExport)
+        XCTAssertEqual(saving.values.last?.completed, 0)
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "CANCEL-SENTINEL")
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: exports.path).contains { $0.hasSuffix(".partial") })
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: item.source.path)), original)
+        await exporter.dispose()
+    }
+
+    func testCommitFailureKeepsProgressIncompleteAndPreservesSources() async throws {
+        let item = try event("Anonymous failure fixture", id: "progress-failure")
+        let original = try Data(contentsOf: URL(fileURLWithPath: item.source.path))
+        let exporter = ConversationExporter(plan: plan([item]))
+        _ = try await exporter.prepare()
+        let destination = exports.appendingPathComponent("progress-failure.json")
+        let saving = ConversationProgressCapture()
+        await expectFailure {
+            _ = try await exporter.export(to: destination, format: .json, progress: { update in
+                saving.append(update)
+                // Simulate another local writer claiming the destination after the partial
+                // was written. Atomic validation must fail instead of reporting completion.
+                if update.stage == .savingExport && update.completed == 0 { try? Data("OTHER-WRITER".utf8).write(to: destination) }
+            })
+        }
+        XCTAssertEqual(saving.values.last?.stage, .savingExport)
+        XCTAssertEqual(saving.values.last?.completed, 0)
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "OTHER-WRITER")
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: exports.path).contains { $0.hasSuffix(".partial") })
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: item.source.path)), original)
+        await exporter.dispose()
+    }
+
     func testCancellationBeforePrepareOrExportKeepsDestinationAndNoPartial() async throws {
         let item = try event(String(repeating: "x", count: 70000), id: "cancel")
         let exporter = ConversationExporter(plan: plan([item]))
@@ -488,4 +585,17 @@ final class ConversationExportTests: XCTestCase {
         await expectFailure { _ = try await exporter.prepare() }
         await expectFailure { _ = try await exporter.export(to: self.exports.appendingPathComponent("closed.json"), format: .json) }
     }
+}
+
+private final class ConversationProgressCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [OperationProgress] = []
+    private var destinations: [Bool] = []
+    func append(_ value: OperationProgress, committedDestinationExists: Bool? = nil) {
+        lock.lock(); defer { lock.unlock() }
+        storage.append(value)
+        if let committedDestinationExists { destinations.append(committedDestinationExists) }
+    }
+    var values: [OperationProgress] { lock.lock(); defer { lock.unlock() }; return storage }
+    var committedDestinations: [Bool] { lock.lock(); defer { lock.unlock() }; return destinations }
 }

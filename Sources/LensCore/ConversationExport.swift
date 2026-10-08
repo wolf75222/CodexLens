@@ -107,15 +107,22 @@ public struct ConversationExportPlan: Sendable {
     fileprivate let resourcesByID: [String: ResourceRecord]
     fileprivate let resourcesByEventID: [String: [ResourceRecord]]
 
-    public init(snapshot: SessionSnapshot) {
+    public init(snapshot: SessionSnapshot, progress: OperationProgressHandler? = nil) {
+        let reporter = progress.map { OperationProgressReporter($0) }
         root = snapshot.root
-        events = snapshot.events.filter { $0.agentID == snapshot.root.id && ($0.kind == .user || $0.kind == .assistant) }
+        reporter?.send(.init(stage: .indexingConversation, total: Int64(snapshot.events.count), unit: .events, step: 1, stepCount: 2))
+        var messages: [LensEvent] = [], excluded: [LensEvent] = [], eventPaths: [String] = []
         // These exact labels belong to the installed, versioned SessionEngine adapter.
         // Equal text, a shared turn or temporal proximity cannot establish a mirror.
-        excludedConversationReferences = snapshot.events.filter {
-            $0.agentID == snapshot.root.id && $0.kind == .context
-                && ["user_message · trace de contexte", "agent_message · trace de contexte"].contains($0.title)
+        for (index, event) in snapshot.events.enumerated() {
+            if event.agentID == snapshot.root.id {
+                if event.kind == .user || event.kind == .assistant { messages.append(event) }
+                else if event.kind == .context && ["user_message · trace de contexte", "agent_message · trace de contexte"].contains(event.title) { excluded.append(event) }
+            }
+            eventPaths += [event.source.path] + event.supplementarySources.map(\.path)
+            reporter?.send(.init(stage: .indexingConversation, completed: Int64(index + 1), total: Int64(snapshot.events.count), unit: .events, step: 1, stepCount: 2))
         }
+        events = messages; excludedConversationReferences = excluded
         resources = snapshot.resources
         resourcesByID = Dictionary(snapshot.resources.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var associated: [String: [ResourceRecord]] = [:]
@@ -125,7 +132,7 @@ public struct ConversationExportPlan: Sendable {
         resourcesByEventID = associated
         collectedAt = snapshot.collectedAt
         coverage = snapshot.coverage
-        protectedPaths = (snapshot.root.paths + snapshot.events.flatMap { [$0.source.path] + $0.supplementarySources.map(\.path) }
+        protectedPaths = (snapshot.root.paths + eventPaths
             + snapshot.resources.map(\.location) + snapshot.changes.map(\.path)).filter { $0.hasPrefix("/") }.map { URL(fileURLWithPath: $0) }
         protectedRoots = (snapshot.environments.map(\.path) + [snapshot.root.cwd]).filter { $0.hasPrefix("/") }.map { URL(fileURLWithPath: $0) }
     }
@@ -158,11 +165,12 @@ public actor ConversationExporter {
     }
     deinit { if let directory { try? FileManager.default.removeItem(at: directory) } }
 
-    public func prepare() async throws -> ConversationReview {
+    public func prepare(progress: OperationProgressHandler? = nil) async throws -> ConversationReview {
         let span = LensSignposts.begin("ConversationPrepare"); defer { span.end() }
         try Task.checkCancellation()
         if let review { return review }
         guard state == .idle else { throw LensError.unavailable("Préparation déjà en cours ou export fermé.") }
+        let reporter = progress.map { OperationProgressReporter($0) }
         state = .preparing
         // Resolve source aliases on this actor, before capture. Keep these original targets
         // protected even if a worktree symlink is later repointed; export also resolves again.
@@ -177,6 +185,7 @@ public actor ConversationExporter {
         var prepared: [FrozenMessage] = []
         var total = 0
         do {
+            reporter?.send(.init(stage: .readingMessages, total: Int64(plan.events.count), unit: .messages, step: 2, stepCount: 2))
             for (index, original) in plan.events.enumerated() {
                 try requirePreparing()
                 let role: ConversationRole = original.kind == .user ? .user : .assistant
@@ -257,6 +266,8 @@ public actor ConversationExporter {
                 let summary = ConversationMessageSummary(id: message.id, role: role, timestamp: timestamp, agentID: message.agentID, turnID: message.turnID,
                     preview: preview, byteCount: byteCount, status: status, signals: signals, previousMessageID: previous, limitations: limitations)
                 prepared.append(FrozenMessage(metadata: message, summary: summary, file: retainedFile))
+                // Count a message only after its captured status and redaction are frozen.
+                reporter?.send(.init(stage: .readingMessages, completed: Int64(index + 1), total: Int64(plan.events.count), unit: .messages, step: 2, stepCount: 2))
             }
             try requirePreparing()
             let timestamps = prepared.compactMap(\.metadata.timestamp)
@@ -318,10 +329,12 @@ public actor ConversationExporter {
             status: m.status, signals: m.signals, previousMessageID: m.previousMessageID, limitations: m.limitations)
     }
 
-    public func export(to destination: URL, format: ConversationExportFormat, replaceExisting: Bool = false) throws -> ConversationExportReceipt {
+    public func export(to destination: URL, format: ConversationExportFormat, replaceExisting: Bool = false, progress: OperationProgressHandler? = nil) throws -> ConversationExportReceipt {
         let span = LensSignposts.begin("ConversationExport"); defer { span.end() }
         try Task.checkCancellation()
         guard state == .prepared, let review else { throw LensError.unavailable("Préparez la conversation avant de l’exporter.") }
+        let reporter = progress.map { OperationProgressReporter($0) }
+        reporter?.send(.init(stage: .writingMessages, total: Int64(frozen.count), unit: .messages, step: 1, stepCount: 2))
         let writer = try ConversationAtomicWriter(destination: destination, replaceExisting: replaceExisting, plan: exportPlan ?? plan, privateDirectory: directory)
         if format == .json {
             try writer.append(Data("{\"schemaVersion\":1,\"dateEncoding\":\"millisecondsSinceUnixEpoch\",\"review\":".utf8))
@@ -337,6 +350,7 @@ public actor ConversationExporter {
                 if let file = item.file { try writer.append(Data("\"".utf8)); try writer.copy(file, escapingJSON: true); try writer.append(Data("\"".utf8)) }
                 else { try writer.append(Data("null".utf8)) }
                 try writer.append(Data("}".utf8))
+                reporter?.send(.init(stage: .writingMessages, completed: Int64(index + 1), total: Int64(frozen.count), unit: .messages, step: 1, stepCount: 2))
             }
             try writer.append(Data("]}\n".utf8))
         } else {
@@ -351,7 +365,7 @@ public actor ConversationExporter {
                     try writer.append(Data("- \(ref.id) · \(ref.title) · \(ref.source.path):\(ref.source.line) · \(ref.reason) Liens source confirmés : \(ref.associatedMessageIDs.joined(separator: ", ")).\n".utf8))
                 }
             }
-            for item in frozen {
+            for (index, item) in frozen.enumerated() {
                 try Task.checkCancellation()
                 let m = item.metadata
                 let date = m.timestamp.map { ISO8601DateFormatter().string(from: $0) } ?? "inconnue"
@@ -363,9 +377,13 @@ public actor ConversationExporter {
                 // An indented block renders untrusted message text as text, including fence markers.
                 if let file = item.file { try writer.copy(file, escapingJSON: false, markdownIndent: true) }
                 else { try writer.append(Data("Texte indisponible : \(m.status.rawValue).\n".utf8)) }
+                reporter?.send(.init(stage: .writingMessages, completed: Int64(index + 1), total: Int64(frozen.count), unit: .messages, step: 1, stepCount: 2))
             }
         }
+        reporter?.send(.init(stage: .savingExport, total: 1, unit: .steps, step: 2, stepCount: 2))
         let result = try writer.commit()
+        // The completion belongs to the committed destination, never a partial sibling.
+        reporter?.send(.init(stage: .savingExport, completed: 1, total: 1, unit: .steps, step: 2, stepCount: 2))
         return ConversationExportReceipt(destination: destination, format: format, messageCount: frozen.count, byteCount: result.count, sha256: result.sha256)
     }
 

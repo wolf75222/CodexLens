@@ -156,26 +156,40 @@ public actor SessionEngine {
         headerSpan.end()
         // A child of a private investigation cannot re-enter the source catalog
         // through its own rollout, even when rows/edges arrived in another order.
+        reporter.send(.init(stage: .finalizingCatalog, phase: .filteringSessions))
         var exclusionsGrew = true
         while exclusionsGrew {
+            try Task.checkCancellation()
             let before = excludedInvestigationIDs.count
             for summary in found.values where summary.parentID.map(excludedInvestigationIDs.contains) == true { excludedInvestigationIDs.insert(summary.id) }
             exclusionsGrew = before != excludedInvestigationIDs.count
         }
-        for id in excludedInvestigationIDs { found.removeValue(forKey: id); meta.removeValue(forKey: id) }
+        let exclusionCount = Int64(excludedInvestigationIDs.count)
+        reporter.send(.init(stage: .finalizingCatalog, total: exclusionCount, phase: .filteringSessions))
+        for (index, id) in excludedInvestigationIDs.enumerated() {
+            if index.isMultiple(of: 1024) { try Task.checkCancellation(); reporter.send(.init(stage: .finalizingCatalog, completed: Int64(index), total: exclusionCount, phase: .filteringSessions)) }
+            found.removeValue(forKey: id); meta.removeValue(forKey: id)
+        }
+        reporter.send(.init(stage: .finalizingCatalog, completed: exclusionCount, total: exclusionCount, phase: .filteringSessions))
         let titleSpan = LensSignposts.begin("CatalogTitles")
+        reporter.send(.init(stage: .finalizingCatalog, phase: .readingTitles))
         let titleURL = home.appendingPathComponent("session_index.jsonl")
         if (try? LocalContentGuard.requireResident(path: titleURL.path)) != nil,
            let attrs = try? FileManager.default.attributesOfItem(atPath: titleURL.path),
            let size = attrs[.size] as? NSNumber, size.intValue < 8 * 1024 * 1024,
            let data = try? Data(contentsOf: titleURL), data.count < 8 * 1024 * 1024 {
-            for line in data.split(separator: 10) {
+            let lines = data.split(separator: 10), totalTitles = Int64(lines.count)
+            reporter.send(.init(stage: .finalizingCatalog, total: totalTitles, phase: .readingTitles))
+            for (index, line) in lines.enumerated() {
+                if index.isMultiple(of: 1024) { try Task.checkCancellation(); reporter.send(.init(stage: .finalizingCatalog, completed: Int64(index), total: totalTitles, phase: .readingTitles)) }
                 if let row = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any], let id = row["id"] as? String, let title = row["thread_name"] as? String ?? row["title"] as? String { found[id]?.title = Self.redact(title) }
             }
+            reporter.send(.init(stage: .finalizingCatalog, completed: totalTitles, total: totalTitles, phase: .readingTitles))
         }
         titleSpan.end()
         for id in found.keys { if found[id]?.title.isEmpty == true { found[id]?.title = "Session \(id.prefix(8))" } }
         try Task.checkCancellation()
+        reporter.send(.init(stage: .finalizingCatalog, phase: .savingCatalog))
         catalogHeaderCache.persist()
         summaries = found; metadata = meta
         return found.values.sorted { $0.modifiedAt > $1.modifiedAt }
@@ -334,27 +348,32 @@ public actor SessionEngine {
             restore(root: selectedID); loadedCache = true
         }
         var readOwners = Set<String>()
-        let history = SessionHistoryProgress()
+        let history = reporter.isEnabled ? SessionHistoryProgress() : nil
         while !memberIDs.isSubset(of: readOwners) {
             try Task.checkCancellation()
-            for id in memberIDs {
-                for path in summaries[id]?.paths ?? [] {
-                    guard !history.contains(path: path) else { continue }
-                    let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.int64Value
-                    history.register(path: path, bytes: size)
+            if let history {
+                for id in memberIDs {
+                    for path in summaries[id]?.paths ?? [] {
+                        guard !history.contains(path: path) else { continue }
+                        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.int64Value
+                        history.register(path: path, bytes: size)
+                    }
                 }
             }
-            for id in memberIDs.subtracting(readOwners) {
+            let unreadOwners = memberIDs.subtracting(readOwners)
+            for id in unreadOwners {
                 readOwners.insert(id)
                 guard let summary = summaries[id] else { continue }
                 for path in summary.paths where FileManager.default.fileExists(atPath: path) {
                     do { try update(path: path, owner: id, reporter: reporter, history: history) }
                     catch is CancellationError { throw CancellationError() }
                     catch { var index = files[path] ?? FileIndex(owner: id); index.issues.append(CoverageIssue("lecture", error.localizedDescription, source: path)); files[path] = index }
-                    history.finish(path: path)
+                    history?.finish(path: path)
                 }
             }
-            discoverSpawnedChildren(in: memberIDs)
+            // Each journal is complete in files before discovery. Older owners
+            // need not be scanned again when this wave reveals a deeper child.
+            discoverSpawnedChildren(in: unreadOwners)
             memberIDs = descendants(of: selectedID)
         }
         var coverage = catalogIssues
@@ -364,19 +383,32 @@ public actor SessionEngine {
             coverage += file.issues
             if file.pendingBytes > 0 { coverage.append(CoverageIssue("ligne partielle", "\(file.pendingBytes) octets en fin de journal attendent une ligne JSON complète ; la collecte reprendra sans doublon.", source: path)) }
         }
-        reporter.send(.init(stage: .organizingEvents, total: Int64(all.count)))
+        reporter.send(.init(stage: .organizingEvents, phase: .sortingEvents))
         all.sort { $0.event.timestamp == $1.event.timestamp ? ($0.event.agentID == $1.event.agentID ? $0.event.source.offset < $1.event.source.offset : $0.event.agentID < $1.event.agentID) : $0.event.timestamp < $1.event.timestamp }
+        reporter.send(.init(stage: .organizingEvents, total: Int64(all.count), phase: .deduplicatingEvents))
         var events: [LensEvent] = []
         var recordForID: [String: IndexedEvent] = [:]
         var eventIndex: [String: Int] = [:]
         var itemIDs: [String: Int] = [:]
+        var firstSpawn: [RecordedChildKey: Int] = [:]
+        var firstMission: [RecordedCallKey: Int] = [:]
+        var firstDelegationMetadata: [RecordedCallKey: Int] = [:]
         // Stable protocol IDs deduplicate copied/supplementary records; equal text alone never does.
         for (recordIndex, record) in all.enumerated() {
             if recordIndex.isMultiple(of: 1024) {
                 try Task.checkCancellation()
-                reporter.send(.init(stage: .organizingEvents, completed: Int64(recordIndex), total: Int64(all.count)))
+                reporter.send(.init(stage: .organizingEvents, completed: Int64(recordIndex), total: Int64(all.count), phase: .deduplicatingEvents))
             }
             let event = record.event
+            // Preserve all.first's winner in the sorted raw records, including
+            // observations subsequently merged into a stable displayed event.
+            if let child = record.spawnedChildID {
+                let key = RecordedChildKey(parentID: event.agentID, childID: child)
+                if firstSpawn[key] == nil { firstSpawn[key] = recordIndex }
+            }
+            let callKey = RecordedCallKey(agentID: event.agentID, callID: event.callID)
+            if record.delegatedMission != nil, firstMission[callKey] == nil { firstMission[callKey] = recordIndex }
+            if record.delegatedMetadata != nil, firstDelegationMetadata[callKey] == nil { firstDelegationMetadata[callKey] = recordIndex }
             let identity = record.protocolID.map { event.agentID + ":" + $0 }
             if let identity, let existing = itemIDs[identity] {
                 if record.isCompletedItem {
@@ -433,14 +465,24 @@ public actor SessionEngine {
             if let identity { itemIDs[identity] = events.count }
             events.append(event); recordForID[event.id] = record
         }
+        reporter.send(.init(stage: .organizingEvents, completed: Int64(all.count), total: Int64(all.count), phase: .deduplicatingEvents))
+        reporter.send(.init(stage: .organizingEvents, phase: .sortingEvents))
         events.sort { $0.timestamp == $1.timestamp ? ($0.agentID == $1.agentID ? $0.source.offset < $1.source.offset : $0.agentID < $1.agentID) : $0.timestamp < $1.timestamp }
         var calls: [String: Int] = [:]
-        reporter.send(.init(stage: .organizingEvents, completed: Int64(all.count), total: Int64(all.count)))
-        reporter.send(.init(stage: .linkingEvents))
-        for i in events.indices where events[i].kind == .toolCall || events[i].kind == .delegation || events[i].kind == .wait {
-            if let callID = events[i].callID { calls[events[i].agentID + ":" + callID] = i }
-        }
+        var firstUser: [String: Int] = [:], firstEncrypted: [String: Int] = [:]
+        let totalEvents = Int64(events.count)
+        reporter.send(.init(stage: .linkingEvents, total: totalEvents, phase: .indexingCalls))
         for i in events.indices {
+            if i.isMultiple(of: 1024) { try Task.checkCancellation(); reporter.send(.init(stage: .linkingEvents, completed: Int64(i), total: totalEvents, phase: .indexingCalls)) }
+            let event = events[i]
+            if event.kind == .toolCall || event.kind == .delegation || event.kind == .wait, let callID = event.callID { calls[event.agentID + ":" + callID] = i }
+            if event.kind == .user, firstUser[event.agentID] == nil { firstUser[event.agentID] = i }
+            if firstEncrypted[event.agentID] == nil, event.preview.contains("Charge utile chiffrée") { firstEncrypted[event.agentID] = i }
+        }
+        reporter.send(.init(stage: .linkingEvents, completed: totalEvents, total: totalEvents, phase: .indexingCalls))
+        reporter.send(.init(stage: .linkingEvents, total: totalEvents, phase: .linkingResults))
+        for i in events.indices {
+            if i.isMultiple(of: 1024) { try Task.checkCancellation(); reporter.send(.init(stage: .linkingEvents, completed: Int64(i), total: totalEvents, phase: .linkingResults)) }
             guard let callID = events[i].callID else { continue }
             let key = events[i].agentID + ":" + callID
             if events[i].kind == .toolResult, let call = calls[key] {
@@ -452,11 +494,19 @@ public actor SessionEngine {
                 events[i].environmentID = events[call].environmentID
             }
         }
-        for event in events where event.toolName != nil && (event.kind == .toolCall || event.kind == .delegation || event.kind == .wait) && event.endTime == nil && event.relatedEventID == nil && recordForID[event.id]?.isCompletedItem != true {
+        reporter.send(.init(stage: .linkingEvents, completed: totalEvents, total: totalEvents, phase: .linkingResults))
+        reporter.send(.init(stage: .linkingEvents, total: totalEvents, phase: .checkingCalls))
+        for (index, event) in events.enumerated() {
+            if index.isMultiple(of: 1024) { try Task.checkCancellation(); reporter.send(.init(stage: .linkingEvents, completed: Int64(index), total: totalEvents, phase: .checkingCalls)) }
+            guard event.toolName != nil && (event.kind == .toolCall || event.kind == .delegation || event.kind == .wait) && event.endTime == nil && event.relatedEventID == nil && recordForID[event.id]?.isCompletedItem != true else { continue }
             coverage.append(CoverageIssue("résultat non observé", "Appel \(event.callID ?? event.id) de l'agent \(event.agentID) : aucun résultat ni achèvement enregistré disponible. Il peut être encore actif ou manquer dans l'historique ; aucune erreur n'est déduite.", source: event.source.path))
         }
+        reporter.send(.init(stage: .linkingEvents, completed: totalEvents, total: totalEvents, phase: .checkingCalls))
         var environments: [String: EnvironmentRecord] = [:], resources: [String: ResourceRecord] = [:]
-        for id in memberIDs {
+        let totalAgents = Int64(memberIDs.count)
+        reporter.send(.init(stage: .linkingEvents, total: totalAgents, phase: .indexingEnvironments))
+        for (index, id) in memberIDs.enumerated() {
+            if index.isMultiple(of: 1024) { try Task.checkCancellation(); reporter.send(.init(stage: .linkingEvents, completed: Int64(index), total: totalAgents, phase: .indexingEnvironments)) }
             let cwd = summaries[id]?.cwd ?? ""
             if !cwd.isEmpty {
                 var env = environments[cwd] ?? EnvironmentRecord(path: cwd, repositoryPath: Self.repositoryRoot(cwd), recordedBranch: metadata[id]?.branch, recordedRef: metadata[id]?.gitRef, evidence: "session_meta.cwd initial enregistré ; contenu courant présenté séparément")
@@ -464,8 +514,11 @@ public actor SessionEngine {
                 environments[cwd] = env
             }
         }
+        reporter.send(.init(stage: .linkingEvents, completed: totalAgents, total: totalAgents, phase: .indexingEnvironments))
         var changes: [ChangeRecord] = []
+        reporter.send(.init(stage: .linkingEvents, total: totalEvents, phase: .indexingResources))
         for i in events.indices {
+            if i.isMultiple(of: 1024) { try Task.checkCancellation(); reporter.send(.init(stage: .linkingEvents, completed: Int64(i), total: totalEvents, phase: .indexingResources)) }
             let event = events[i]
             guard let record = recordForID[event.id] else { continue }
             if let cwd = event.environmentID, !cwd.isEmpty {
@@ -502,15 +555,19 @@ public actor SessionEngine {
                 changes.append(ChangeRecord(id: event.id + ":item-result:" + path, path: path, environmentID: event.environmentID ?? "", agentID: event.agentID, eventID: event.id, kind: .recordedResult, evidence: record.fileChangeEvidence))
             }
         }
+        reporter.send(.init(stage: .linkingEvents, completed: totalEvents, total: totalEvents, phase: .indexingResources))
         var agents: [AgentRecord] = []
-        for id in memberIDs.sorted() {
+        reporter.send(.init(stage: .linkingEvents, total: totalAgents, phase: .preparingAgents))
+        for (index, id) in memberIDs.sorted().enumerated() {
+            if index.isMultiple(of: 1024) { try Task.checkCancellation(); reporter.send(.init(stage: .linkingEvents, completed: Int64(index), total: totalAgents, phase: .preparingAgents)) }
             let summary = summaries[id] ?? SessionSummary(id: id)
             let accessible = summary.paths.contains { FileManager.default.fileExists(atPath: $0) }
-            let incoming = events.first { $0.agentID == id && $0.kind == .user }
-            let spawnObservation = all.first { $0.spawnedChildID == id && $0.event.agentID == summary.parentID }
-            let parentMission = spawnObservation.flatMap { observation in all.first { $0.event.agentID == summary.parentID && $0.event.callID == observation.event.callID && $0.delegatedMission != nil } }
-            let parentRequest = spawnObservation.flatMap { observation in all.first { $0.event.agentID == summary.parentID && $0.event.callID == observation.event.callID && $0.delegatedMetadata != nil } }
-            let encrypted = events.first { $0.agentID == id && $0.preview.contains("Charge utile chiffrée") }
+            let incoming = firstUser[id].map { events[$0] }
+            let spawnObservation = summary.parentID.flatMap { parent in firstSpawn[RecordedChildKey(parentID: parent, childID: id)].map { all[$0] } }
+            let parentCallKey = spawnObservation.flatMap { observation in summary.parentID.map { RecordedCallKey(agentID: $0, callID: observation.event.callID) } }
+            let parentMission = parentCallKey.flatMap { firstMission[$0].map { all[$0] } }
+            let parentRequest = parentCallKey.flatMap { firstDelegationMetadata[$0].map { all[$0] } }
+            let encrypted = firstEncrypted[id].map { events[$0] }
             let mission = id == selectedID ? incoming?.preview ?? "" : parentMission?.delegatedMission ?? incoming?.preview ?? (encrypted == nil ? "Mission non enregistrée dans les données disponibles." : "Charge utile de mission chiffrée, non accessible dans ce journal.")
             let missionEventID = id == selectedID ? incoming?.id : parentMission?.event.id ?? incoming?.id ?? encrypted?.id
             let parentSources = relationSources[id] ?? spawnObservation.map { [$0.event.source] + $0.event.supplementarySources } ?? []
@@ -520,19 +577,42 @@ public actor SessionEngine {
             if !accessible { coverage.append(CoverageIssue("descendant inaccessible", "Lien parent/enfant enregistré pour \(id), mais ses octets de journal sont indisponibles.", source: summary.paths.first ?? id)) }
             if let version = summaries[id]?.cliVersion, !version.isEmpty, !version.hasPrefix("0.158"), !version.hasPrefix("0.159") { coverage.append(CoverageIssue("compatibilité", "Version \(version) hors des familles vérifiées 0.158/0.159 ; champs inconnus conservés comme événements bruts.", source: id)) }
         }
-        for environment in environments.values where !FileManager.default.fileExists(atPath: environment.path) { coverage.append(CoverageIssue("environnement indisponible", "Chemin actuel introuvable. La référence enregistrée est conservée ; l’arborescence et le contenu actuel ne sont pas accessibles.", source: environment.path)) }
-        for resource in resources.values where resource.roles.contains(.supplied) && resource.availability != .accessible { coverage.append(CoverageIssue("pièce jointe indisponible", "La référence fournie ne garantit pas que ses octets soient encore disponibles.", source: resource.location)) }
+        reporter.send(.init(stage: .linkingEvents, completed: totalAgents, total: totalAgents, phase: .preparingAgents))
+        let totalEnvironments = Int64(environments.count), totalResources = Int64(resources.count)
+        reporter.send(.init(stage: .linkingEvents, total: totalEnvironments, phase: .checkingEnvironments))
+        for (index, environment) in environments.values.enumerated() {
+            if index.isMultiple(of: 1024) { try Task.checkCancellation(); reporter.send(.init(stage: .linkingEvents, completed: Int64(index), total: totalEnvironments, phase: .checkingEnvironments)) }
+            if !FileManager.default.fileExists(atPath: environment.path) { coverage.append(CoverageIssue("environnement indisponible", "Chemin actuel introuvable. La référence enregistrée est conservée ; l’arborescence et le contenu actuel ne sont pas accessibles.", source: environment.path)) }
+        }
+        reporter.send(.init(stage: .linkingEvents, completed: totalEnvironments, total: totalEnvironments, phase: .checkingEnvironments))
+        reporter.send(.init(stage: .linkingEvents, total: totalResources, phase: .checkingResources))
+        for (index, resource) in resources.values.enumerated() {
+            if index.isMultiple(of: 1024) { try Task.checkCancellation(); reporter.send(.init(stage: .linkingEvents, completed: Int64(index), total: totalResources, phase: .checkingResources)) }
+            if resource.roles.contains(.supplied) && resource.availability != .accessible { coverage.append(CoverageIssue("pièce jointe indisponible", "La référence fournie ne garantit pas que ses octets soient encore disponibles.", source: resource.location)) }
+        }
+        reporter.send(.init(stage: .linkingEvents, completed: totalResources, total: totalResources, phase: .checkingResources))
         coverage.append(CoverageIssue("historique", "L’explorateur affiche les fichiers actuels. Un instantané Git n’est proposé que si le commit enregistré et son fichier sont vérifiés. L’état non commité à l’époque reste inconnu. Les sorties et patches restent accessibles dans les traces ; les périodes sans traces ne sont pas reconstituées."))
         var snapshot = SessionSnapshot(root: root, agents: agents, events: events, environments: environments.values.sorted { $0.path < $1.path }, resources: resources.values.sorted { $0.location < $1.location }, changes: changes, coverage: Array(Set(coverage)).sorted { $0.category < $1.category }, collectedAt: Date())
         try Task.checkCancellation()
-        reporter.send(.init(stage: .savingIndex))
-        if let cacheIssue = persist(root: selectedID) { snapshot.coverage.append(cacheIssue) }
+        if let cacheIssue = persist(root: selectedID, reporter: reporter) { snapshot.coverage.append(cacheIssue) }
         try Task.checkCancellation()
-        eventsByID = Dictionary(events.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        fingerprintsBySource = Dictionary(all.compactMap { record -> (SourceRef, String)? in
-            guard let fingerprint = record.fingerprint else { return nil }
-            return (record.event.source, fingerprint)
-        }, uniquingKeysWith: { a, _ in a })
+        reporter.send(.init(stage: .savingIndex, total: totalEvents, phase: .preparingEventLookup))
+        var nextEventsByID: [String: LensEvent] = [:]
+        for (index, event) in events.enumerated() {
+            if index.isMultiple(of: 1024) { try Task.checkCancellation(); reporter.send(.init(stage: .savingIndex, completed: Int64(index), total: totalEvents, phase: .preparingEventLookup)) }
+            if nextEventsByID[event.id] == nil { nextEventsByID[event.id] = event }
+        }
+        reporter.send(.init(stage: .savingIndex, completed: totalEvents, total: totalEvents, phase: .preparingEventLookup))
+        let totalRecords = Int64(all.count)
+        reporter.send(.init(stage: .savingIndex, total: totalRecords, phase: .preparingSourceLookup))
+        var nextFingerprints: [SourceRef: String] = [:]
+        for (index, record) in all.enumerated() {
+            if index.isMultiple(of: 1024) { try Task.checkCancellation(); reporter.send(.init(stage: .savingIndex, completed: Int64(index), total: totalRecords, phase: .preparingSourceLookup)) }
+            if let fingerprint = record.fingerprint, nextFingerprints[record.event.source] == nil { nextFingerprints[record.event.source] = fingerprint }
+        }
+        reporter.send(.init(stage: .savingIndex, completed: totalRecords, total: totalRecords, phase: .preparingSourceLookup))
+        try Task.checkCancellation()
+        eventsByID = nextEventsByID; fingerprintsBySource = nextFingerprints
         lastCollectionSignature = collectionSignature
         lastSelectedSignature = selectedCollectionSignature
         return snapshot
@@ -585,6 +665,7 @@ public actor SessionEngine {
         var reportedOffset = file.offset
         func report(_ offset: UInt64) {
             reportedOffset = offset
+            guard reporter?.isEnabled == true else { return }
             let completed = Int64(clamping: offset), total = Int64(clamping: max(size, offset))
             history?.update(path: path, completedBytes: completed, totalBytes: total)
             reporter?.send(.init(stage: .readingHistory, completed: completed, total: total, fileName: fileName, history: history?.snapshot))
@@ -948,16 +1029,24 @@ public actor SessionEngine {
             return id + ":" + (summary?.parentID ?? "") + ":" + (summary?.relation.rawValue ?? "") + ":" + (summary?.title ?? "") + ":" + paths + ":" + metadataSignature
         }.joined(separator: "\n"))
     }
-    private func persist(root: String) -> CoverageIssue? {
+    private func persist(root: String, reporter: SessionProgressReporter) -> CoverageIssue? {
         // Cache is disposable, bounded and confined to Lens' own directory. Sources are untouched.
         let oversized = CoverageIssue("cache borné", "L'index dépasse 64 Mio : disponible en mémoire mais non persisté ; une nouvelle ouverture réindexera les sources.")
         // Every preview is a required JSON string. Its unescaped UTF-8 length is a lower
         // bound, so exceeding the limit already proves the cache cannot be persisted.
         // Avoid encoding an enormous disposable cache merely to discard it afterwards.
         let previews = files.values.lazy.flatMap { $0.records.lazy.map { $0.event.preview } }
-        guard !Self.cacheTextExceedsByteLimit(previews, limit: maximumCacheBytes) else { return oversized }
+        let totalRecords = reporter.isEnabled ? Int64(files.values.reduce(0) { $0 + $1.records.count }) : nil
+        reporter.send(.init(stage: .savingIndex, total: totalRecords, phase: .checkingIndexSize))
+        let onProgress: ((Int) -> Void)? = reporter.isEnabled ? { count in
+            reporter.send(.init(stage: .savingIndex, completed: Int64(count), total: totalRecords, phase: .checkingIndexSize))
+        } : nil
+        guard !Self.cacheTextExceedsByteLimit(previews, limit: maximumCacheBytes, onProgress: onProgress) else { return oversized }
+        reporter.send(.init(stage: .savingIndex, phase: .encodingIndex))
         guard let data = try? JSONEncoder().encode(Cache(version: cacheVersion, home: home.path, files: files)) else { return CoverageIssue("cache", "Index non sauvegardé ; la prochaine ouverture relira les sources.") }
         guard data.count <= maximumCacheBytes else { return oversized }
+        let totalBytes = Int64(data.count)
+        reporter.send(.init(stage: .savingIndex, total: totalBytes, phase: .writingIndex))
         do {
             try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
             let url = cacheDirectory.appendingPathComponent(Self.digest(home.path + ":" + root) + ".json")
@@ -967,19 +1056,23 @@ public actor SessionEngine {
             let sorted = urls.sorted { (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast > (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast }
             var total = 0
             for file in sorted { total += (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0; if total > maximumCacheBytes && file != url { try? FileManager.default.removeItem(at: file) } }
+            reporter.send(.init(stage: .savingIndex, completed: totalBytes, total: totalBytes, phase: .writingIndex))
             return nil
         } catch { return CoverageIssue("cache", "Cache personnel non accessible : \(error.localizedDescription). La lecture des journaux reste disponible.", source: cacheDirectory.path) }
     }
 
     /// A conservative lower bound only; the encoded byte guard remains authoritative.
-    static func cacheTextExceedsByteLimit<Texts: Sequence>(_ texts: Texts, limit: Int) -> Bool where Texts.Element == String {
+    static func cacheTextExceedsByteLimit<Texts: Sequence>(_ texts: Texts, limit: Int, onProgress: ((Int) -> Void)? = nil) -> Bool where Texts.Element == String {
         guard limit >= 0 else { return true }
-        var remaining = limit
+        var remaining = limit, completed = 0
         for text in texts {
+            completed += 1
             let count = text.utf8.count
-            guard count <= remaining else { return true }
+            guard count <= remaining else { onProgress?(completed); return true }
             remaining -= count
+            if completed.isMultiple(of: 1024) { onProgress?(completed) }
         }
+        onProgress?(completed)
         return false
     }
 
@@ -1238,6 +1331,9 @@ private final class RolloutMetadata {
     }
 }
 private struct ResourceCandidate: Codable { var location: String; var role: ResourceRole; var evidence: String; var availability: Availability? = nil }
+private struct RecordedCallKey: Hashable { let agentID: String; let callID: String? }
+private struct RecordedChildKey: Hashable { let parentID: String; let childID: String }
+
 private struct IndexedEvent: Codable {
     var event: LensEvent
     var fingerprint: String?

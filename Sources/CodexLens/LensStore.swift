@@ -391,6 +391,7 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
     @Published private(set) var presentation: SessionPresentation?
     @Published private(set) var timelineProjection: TimelineProjection?
     @Published private(set) var isProjecting = false
+    @Published private(set) var projectionProgress: OperationProgress?
     @Published private(set) var timelinePreparing = false
     @Published private(set) var timelineIssue: String?
     @Published var timelineFocus: TimelineFocusRequest?
@@ -512,26 +513,39 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
         projectionTask?.cancel(); let generation = UUID(); projectionGeneration = generation
         projectionPublicationSequence &+= 1
         let publicationSequence = projectionPublicationSequence
-        guard !isStopped, let snapshot else { presentation = nil; timelineProjection = nil; isProjecting = false; timelinePreparing = false; return }
+        guard !isStopped, let snapshot else { presentation = nil; timelineProjection = nil; projectionProgress = nil; isProjecting = false; timelinePreparing = false; return }
         let filters = currentFilters, agentFilters = AgentFilters(query: agentQuery, sourceMatches: agentSearchMatches), revision = snapshotRevision, lifecycle = lifecycleGeneration
         let presentationBuilder = self.presentationBuilder, timelineBuilder = self.timelineBuilder
         if !isProjecting { isProjecting = true }; if !timelinePreparing { timelinePreparing = true }
+        projectionProgress = .init(stage: .indexingEvents)
         projectionTask = Task { [weak self] in
+            let (updates, continuation) = AsyncStream<OperationProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let progressTask = Task { @MainActor [weak self] in
+                for await progress in updates {
+                    guard let self, !Task.isCancelled, self.acceptsProjection(generation, lifecycle: lifecycle),
+                          self.isProjecting || self.timelinePreparing else { break }
+                    self.projectionProgress = progress
+                }
+            }
             defer {
+                continuation.finish(); progressTask.cancel()
                 if let self, self.acceptsProjection(generation, lifecycle: lifecycle) {
+                    self.projectionProgress = nil
                     self.projectionTask = nil
                     if self.projectionNeedsRefresh { self.schedulePresentation() }
                 }
             }
             do {
-                let next = try await presentationBuilder.prepare(snapshot: snapshot, revision: revision, filters: filters, agentFilters: agentFilters)
+                let next = try await presentationBuilder.prepare(snapshot: snapshot, revision: revision, filters: filters, agentFilters: agentFilters,
+                    progress: { continuation.yield($0) })
                 guard !Task.isCancelled, self?.acceptsProjection(generation, lifecycle: lifecycle) == true else { return }
                 let publishSpan = LensSignposts.begin("PresentationPublish")
                 self?.presentation = next; self?.isProjecting = false
                 publishSpan.end()
                 await presentationBuilder.didPublish(next, sequence: publicationSequence)
                 guard !Task.isCancelled, self?.acceptsProjection(generation, lifecycle: lifecycle) == true else { return }
-                let timeline = try await timelineBuilder.prepare(events: next.timelineEvents, agents: snapshot.agents)
+                let timeline = try await timelineBuilder.prepare(events: next.timelineEvents, agents: snapshot.agents,
+                    progress: { continuation.yield($0) })
                 guard !Task.isCancelled, self?.acceptsProjection(generation, lifecycle: lifecycle) == true else { return }
                 self?.timelineProjection = timeline
                 self?.timelineIssue = next.trends.unknownTimestampCount > 0
@@ -560,7 +574,7 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
         projectionTask?.cancel(); projectionTask = nil; projectionNeedsRefresh = false; projectionReaderID = nil
         returnToPresentTask?.cancel(); returnToPresentTask = nil
         selectionGeneration = UUID(); selectionTask?.cancel(); selectionTask = nil
-        busy = false; catalogLoading = false; openingProgress = nil; catalogProgress = nil; isProjecting = false; timelinePreparing = false
+        busy = false; catalogLoading = false; openingProgress = nil; catalogProgress = nil; projectionProgress = nil; isProjecting = false; timelinePreparing = false
     }
     func stopObserving() {
         persistWindowRoot(); persistTabs()

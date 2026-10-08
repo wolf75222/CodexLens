@@ -63,6 +63,18 @@ public struct FileSearchResult: Codable, Sendable {
     }
 }
 
+/// Live accounting for the discovered search queue, not a percentage of the
+/// filesystem or of a byte budget. New subdirectories can extend the queue.
+public struct FileSearchProgress: Sendable, Equatable {
+    public let searchedFiles: Int
+    public let visitedDirectories: Int
+    public let decodedBytes: Int
+    public let pendingDirectories: Int
+    public let currentPath: String?
+    public let finished: Bool
+}
+public typealias FileSearchProgressHandler = @Sendable (FileSearchProgress) -> Void
+
 public enum FileSearchError: LocalizedError, Sendable {
     case invalidQuery, invalidOptions
     public var errorDescription: String? {
@@ -101,7 +113,7 @@ public actor FileSearch {
     public init(fileService: FileService = FileService()) { reader = fileService }
     init(reader: any FileSearchReader) { self.reader = reader }
 
-    public func search(environment: EnvironmentRecord, query: String, options: FileSearchOptions = FileSearchOptions()) async throws -> FileSearchResult {
+    public func search(environment: EnvironmentRecord, query: String, options: FileSearchOptions = FileSearchOptions(), progress: FileSearchProgressHandler? = nil) async throws -> FileSearchResult {
         let interval = LensSignposts.begin("EnvironmentSearch")
         defer { interval.end() }
         guard !query.isEmpty, query.utf8.count <= 1024, !query.contains("\n"), !query.contains("\r") else { throw FileSearchError.invalidQuery }
@@ -112,6 +124,16 @@ public actor FileSearch {
         let root = expanded.hasPrefix("/") ? URL(fileURLWithPath: expanded).standardizedFileURL.path : expanded
         var queue: [(String, Int)] = [(root, 0)]
         var seen = Set<String>(), stop = false, inspectedEntries = 0
+        var publishedAt: ContinuousClock.Instant?
+        func report(_ path: String?, finished: Bool = false) {
+            guard let progress else { return }
+            let now = ContinuousClock.now
+            guard finished || publishedAt == nil || now - publishedAt! >= .milliseconds(100) else { return }
+            publishedAt = now
+            progress(.init(searchedFiles: result.searchedFiles, visitedDirectories: result.visitedDirectories,
+                decodedBytes: result.decodedBytes, pendingDirectories: queue.count, currentPath: path, finished: finished))
+        }
+        report(root)
         func issue(_ category: String, _ message: String, _ path: String) {
             if result.coverage.count < options.maxCoverageIssues { result.coverage.append(CoverageIssue(category, message, source: path)) }
             else { result.coverageOmittedCount += 1 }
@@ -131,6 +153,7 @@ public actor FileSearch {
             let entryBudget = options.maxFiles + options.maxDirectories - inspectedEntries
             guard entryBudget > 0 else { issue("limit.entries", "Limite des entrées examinées atteinte ; arborescence restante non parcourue.", directory.0); break }
             result.visitedDirectories += 1
+            report(directory.0)
             let listing: FileSearchDirectoryListing
             do { listing = try await reader.searchChildren(path: directory.0, maxEntries: entryBudget) }
             catch is CancellationError { cancellation(directory.0); break }
@@ -170,6 +193,7 @@ public actor FileSearch {
                         let pageBytes = page.text.utf8.count
                         guard pageBytes <= remaining else { issue("limit.bytes", "Page supérieure au budget restant ; aucun résultat de ce fichier conservé.", entry.id); break }
                         result.decodedBytes += pageBytes
+                        report(entry.id)
                         guard page.totalBytes <= UInt64(options.maxFileBytes) else { issue("oversize", "La taille actuelle ou la cible du lien dépasse la limite par fichier.", entry.id); break }
                         guard page.totalBytes <= UInt64(budget) else { issue("limit.bytes", "La taille actuelle dépasse le budget initial de ce fichier ; correspondances écartées.", entry.id); break }
                         if let version, version != page.version { throw FileServiceError.staleFile(entry.id) }
@@ -197,12 +221,14 @@ public actor FileSearch {
                 catch FileServiceError.binary { issue("binary", "Contenu non UTF-8 ou binaire ; aucune correspondance conservée.", entry.id) }
                 catch { issue("unavailable", error.localizedDescription, entry.id) }
                 if completed && !result.cancelled { result.searchedFiles += 1; result.hits += pending }
+                report(entry.id)
                 if result.hits.count >= options.maxMatches { issue("limit.matches", "Limite des correspondances atteinte ; recherche restante non effectuée.", entry.id); stop = true }
                 if stop { break }
             }
             if listing.hasMore { stop = true }
         }
         result.finishedAt = Date()
+        report(nil, finished: true)
         return result
     }
 

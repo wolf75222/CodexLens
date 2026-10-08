@@ -91,7 +91,7 @@ import LensCore
                 await settle(host)
                 let indicators = descendants(host).compactMap { $0 as? NSProgressIndicator }
                 let id = "picker-\(dark ? "dark" : "light")-\(Int(width))"
-                check(id + "-single-native-spinner", indicators.count == 1)
+                check(id + "-single-native-bar", indicators.count == 1 && indicators.first?.style == .bar)
                 if let spinner = indicators.first {
                     let rect = spinner.convert(spinner.bounds, to: host)
                     let offset = abs(rect.midX - host.bounds.midX)
@@ -111,14 +111,14 @@ import LensCore
             let rect = spinner.map { $0.convert($0.bounds, to: host) }
             check("long-title-\(Int(width))-spinner-centred", rect.map { abs($0.midX - host.bounds.midX) <= 2 } ?? false)
         }
-        let reduced = NSHostingView(rootView: LensLoadingState(title: "Lecture des traces…", longRunningDelay: .seconds(10)).frame(maxHeight: .infinity).environment(\.lensReduceMotionOverride, true))
+        let reduced = NSHostingView(rootView: LensLoadingState(title: "Lecture des traces…").frame(maxHeight: .infinity).environment(\.lensReduceMotionOverride, true))
         reduced.sizingOptions = []; window.contentView = reduced
         await settle(reduced)
-        check("reduced-motion-no-animated-spinner", descendants(reduced).allSatisfy { !($0 is NSProgressIndicator) })
+        check("reduced-motion-keeps-stationary-native-bar", descendants(reduced).contains { ($0 as? LensLoadingBarIndicator).map { $0.style == .bar && !$0.animationEnabled } ?? false })
         // Direct fixtures control the delay without altering a reader/model or
         // deriving a completion fraction from elapsed time.
         for dark in [false, true] { for width in [260.0, 620.0] {
-            let immediate = LoadingLifecycleState(delay: .zero, title: "Chargement prolongé de test")
+            let immediate = LoadingLifecycleState(title: "Chargement prolongé de test")
             let host = NSHostingView(rootView: ControlledLoadingFixture(state: immediate))
             host.sizingOptions = []; window.contentView = host
             window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
@@ -145,24 +145,24 @@ import LensCore
             window.contentView = nil
         } }
 
-        let state = LoadingLifecycleState(delay: .seconds(1))
+        let state = LoadingLifecycleState()
         let transition = NSHostingView(rootView: ControlledLoadingFixture(state: state))
         transition.sizingOptions = []; window.contentView = transition
         window.appearance = NSAppearance(named: .darkAqua); window.setContentSize(NSSize(width: 620, height: 260)); window.orderBack(nil)
         await settle(transition)
-        check("controlled-delay-starts-with-spinner", descendants(transition).contains { ($0 as? NSProgressIndicator)?.style == .spinning }
-            && !descendants(transition).contains { $0 is LensLoadingBarIndicator })
+        check("loading-starts-immediately-with-native-bar", descendants(transition).contains { ($0 as? NSProgressIndicator)?.style == .bar }
+            && !descendants(transition).contains { ($0 as? NSProgressIndicator)?.style == .spinning })
         let titleBefore = try await frame(window, label: state.title, role: kAXStaticTextRole)
         let cancelBefore = try await frame(window, label: state.cancelTitle, role: kAXButtonRole)
-        renders.append(try capture(transition, name: "controlled-early-spinner", output: output))
+        renders.append(try capture(transition, name: "immediate-indeterminate-bar", output: output))
         try await wait("controlled-delayed-bar") { descendants(transition).contains { $0 is LensLoadingBarIndicator } }
         await settle(transition)
         let stableBar = try require(descendants(transition).compactMap { $0 as? LensLoadingBarIndicator }.first, "transition bar")
         let titleAfter = try await frame(window, label: state.title, role: kAXStaticTextRole)
         let cancelAfter = try await frame(window, label: state.cancelTitle, role: kAXButtonRole)
-        check("delayed-transition-keeps-title-and-cancel-positions", sameFrame(titleBefore, titleAfter) && sameFrame(cancelBefore, cancelAfter))
+        check("work-updates-keep-title-and-cancel-positions", sameFrame(titleBefore, titleAfter) && sameFrame(cancelBefore, cancelAfter))
         observations.append(["id": "controlled-delayed-transition", "titleBefore": NSStringFromRect(titleBefore), "titleAfter": NSStringFromRect(titleAfter),
-            "cancelBefore": NSStringFromRect(cancelBefore), "cancelAfter": NSStringFromRect(cancelAfter), "delay": "1 second controlled fixture"])
+            "cancelBefore": NSStringFromRect(cancelBefore), "cancelAfter": NSStringFromRect(cancelAfter), "scope": "Immediate bar; no delayed loading timer"])
         renders.append(try capture(transition, name: "controlled-delayed-bar", output: output))
         state.layoutRevision += 1; await settle(transition)
         check("unrelated-render-update-retains-native-bar-and-animation-configuration", descendants(transition).contains { $0 === stableBar } && stableBar.animationEnabled)
@@ -174,32 +174,32 @@ import LensCore
         state.reducedMotion = false
         try await wait("long-bar-animation-restored") { stableBar.animationEnabled }
         state.operationID = UUID()
-        try await wait("same-title-new-operation-resets-spinner") {
-            !descendants(transition).contains { $0 is LensLoadingBarIndicator }
-                && descendants(transition).contains { ($0 as? NSProgressIndicator)?.style == .spinning } && !stableBar.animationEnabled
+        try await wait("same-title-new-operation-resets-bar") {
+            descendants(transition).contains { ($0 as? LensLoadingBarIndicator).map { $0 !== stableBar && $0.isIndeterminate } ?? false }
+                && !stableBar.animationEnabled
         }
-        check("same-title-new-operation-starts-early-without-old-bar", descendants(transition).contains { ($0 as? NSProgressIndicator)?.style == .spinning } && !stableBar.animationEnabled)
+        check("new-operation-replaces-old-control-without-spinner", !descendants(transition).contains { ($0 as? NSProgressIndicator)?.style == .spinning } && !stableBar.animationEnabled)
         try await wait("new-operation-delayed-bar") { descendants(transition).contains { $0 is LensLoadingBarIndicator } }
         try await press(window, label: state.cancelTitle)
         try await wait("accessible-cancel-hides-loader") { state.cancelCount == 1 && !state.visible && !descendants(transition).contains { $0 is NSProgressIndicator } }
         check("long-loading-accessible-cancel-dispatches-once", state.cancelCount == 1 && !state.visible)
 
-        // Disappear before the default1.5s delay, remain absent beyond that
-        // deadline, then reopen the same conditional leaf with an early state.
-        state.delay = .milliseconds(1500); state.visible = true
+        // Unmount stops native animation. Reopening creates a fresh bar,
+        // without a delayed SwiftUI task that could mount after cancellation.
+        state.visible = true
         await settle(transition)
-        check("reopened-loader-starts-early", !descendants(transition).contains { $0 is LensLoadingBarIndicator })
+        check("reopened-loader-has-immediate-bar", descendants(transition).contains { $0 is LensLoadingBarIndicator })
         state.visible = false; await settle(transition)
-        try await Task.sleep(for: .milliseconds(1600))
+        try await Task.sleep(for: .milliseconds(50))
         check("disappeared-loader-does-not-mount-a-late-bar", !descendants(transition).contains { $0 is NSProgressIndicator })
         state.visible = true; await settle(transition)
-        check("after-cancelled-delay-reopened-loader-has-fresh-spinner", descendants(transition).contains { ($0 as? NSProgressIndicator)?.style == .spinning }
-            && !descendants(transition).contains { $0 is LensLoadingBarIndicator })
+        check("reopened-loader-has-fresh-bar-and-no-spinner", descendants(transition).contains { $0 is LensLoadingBarIndicator }
+            && !descendants(transition).contains { ($0 as? NSProgressIndicator)?.style == .spinning })
         state.visible = false; await settle(transition)
 
         // Measured fractions are injected into the product component; engine
         // measurements and shared-reader cancellation have separate Core tests.
-        state.delay = .seconds(10); state.reducedMotion = false
+        state.reducedMotion = false
         state.progress = .init(stage: .readingMetadata, completed: 25, total: 100)
         state.visible = true; await settle(transition)
         let measuredBar = try require(descendants(transition).compactMap { $0 as? LensLoadingBarIndicator }.first, "measured bar")
@@ -234,7 +234,6 @@ import LensCore
         check("new-file-plan-resets-retained-fill-to-measured-global-fraction", expandedBar !== globalBar && abs(expandedBar.doubleValue - 0.4) < 0.001)
         state.showsOpeningSteps = false
         state.progress = .init(stage: .savingIndex)
-        state.delay = .zero
         await settle(transition)
         let unknownBar = try require(descendants(transition).compactMap { $0 as? LensLoadingBarIndicator }.first, "unknown stage bar")
         check("unknown-stage-clears-measured-fraction", unknownBar.isIndeterminate && !unknownBar.animationEnabled)
@@ -242,6 +241,23 @@ import LensCore
         try await press(window, label: state.cancelTitle)
         try await wait("measured-cancel-hides-loader") { !state.visible }
         check("measured-progress-cancel-remains-accessible", state.cancelCount == cancelsBefore + 1 && !state.visible)
+
+        state.progress = nil; state.reducedMotion = false
+        state.workProgress = .init(stage: .readingMessages, completed: 25, total: 100, unit: .messages, step: 2, stepCount: 3)
+        state.visible = true; await settle(transition)
+        let messageBar = try require(descendants(transition).compactMap { $0 as? LensLoadingBarIndicator }.first, "measured message bar")
+        check("conversation-bar-follows-measured-messages", !messageBar.isIndeterminate && abs(messageBar.doubleValue - 0.25) < 0.001)
+        let messageCounter = state.workProgress!.counterTitle!
+        let messageNodes = try await waitForOwnAX(window, name: "remaining-message-counter") { nodes in
+            !matching(nodes, label: messageCounter, role: kAXStaticTextRole).isEmpty
+        }
+        check("remaining-message-count-is-visible-and-accessible", !matching(messageNodes, label: messageCounter, role: kAXStaticTextRole).isEmpty)
+        renders.append(try capture(transition, name: "conversation-measured-remaining", output: output))
+        state.workProgress = .init(stage: .savingExport)
+        await settle(transition)
+        let savingBar = try require(descendants(transition).compactMap { $0 as? LensLoadingBarIndicator }.first, "saving bar")
+        check("unknown-export-stage-clears-message-fraction", savingBar.isIndeterminate)
+        state.visible = false; await settle(transition)
 
         let receipt: [String: Any] = ["checks": checks, "observations": observations, "renders": renders, "completed": true,
             "allExecutedChecksPassed": checks.allSatisfy { $0["passed"] as? Bool == true },
@@ -426,13 +442,13 @@ import LensCore
     var reducedMotion = false
     var operationID = UUID()
     var progress: SessionLoadingProgress?
+    var workProgress: OperationProgress?
     var showsOpeningSteps = false
     var layoutRevision = 0
     var cancelCount = 0
-    var delay: Duration
     let title: String, cancelTitle: String
-    init(delay: Duration, title: String = "Chargement de la fixture", cancelTitle: String = "Annuler la tâche de test") {
-        self.delay = delay; self.title = title; self.cancelTitle = cancelTitle
+    init(title: String = "Chargement de la fixture", cancelTitle: String = "Annuler la tâche de test") {
+        self.title = title; self.cancelTitle = cancelTitle
     }
 }
 @MainActor private struct ControlledLoadingFixture: View {
@@ -442,7 +458,7 @@ import LensCore
             if state.visible {
                 LensLoadingState(title: state.title, cancelTitle: state.cancelTitle,
                     onCancel: { state.cancelCount += 1; state.visible = false },
-                    longRunningDelay: state.delay, operationID: state.operationID, progress: state.progress, showsOpeningSteps: state.showsOpeningSteps)
+                    operationID: state.operationID, progress: state.progress, showsOpeningSteps: state.showsOpeningSteps, workProgress: state.workProgress)
                     .padding(.horizontal, CGFloat(state.layoutRevision % 2))
             } else { Color.clear }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)

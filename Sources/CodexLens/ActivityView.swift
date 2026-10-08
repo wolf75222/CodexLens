@@ -171,7 +171,10 @@ struct EventListView: View {
                 Text(title).font(LensUI.paneTitle).accessibilityAddTraits(.isHeader)
                 Spacer()
                 Text(LensL10n.text("{0}", String(describing: events.count))).font(LensUI.metadata).foregroundStyle(.secondary).monospacedDigit()
-                if store.isProjecting { LensProgressIndicator(accessibilityLabel: LensL10n.text("Préparation de la liste des événements")).controlSize(.small) }
+                if store.isProjecting {
+                    if let progress = store.projectionProgress { LensOperationProgressLine(progress: progress) }
+                    else { LensProgressIndicator(accessibilityLabel: LensL10n.text("Préparation de la liste des événements")).controlSize(.small) }
+                }
                 if showTimelineButton, !store.timelineVisible, !store.liveTimelineVisible {
                     Button(LensL10n.text("Afficher la chronologie")) { store.timelineVisible = true }.controlSize(.small)
                 }
@@ -195,7 +198,7 @@ struct EventListView: View {
     }
     private var emptyState: some View {
         Group {
-            if emptyKind == .preparing { LensLoadingState(title: LensL10n.text("Préparation de la sélection…")) }
+            if emptyKind == .preparing { LensLoadingState(title: LensL10n.text("Préparation de la sélection…"), workProgress: store.projectionProgress) }
             else {
                 VStack(alignment: .leading, spacing: 12) {
                     LensSectionHeader(title: emptyTitle, detail: emptyExplanation,

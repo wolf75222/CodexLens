@@ -21,7 +21,7 @@ struct SessionTrendsView: View {
                 inspect: { store.inspectTrendPeriod($0, rootID: presentation.rootID, sourceHome: sourceHome, openingID: openingID) },
                 showCoverage: { store.showCoverage = true })
         } else if store.isProjecting {
-            LensLoadingState(title: LensL10n.text("Préparation des courbes…"))
+            LensLoadingState(title: LensL10n.text("Préparation des courbes…"), workProgress: store.projectionProgress)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             LensCollectionEmptyState(title: LensL10n.text("Pas de données à tracer"),

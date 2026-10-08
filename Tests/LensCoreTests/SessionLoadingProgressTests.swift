@@ -67,6 +67,83 @@ final class SessionLoadingProgressTests: XCTestCase {
         XCTAssertEqual(capture.values.suffix(2).map(\.fileName), ["a.jsonl", "b.jsonl"])
     }
 
+    func testGrowingFileCompletionIsCoalescedButFinishedFilesAndPhasesArePublished() {
+        let capture = ProgressCapture(), measured = SessionProgressReporter { capture.append($0) }
+        for bytes in 1...1024 {
+            measured.send(.init(stage: .readingHistory, completed: Int64(bytes), total: Int64(bytes), fileName: "growing.jsonl",
+                                history: .init(completedBytes: Int64(bytes), totalBytes: Int64(bytes), completedFiles: 0, totalFiles: 2)))
+        }
+        XCTAssertLessThan(capture.values.count, 10, "Growing bytes must not look like a newly completed stage on every chunk")
+        measured.send(.init(stage: .readingHistory, completed: 1024, total: 1024, fileName: "growing.jsonl",
+                            history: .init(completedBytes: 1024, totalBytes: 1024, completedFiles: 1, totalFiles: 2)))
+        measured.send(.init(stage: .readingHistory, completed: 1024, total: 1024, fileName: "growing.jsonl",
+                            history: .init(completedBytes: 1024, totalBytes: 1024, completedFiles: 2, totalFiles: 2)))
+        XCTAssertEqual(capture.values.suffix(2).compactMap { $0.history?.completedFiles }, [1, 2])
+        measured.send(.init(stage: .linkingEvents, total: 10, phase: .indexingCalls))
+        measured.send(.init(stage: .linkingEvents, total: 10, phase: .linkingResults))
+        XCTAssertEqual(capture.values.suffix(2).compactMap(\.phase), [.indexingCalls, .linkingResults])
+    }
+
+    func testUnobservedReporterDoesNotEvaluateProgressWork() {
+        var evaluated = false
+        func value() -> SessionLoadingProgress { evaluated = true; return .init(stage: .readingHistory) }
+        SessionProgressReporter(nil).send(value())
+        XCTAssertFalse(evaluated)
+    }
+
+    func testOpeningReportsOrderedPassagesAndMeasuredCompletions() async throws {
+        let f = try ProgressFixture(); defer { f.remove() }
+        let log = try f.write(count: 32), original = try Data(contentsOf: log)
+        let titles = f.home.appendingPathComponent("session_index.jsonl")
+        let titleBytes = try JSONSerialization.data(withJSONObject: ["id": ProgressFixture.id, "thread_name": "Anonymous progress fixture"])
+        try titleBytes.write(to: titles)
+        let capture = ProgressCapture(), engine = SessionEngine(home: f.home, cacheDirectory: f.cache)
+        _ = try await engine.open(id: ProgressFixture.id, progress: { capture.append($0) })
+        var phases: [SessionLoadingProgress.Phase] = []
+        for phase in capture.values.compactMap(\.phase) where phases.last != phase { phases.append(phase) }
+        XCTAssertEqual(phases, [.filteringSessions, .readingTitles, .savingCatalog, .sortingEvents, .deduplicatingEvents, .sortingEvents,
+                                .indexingCalls, .linkingResults, .checkingCalls, .indexingEnvironments, .indexingResources,
+                                .preparingAgents, .checkingEnvironments, .checkingResources, .checkingIndexSize, .encodingIndex,
+                                .writingIndex, .preparingEventLookup, .preparingSourceLookup])
+        let measuredPhases: [SessionLoadingProgress.Phase] = [.readingTitles, .deduplicatingEvents, .indexingCalls, .linkingResults, .checkingCalls,
+                                                            .indexingEnvironments, .indexingResources, .preparingAgents, .checkingEnvironments,
+                                                            .checkingIndexSize, .writingIndex, .preparingEventLookup, .preparingSourceLookup]
+        for phase in measuredPhases {
+            let values = capture.values.filter { $0.phase == phase }, last = try XCTUnwrap(values.last, "Missing passage \(phase)")
+            XCTAssertNotNil(last.total, "Passage \(phase) has a real nonempty fixture workload")
+            XCTAssertEqual(last.completed, last.total)
+            XCTAssertTrue(zip(values, values.dropFirst()).allSatisfy { $0.completed <= $1.completed })
+        }
+        XCTAssertTrue(capture.values.filter { $0.phase == .sortingEvents || $0.phase == .encodingIndex }.allSatisfy { $0.total == nil })
+        XCTAssertEqual(capture.values.last?.phase, .preparingSourceLookup)
+        XCTAssertEqual(SessionLoadingProgress(stage: .finalizingCatalog).openingStep, 1)
+        XCTAssertEqual(try Data(contentsOf: log), original)
+        XCTAssertEqual(try Data(contentsOf: titles), titleBytes)
+    }
+
+    func testNestedSpawnDiscoveryAndFirstRecordedMissionKeepSourcesIntact() async throws {
+        let f = try ProgressFixture(); defer { f.remove() }
+        let child = "22222222-2222-4222-8222-222222222222", grandchild = "33333333-3333-4333-8333-333333333333"
+        let root = try f.journal(id: ProgressFixture.id, records: [f.spawn("shared-call", message: "First child mission", taskName: "first-child"), f.spawnResult("shared-call", child: child),
+                                                                 f.spawn("shared-call", message: "Later duplicate mission", taskName: "later-child"), f.spawnResult("shared-call", child: child)])
+        let childLog = try f.journal(id: child, records: [f.spawn("shared-call", message: "Grandchild mission", taskName: "grandchild"), f.spawnResult("shared-call", child: grandchild)])
+        let grandchildLog = try f.journal(id: grandchild, records: [f.message("First grandchild message"), f.message("Later grandchild message")])
+        let paths = [root, childLog, grandchildLog], sources = try paths.map { try Data(contentsOf: $0) }
+        let capture = ProgressCapture(), engine = SessionEngine(home: f.home, cacheDirectory: f.cache)
+        let snapshot = try await engine.open(id: ProgressFixture.id, progress: { capture.append($0) })
+        XCTAssertEqual(Set(snapshot.agents.map(\.id)), [ProgressFixture.id, child, grandchild])
+        let childAgent = try XCTUnwrap(snapshot.agents.first { $0.id == child }), grandchildAgent = try XCTUnwrap(snapshot.agents.first { $0.id == grandchild })
+        XCTAssertEqual(childAgent.parentID, ProgressFixture.id); XCTAssertEqual(grandchildAgent.parentID, child)
+        XCTAssertEqual(childAgent.mission, "First child mission"); XCTAssertEqual(grandchildAgent.mission, "Grandchild mission")
+        XCTAssertEqual(childAgent.metadata?.first { $0.kind == .taskName && $0.origin == .delegationRequest }?.value, "first-child")
+        XCTAssertEqual(grandchildAgent.metadata?.first { $0.kind == .taskName && $0.origin == .delegationRequest }?.value, "grandchild")
+        XCTAssertEqual(capture.values.filter { $0.stage == .readingHistory }.last?.history?.completedFiles, 3)
+        // The unobserved/cache-restored path must build the same graph and winners.
+        let restored = try await SessionEngine(home: f.home, cacheDirectory: f.cache).open(id: ProgressFixture.id)
+        XCTAssertEqual(restored.agents, snapshot.agents); XCTAssertEqual(restored.events, snapshot.events)
+        for (path, source) in zip(paths, sources) { XCTAssertEqual(try Data(contentsOf: path), source) }
+    }
+
     func testEnginePublishesMeasuredCatalogBytesAndRecordsWithoutChangingSources() async throws {
         let f = try ProgressFixture(); defer { f.remove() }
         let log = try f.write(count: 6000)
@@ -155,6 +232,24 @@ private struct ProgressFixture {
         for i in 0..<count {
             try line(["type": "event_msg", "timestamp": "2026-10-01T12:00:01Z", "payload": ["type": "user_message", "message": "Fixture message \(i) " + String(repeating: "x", count: 180)]])
         }
+        try data.write(to: file); return file
+    }
+    func record(_ type: String, _ payload: [String: Any]) -> [String: Any] { ["type": type, "timestamp": "2026-10-01T12:00:01Z", "payload": payload] }
+    func spawn(_ call: String, message: String, taskName: String) -> [String: Any] {
+        record("response_item", ["type": "function_call", "name": "spawn_agent", "namespace": "agents", "call_id": call,
+                                 "arguments": ["message": message, "task_name": taskName]])
+    }
+    func spawnResult(_ call: String, child: String) -> [String: Any] {
+        record("response_item", ["type": "function_call_output", "call_id": call, "output": "{\"agent_id\":\"\(child)\"}"])
+    }
+    func message(_ text: String) -> [String: Any] { record("event_msg", ["type": "user_message", "message": text]) }
+    func journal(id: String, records: [[String: Any]]) throws -> URL {
+        let file = home.appendingPathComponent("sessions/" + id + ".jsonl")
+        var data = Data()
+        // Child parentage is intentionally absent: it must come from each
+        // parent's recorded spawn result as successive journals are opened.
+        let metadata = record("session_meta", ["id": id, "cwd": base.path, "cli_version": "0.159.0"])
+        for record in [metadata] + records { data.append(try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])); data.append(10) }
         try data.write(to: file); return file
     }
     func remove() { try? FileManager.default.removeItem(at: base) }

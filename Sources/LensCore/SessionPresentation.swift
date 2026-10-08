@@ -91,34 +91,47 @@ public actor SessionPresentationBuilder {
         let span = LensSignposts.begin("PresentationRetire"); defer { span.end() }
         published = presentation; publishedSequence = sequence
     }
-    public func prepare(snapshot: SessionSnapshot, revision: Int, filters: EventFilters, agentFilters: AgentFilters? = nil) throws -> SessionPresentation {
+    public func prepare(snapshot: SessionSnapshot, revision: Int, filters: EventFilters, agentFilters: AgentFilters? = nil, progress: OperationProgressHandler? = nil) throws -> SessionPresentation {
         // Actor tasks do not have a per-run-loop autorelease boundary. Index
         // preparation parses recorded arguments and creates Foundation lookup
         // objects; keep those temporaries out of the published generation.
         try autoreleasepool {
-            try prepareIndex(snapshot: snapshot, revision: revision, filters: filters, agentFilters: agentFilters)
+            try prepareIndex(snapshot: snapshot, revision: revision, filters: filters, agentFilters: agentFilters, progress: progress)
         }
     }
-    private func prepareIndex(snapshot: SessionSnapshot, revision: Int, filters: EventFilters, agentFilters: AgentFilters?) throws -> SessionPresentation {
+    private func prepareIndex(snapshot: SessionSnapshot, revision: Int, filters: EventFilters, agentFilters: AgentFilters?, progress: OperationProgressHandler?) throws -> SessionPresentation {
         let span = LensSignposts.begin("SessionPresentation"); defer { span.end() }
         try Task.checkCancellation()
+        let reporter = progress.map { OperationProgressReporter($0) }
         // nil keeps the original API's shared query semantics for existing consumers.
         let agentFilters = agentFilters ?? AgentFilters(query: filters.query, sourceMatches: filters.sourceMatches)
         if self.revision == revision, lastPrepared?.rootID == snapshot.root.id, lastFilters == filters, lastAgentFilters == agentFilters, let lastPrepared {
+            reporter?.send(OperationProgress(stage: .filteringEvents, completed: 1, total: 1, detail: "presentation.reuse", step: 1, stepCount: 1))
             return lastPrepared
         }
         // Agent-tree search does not change the event scope. Reuse its curves,
         // rather than aggregating the same metadata for each graph query.
         let cachedTrends = self.revision == revision && lastPrepared?.rootID == snapshot.root.id && lastFilters == filters
             ? lastPrepared?.trends : nil
-        if self.revision != revision || indexed?.rootID != snapshot.root.id {
+        let rebuildsIndex = self.revision != revision || indexed?.rootID != snapshot.root.id
+        let filterStep = rebuildsIndex ? 6 : 1
+        let stepCount = filterStep + (cachedTrends == nil ? 1 : 0)
+        // Empty event collections still have a preparation task; do not invent
+        // a phantom event or expose an unknown denominator for that task.
+        let eventUnit: OperationProgress.Unit = snapshot.events.isEmpty ? .steps : .events
+        let eventTotal = Int64(max(1, snapshot.events.count))
+        if rebuildsIndex {
+            reporter?.send(OperationProgress(stage: .indexingEvents, total: eventTotal, unit: eventUnit, step: 1, stepCount: stepCount))
             var events: [String: LensEvent] = [:]
             var eventIDsByAgent: [String: [String]] = [:]
             var eventCountByAgent: [String: Int] = [:]
             var callCount = 0
             events.reserveCapacity(snapshot.events.count)
             for (i, event) in snapshot.events.enumerated() {
-                if i.isMultiple(of: 1024) { try Task.checkCancellation() }
+                if i.isMultiple(of: 1024) {
+                    try Task.checkCancellation()
+                    reporter?.send(OperationProgress(stage: .indexingEvents, completed: Int64(i), total: eventTotal, unit: .events, step: 1, stepCount: stepCount))
+                }
                 events[event.id] = event
                 eventIDsByAgent[event.agentID, default: []].append(event.id)
                 if event.trace?.communication?.instructionKind != .inherited { eventCountByAgent[event.agentID, default: 0] += 1 }
@@ -130,33 +143,63 @@ public actor SessionPresentationBuilder {
             for (agent, _) in agentRows {
                 searchText[agent.id] = ([agent.name, agent.id, agent.mission, AgentMetadataField.searchText(agent.metadata ?? [])] + agent.environmentIDs + agent.paths).joined(separator: "\n")
             }
-            agentSearchText = searchText
+            try Task.checkCancellation()
+            reporter?.send(OperationProgress(stage: .indexingEvents, completed: eventTotal, total: eventTotal, unit: eventUnit, step: 1, stepCount: stepCount))
+            reporter?.send(OperationProgress(stage: .inspectingContext, total: 1, step: 2, stepCount: stepCount))
+            try Task.checkCancellation()
             let contextInspection = { let span = LensSignposts.begin("ContextInspectionIndex"); defer { span.end() }; return ContextInspectionIndex(events: snapshot.events) }()
+            try Task.checkCancellation()
+            reporter?.send(OperationProgress(stage: .inspectingContext, completed: 1, total: 1, step: 2, stepCount: stepCount))
+            reporter?.send(OperationProgress(stage: .inspectingCommunications, total: 1, step: 3, stepCount: stepCount))
+            try Task.checkCancellation()
             let communicationInspection = { let span = LensSignposts.begin("CommunicationInspectionIndex"); defer { span.end() }; return CommunicationInspectionIndex(events: snapshot.events, agents: snapshot.agents) }()
+            try Task.checkCancellation()
+            reporter?.send(OperationProgress(stage: .inspectingCommunications, completed: 1, total: 1, step: 3, stepCount: stepCount))
+            reporter?.send(OperationProgress(stage: .indexingChanges, total: 3, step: 4, stepCount: stepCount))
+            try Task.checkCancellation()
             let activityEvidence = { let span = LensSignposts.begin("ActivityEvidenceIndex"); defer { span.end() }; return ActivityEvidenceIndex(events: snapshot.events, changes: snapshot.changes, resources: snapshot.resources) }()
+            try Task.checkCancellation()
+            reporter?.send(OperationProgress(stage: .indexingChanges, completed: 1, total: 3, step: 4, stepCount: stepCount))
             let changesOverview = ChangesOverviewIndex(snapshot: snapshot, activity: activityEvidence)
-            let originInspection = { let span = LensSignposts.begin("OriginInspectionIndex"); defer { span.end() }; return OriginInspectionIndex(snapshot: snapshot, communication: communicationInspection, activity: activityEvidence, sharedEventsByID: events) }()
+            try Task.checkCancellation()
+            reporter?.send(OperationProgress(stage: .indexingChanges, completed: 2, total: 3, step: 4, stepCount: stepCount))
             let changesByID = Dictionary(snapshot.changes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             let recentRecordedChanges = try recentChanges(changesByID: changesByID, eventsByID: events)
-            indexed = SessionPresentation(id: UUID(), rootID: snapshot.root.id, filteredEvents: [], filteredCalls: [], timelineEvents: [], callCount: callCount, filteredEventRowIndices: [:], filteredCallRowIndices: [:], eventsByID: events,
+            let changesByEvent = Dictionary(grouping: snapshot.changes, by: \.eventID)
+            let resourcesByID = Dictionary(snapshot.resources.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            let changesByAgent = Dictionary(grouping: snapshot.changes, by: \.agentID)
+            try Task.checkCancellation()
+            reporter?.send(OperationProgress(stage: .indexingChanges, completed: 3, total: 3, step: 4, stepCount: stepCount))
+            reporter?.send(OperationProgress(stage: .inspectingOrigin, total: 1, step: 5, stepCount: stepCount))
+            try Task.checkCancellation()
+            let originInspection = { let span = LensSignposts.begin("OriginInspectionIndex"); defer { span.end() }; return OriginInspectionIndex(snapshot: snapshot, communication: communicationInspection, activity: activityEvidence, sharedEventsByID: events) }()
+            try Task.checkCancellation()
+            reporter?.send(OperationProgress(stage: .inspectingOrigin, completed: 1, total: 1, step: 5, stepCount: stepCount))
+            let preparedIndex = SessionPresentation(id: UUID(), rootID: snapshot.root.id, filteredEvents: [], filteredCalls: [], timelineEvents: [], callCount: callCount, filteredEventRowIndices: [:], filteredCallRowIndices: [:], eventsByID: events,
                 agentsByID: agentsByID, eventIDsByAgent: eventIDsByAgent, eventCountByAgent: eventCountByAgent, agentRows: agentRows,
-                changesByEvent: Dictionary(grouping: snapshot.changes, by: \.eventID),
+                changesByEvent: changesByEvent,
                 changesByID: changesByID, recentRecordedChanges: recentRecordedChanges,
-                resourcesByID: Dictionary(snapshot.resources.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }),
+                resourcesByID: resourcesByID,
                 contextInspection: contextInspection,
                 communicationInspection: communicationInspection, filteredCommunications: [],
-                changesByAgent: Dictionary(grouping: snapshot.changes, by: \.agentID),
+                changesByAgent: changesByAgent,
                 sequence: CommunicationSequenceProjection(communications: [], agents: snapshot.agents),
                 activityEvidence: activityEvidence,
                 filteredChanges: [], changesOverviewIndex: changesOverview, changesOverview: changesOverview.projection(visibleChangeIDs: []),
                 originInspection: originInspection,
                 trends: try SessionTrendProjection(events: [], coverage: snapshot.coverage))
+            try Task.checkCancellation()
+            indexed = preparedIndex; agentSearchText = searchText
             self.revision = revision
         }
         let index = indexed!
+        reporter?.send(OperationProgress(stage: .filteringEvents, total: eventTotal, unit: eventUnit, detail: "presentation.events", step: filterStep, stepCount: stepCount))
         var filtered: [LensEvent] = []; filtered.reserveCapacity(snapshot.events.count)
         for (i, event) in snapshot.events.enumerated() {
-            if i.isMultiple(of: 1024) { try Task.checkCancellation() }
+            if i.isMultiple(of: 1024) {
+                try Task.checkCancellation()
+                reporter?.send(OperationProgress(stage: .filteringEvents, completed: Int64(i), total: eventTotal, unit: .events, detail: "presentation.events", step: filterStep, stepCount: stepCount))
+            }
             if event.trace?.communication?.instructionKind == .inherited { continue }
             // Mirrored records remain reachable through eventsByID and their recorded sources.
             var visible = event
@@ -183,15 +226,9 @@ public actor SessionPresentationBuilder {
         }
         let visibleIDs = Set(filtered.map(\.id))
         let communications = index.communicationInspection.communications.filter { !$0.eventIDs.allSatisfy { !visibleIDs.contains($0) } }
-        let trends: SessionTrendProjection
-        if let cachedTrends { trends = cachedTrends }
-        else {
-            let span = LensSignposts.begin("SessionTrends"); defer { span.end() }
-            trends = try SessionTrendProjection(events: filtered, changesByEvent: index.changesByEvent,
-                contextInspection: index.contextInspection, coverage: snapshot.coverage)
-        }
-        let unplottable = Set(trends.excludedTimestampEventIDs)
-        let timelineEvents = unplottable.isEmpty ? filtered : filtered.filter { !unplottable.contains($0.id) }
+        try Task.checkCancellation()
+        reporter?.send(OperationProgress(stage: .filteringEvents, completed: eventTotal, total: eventTotal, unit: eventUnit, detail: "presentation.events", step: filterStep, stepCount: stepCount))
+        reporter?.send(OperationProgress(stage: .filteringEvents, total: 1, detail: "presentation.relatedFilters", step: filterStep, stepCount: stepCount))
         var changeIDs = Set<String>()
         var visitedChangeIDs = Set<String>()
         var filteredChanges: [ChangeRecord] = []
@@ -206,8 +243,27 @@ public actor SessionPresentationBuilder {
             changeIDs.insert(change.id); filteredChanges.append(change)
         }
         let changesOverview = index.changesOverviewIndex.projection(visibleChangeIDs: changeIDs)
+        let trends: SessionTrendProjection
+        if let cachedTrends { trends = cachedTrends }
+        else {
+            try Task.checkCancellation()
+            reporter?.send(OperationProgress(stage: .filteringEvents, completed: 1, total: 1, detail: "presentation.relatedFilters", step: filterStep, stepCount: stepCount))
+            reporter?.send(OperationProgress(stage: .preparingTrends, total: 1, step: stepCount, stepCount: stepCount))
+            try Task.checkCancellation()
+            let span = LensSignposts.begin("SessionTrends"); defer { span.end() }
+            trends = try SessionTrendProjection(events: filtered, changesByEvent: index.changesByEvent,
+                contextInspection: index.contextInspection, coverage: snapshot.coverage)
+        }
+        let unplottable = Set(trends.excludedTimestampEventIDs)
+        let timelineEvents = unplottable.isEmpty ? filtered : filtered.filter { !unplottable.contains($0.id) }
         let result = SessionPresentation(id: UUID(), rootID: index.rootID, filteredEvents: filtered, filteredCalls: calls, timelineEvents: timelineEvents, callCount: index.callCount, filteredEventRowIndices: eventRows, filteredCallRowIndices: callRows, eventsByID: index.eventsByID, agentsByID: index.agentsByID, eventIDsByAgent: index.eventIDsByAgent, eventCountByAgent: index.eventCountByAgent, agentRows: agentRows, changesByEvent: index.changesByEvent, changesByID: index.changesByID, recentRecordedChanges: index.recentRecordedChanges, resourcesByID: index.resourcesByID, contextInspection: index.contextInspection, communicationInspection: index.communicationInspection, filteredCommunications: communications, changesByAgent: index.changesByAgent, sequence: CommunicationSequenceProjection(communications: communications, agents: snapshot.agents), activityEvidence: index.activityEvidence, filteredChanges: filteredChanges, changesOverviewIndex: index.changesOverviewIndex, changesOverview: changesOverview, originInspection: index.originInspection, trends: trends)
+        try Task.checkCancellation()
         lastFilters = filters; lastAgentFilters = agentFilters; lastPrepared = result
+        if cachedTrends == nil {
+            reporter?.send(OperationProgress(stage: .preparingTrends, completed: 1, total: 1, step: stepCount, stepCount: stepCount))
+        } else {
+            reporter?.send(OperationProgress(stage: .filteringEvents, completed: 1, total: 1, detail: "presentation.relatedFilters", step: filterStep, stepCount: stepCount))
+        }
         return result
     }
 
