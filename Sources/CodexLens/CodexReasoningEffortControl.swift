@@ -15,7 +15,9 @@ struct CodexReasoningEffortControl: View {
                 } label: {
                     Text(currentLabel).font(LensUI.metadata).lineLimit(1).truncationMode(.middle)
                         .frame(maxWidth: 90, alignment: .leading)
-                }.menuStyle(.borderlessButton).fixedSize()
+                }.menuStyle(.borderlessButton)
+                    .frame(maxWidth: 110, alignment: .trailing)
+                    .fixedSize(horizontal: false, vertical: true).clipped()
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     picker.pickerStyle(.menu)

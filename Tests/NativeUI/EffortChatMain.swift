@@ -104,6 +104,13 @@ import SwiftUI
                 check(name + "-exposes-effort-model-and-send-controls", effort.count == 1
                       && controls.contains { $0.accessibilityIdentifier() == "lens-chat-model-selector" }
                       && controls.contains { $0.accessibilityIdentifier() == "lens-chat-send" })
+                for identifier in ["lens-chat-model-selector", "lens-chat-send"] {
+                    let visible = controls.filter { $0.accessibilityIdentifier() == identifier }.contains {
+                        let rect = window.convertFromScreen($0.accessibilityFrame())
+                        return rect.width > 0 && rect.minX >= -1 && rect.maxX <= width + 1 && rect.minY >= -1 && rect.maxY <= 651
+                    }
+                    check(name + "-" + identifier + "-fits-visible-composer", visible)
+                }
                 if let element = effort.first {
                     check(name + "-effort-label-and-value-are-accessible", element.accessibilityLabel() == LensL10n.text("Effort de raisonnement")
                           && String(describing: element.accessibilityValue() ?? "").contains(CodexReasoningEffortControl.label(effortValue)))
