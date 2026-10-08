@@ -280,22 +280,28 @@ public actor SessionEngine {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return [] }
         // Capture the requested graph once. Actor reentrancy or another opened session must not change its links.
-        var requestedEvents: [String: LensEvent] = [:]
-        requestedEvents.reserveCapacity(snapshot.events.count)
+        // Borrow the immutable snapshot through row offsets. Storing every
+        // complete event again makes a full-text query retain a second large
+        // value dictionary even though it only needs related-event lookup.
+        var requestedRows: [String: Int] = [:]
+        requestedRows.reserveCapacity(snapshot.events.count)
         for (offset, event) in snapshot.events.enumerated() {
             if offset.isMultiple(of: 1024) { try Task.checkCancellation() }
-            requestedEvents[event.id] = event
+            requestedRows[event.id] = offset
         }
         let capturedFingerprints = fingerprintsBySource
         var matches: [String] = []
         for (i, event) in snapshot.events.enumerated() {
             try Task.checkCancellation()
             if i % 32 == 0 { await Task.yield() }
-            if event.title.localizedCaseInsensitiveContains(term) || event.preview.localizedCaseInsensitiveContains(term) { matches.append(event.id); continue }
-            let related = event.relatedEventID.flatMap { requestedEvents[$0] }
             do {
-                let detail = try recordedDetail(for: event, related: related, fingerprints: capturedFingerprints)
-                if detail.raw.localizedCaseInsensitiveContains(term) { matches.append(event.id) }
+                let found = try autoreleasepool {
+                    if event.title.localizedCaseInsensitiveContains(term) || event.preview.localizedCaseInsensitiveContains(term) { return true }
+                    let related = event.relatedEventID.flatMap { requestedRows[$0] }.map { snapshot.events[$0] }
+                    let detail = try recordedDetail(for: event, related: related, fingerprints: capturedFingerprints)
+                    return detail.raw.localizedCaseInsensitiveContains(term)
+                }
+                if found { matches.append(event.id) }
             } catch is CancellationError { throw CancellationError() }
             catch { /* A missing or changed source cannot produce a verified full-record match. */ }
         }

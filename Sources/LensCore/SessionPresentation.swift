@@ -135,7 +135,7 @@ public actor SessionPresentationBuilder {
             let communicationInspection = { let span = LensSignposts.begin("CommunicationInspectionIndex"); defer { span.end() }; return CommunicationInspectionIndex(events: snapshot.events, agents: snapshot.agents) }()
             let activityEvidence = { let span = LensSignposts.begin("ActivityEvidenceIndex"); defer { span.end() }; return ActivityEvidenceIndex(events: snapshot.events, changes: snapshot.changes, resources: snapshot.resources) }()
             let changesOverview = ChangesOverviewIndex(snapshot: snapshot, activity: activityEvidence)
-            let originInspection = { let span = LensSignposts.begin("OriginInspectionIndex"); defer { span.end() }; return OriginInspectionIndex(snapshot: snapshot, communication: communicationInspection, activity: activityEvidence) }()
+            let originInspection = { let span = LensSignposts.begin("OriginInspectionIndex"); defer { span.end() }; return OriginInspectionIndex(snapshot: snapshot, communication: communicationInspection, activity: activityEvidence, sharedEventsByID: events) }()
             let changesByID = Dictionary(snapshot.changes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             let recentRecordedChanges = try recentChanges(changesByID: changesByID, eventsByID: events)
             indexed = SessionPresentation(id: UUID(), rootID: snapshot.root.id, filteredEvents: [], filteredCalls: [], timelineEvents: [], callCount: callCount, filteredEventRowIndices: [:], filteredCallRowIndices: [:], eventsByID: events,

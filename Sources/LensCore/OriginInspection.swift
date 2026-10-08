@@ -97,8 +97,10 @@ public struct OriginInspectionIndex: Sendable {
     public let associatedEventIDsByInstruction: [String: Set<String>]
     public let associatedChangeIDsByInstruction: [String: [String]]
     public let truncatedInstructionScopes: Set<String>
-    private let outgoing: [String: [OriginLink]]
-    private let incoming: [String: [OriginLink]]
+    // Adjacency owns row indices, not additional copies of every link value.
+    // Appending rows in graph order preserves traversal and selection ordering.
+    private let outgoing: [String: [Int]]
+    private let incoming: [String: [Int]]
     private let events: [String: LensEvent]
     private let agents: [String: AgentRecord]
     private let changes: [String: ChangeRecord]
@@ -121,9 +123,28 @@ public struct OriginInspectionIndex: Sendable {
     public func changeIDs(environment: String, path: String) -> [String] { changesByFile[Self.fileKey(environment, path)] ?? [] }
 
     public init(snapshot: SessionSnapshot, communication: CommunicationInspectionIndex, activity: ActivityEvidenceIndex) {
+        let events = Dictionary(snapshot.events.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        self.init(snapshot: snapshot, communication: communication, activity: activity, resolvedEvents: events)
+    }
+
+    /// The presentation's immutable lookup comes from this same snapshot. For
+    /// unique IDs, Dictionary value assignment shares its copy-on-write storage.
+    /// Duplicate IDs retain the public initializer's first-record semantics;
+    /// the presentation lookup independently preserves its existing last record.
+    init(snapshot: SessionSnapshot, communication: CommunicationInspectionIndex, activity: ActivityEvidenceIndex,
+         sharedEventsByID: [String: LensEvent]) {
+        if sharedEventsByID.count == snapshot.events.count {
+            self.init(snapshot: snapshot, communication: communication, activity: activity, resolvedEvents: sharedEventsByID)
+        } else {
+            self.init(snapshot: snapshot, communication: communication, activity: activity)
+        }
+    }
+
+    private init(snapshot: SessionSnapshot, communication: CommunicationInspectionIndex, activity: ActivityEvidenceIndex,
+                 resolvedEvents: [String: LensEvent]) {
         collectionCut = snapshot.collectedAt
         let live = snapshot.events.filter { $0.trace?.communication?.instructionKind != .inherited }
-        let events = Dictionary(snapshot.events.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }); self.events = events
+        let events = resolvedEvents; self.events = events
         let agents = Dictionary(snapshot.agents.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }); self.agents = agents
         let changes = Dictionary(snapshot.changes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }); self.changes = changes
         let instructions = communication.instructionByEventID; self.instructions = instructions
@@ -207,8 +228,13 @@ public struct OriginInspectionIndex: Sendable {
         testsByEnvironment = tests
         testByEventID = testEvents
         objectsByID = nodes; links = relations
-        let allOut = Dictionary(grouping: relations, by: \.from)
-        outgoing = allOut; incoming = Dictionary(grouping: relations, by: \.to)
+        var allOut: [String: [Int]] = [:], allIn: [String: [Int]] = [:]
+        for row in relations.indices {
+            let link = relations[row]
+            allOut[link.from, default: []].append(row)
+            allIn[link.to, default: []].append(row)
+        }
+        outgoing = allOut; incoming = allIn
         // The exact thread/turn scope ends at an agent identity. A mission is a navigation
         // link, never a licence to attribute that agent's lifetime or descendants to a prompt.
         var scoped: [String: Set<String>] = [:]
@@ -217,7 +243,8 @@ public struct OriginInspectionIndex: Sendable {
             var seen: Set<String> = [Self.eventID(instruction.eventID)], queue = Array(seen), cursor = 0
             while cursor < queue.count {
                 let id = queue[cursor]; cursor += 1
-                for link in allOut[id] ?? [] {
+                for row in allOut[id] ?? [] {
+                    let link = relations[row]
                     guard queue.count < 4096 else { truncated.insert(instruction.eventID); break }
                     guard nodes[link.to]?.kind != .agent else { continue }
                     if seen.insert(link.to).inserted { queue.append(link.to) }
@@ -302,10 +329,10 @@ public struct OriginInspectionIndex: Sendable {
         for id in fileChanges.prefix(32) { relevant.insert(Self.changeID(id)) }
         // Incoming degree is bounded by recorded contexts. Do not enumerate all an agent's activity in SwiftUI.
         var candidates = relevant.sorted().flatMap { incoming[$0] ?? [] }
-        var seenLinks = Set<String>(); candidates = candidates.filter { seenLinks.insert($0.id).inserted }
+        var seenLinks = Set<String>(); candidates = candidates.filter { seenLinks.insert(links[$0].id).inserted }
         // Only chosen objects, selected call/result, mission chain and its same-turn contexts.
-        candidates = candidates.filter { relevant.contains($0.from) && relevant.contains($0.to) }
-        let retained = Array(candidates.prefix(max(0, maximumLinks)))
+        candidates = candidates.filter { relevant.contains(links[$0].from) && relevant.contains(links[$0].to) }
+        let retained = candidates.prefix(max(0, maximumLinks)).map { links[$0] }
         let nodeIDs = relevant.union(retained.flatMap { [$0.from, $0.to] })
         let testIDs = selectedEvent?.environmentID.flatMap { testsByEnvironment[$0] } ?? []
         var seenTests = Set<String>()

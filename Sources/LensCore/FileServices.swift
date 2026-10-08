@@ -141,20 +141,64 @@ public actor FileService {
         var entries: [FileEntry] = []
         entries.reserveCapacity(names.count)
         for name in names {
-            // FileManager's URL enumerator canonicalizes directory symlinks on macOS.
-            // Build children from names so IDs retain the environment's original path.
-            let child = url.appendingPathComponent(name)
-            let original = (try? manager.attributesOfItem(atPath: child.path)) ?? [:]
-            let isLink = original[.type] as? FileAttributeType == .typeSymbolicLink
-            var directory: ObjCBool = false
-            _ = manager.fileExists(atPath: child.path, isDirectory: &directory)
-            let restricted = isRestricted(child) || isRestricted(child.resolvingSymlinksInPath())
-            let size = (original[.size] as? NSNumber)?.uint64Value ?? 0
-            entries.append(FileEntry(id: child.path, name: child.lastPathComponent, isDirectory: directory.boolValue, size: size, isSymbolicLink: isLink, isRestricted: restricted))
+            entries.append(autoreleasepool { childEntry(name: name, in: url) })
         }
-        return entries.sorted {
-            if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
-            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        return sortedChildren(entries)
+    }
+
+    /// Search-only shallow enumeration: retain at most the remaining entry
+    /// budget and read one extra name to distinguish truncation from exact EOF.
+    /// DIR keeps a bounded native buffer; no complete names array is constructed.
+    func searchChildren(path: String, maxEntries: Int) async throws -> FileSearchDirectoryListing {
+        guard maxEntries > 0 else { throw FileSearchError.invalidOptions }
+        try Task.checkCancellation()
+        let url = try absoluteURL(path)
+        try ensureAllowed(url)
+        guard let directory = opendir(url.path) else { throw FileServiceError.unavailable(url.path) }
+        defer { closedir(directory) }
+        var entries: [FileEntry] = []
+        entries.reserveCapacity(min(maxEntries, 1024))
+        while true {
+            try Task.checkCancellation()
+            errno = 0
+            guard let record = readdir(directory) else {
+                guard errno == 0 else { throw FileServiceError.unavailable(url.path) }
+                return FileSearchDirectoryListing(entries: sortedChildren(entries), hasMore: false)
+            }
+            let nameCapacity = MemoryLayout.size(ofValue: record.pointee.d_name)
+            let name = withUnsafePointer(to: &record.pointee.d_name) { pointer in
+                pointer.withMemoryRebound(to: CChar.self, capacity: nameCapacity) {
+                    String(validatingUTF8: $0)
+                }
+            }
+            guard let name else { throw FileServiceError.unavailable(url.path) }
+            if name == "." || name == ".." { continue }
+            if entries.count == maxEntries {
+                return FileSearchDirectoryListing(entries: sortedChildren(entries), hasMore: true)
+            }
+            entries.append(autoreleasepool { childEntry(name: name, in: url) })
+        }
+    }
+
+    private func childEntry(name: String, in url: URL) -> FileEntry {
+        // Preserve lexical IDs for directory aliases, including symlink roots.
+        let child = url.appendingPathComponent(name)
+        let original = (try? manager.attributesOfItem(atPath: child.path)) ?? [:]
+        let isLink = original[.type] as? FileAttributeType == .typeSymbolicLink
+        var directory: ObjCBool = false
+        _ = manager.fileExists(atPath: child.path, isDirectory: &directory)
+        let restricted = isRestricted(child) || isRestricted(child.resolvingSymlinksInPath())
+        let size = (original[.size] as? NSNumber)?.uint64Value ?? 0
+        return FileEntry(id: child.path, name: child.lastPathComponent, isDirectory: directory.boolValue, size: size,
+            isSymbolicLink: isLink, isRestricted: restricted)
+    }
+
+    private func sortedChildren(_ entries: [FileEntry]) -> [FileEntry] {
+        autoreleasepool {
+            entries.sorted {
+                if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
+                return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
         }
     }
 

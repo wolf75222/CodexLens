@@ -194,6 +194,49 @@ import LensCore
         let narrow = "overview-narrow-light.png"
         _ = try capture(canvas, window: window, dark: false, path: output.appendingPathComponent(narrow)); renders.append(narrow)
 
+        stage = "multi-day-ruler-labels"
+        let selectionBeforeRuler = canvas.selectedID
+        for language in [LensL10n.Language.fr, .en] {
+            LensL10n.language = language
+            for width in [460.0, 1160.0] {
+                window.setContentSize(NSSize(width: width, height: 230))
+                canvas.frame.size = NSSize(width: width, height: 230)
+                let nineDays = try geometry(0, 9 * 86400, width: width)
+                canvas.geometry = nineDays
+                let visible = canvas.visibleRect.intersection(canvas.bounds)
+                let plot = NSRect(x: visible.minX + CGFloat(nineDays.labelWidth), y: visible.minY,
+                    width: max(0, visible.width - CGFloat(nineDays.labelWidth)), height: visible.height)
+                let ticks = canvas.rulerTicks(geometry: nineDays, plot: plot)
+                let displayed = ticks.filter { $0.labelRect != nil }
+                let rects = displayed.compactMap(\.labelRect)
+                let name = "nine-day-ruler-\(language.rawValue)-\(Int(width))"
+                check(name + "-measured-labels-do-not-overlap", rects.count >= 2
+                    && zip(rects, rects.dropFirst()).allSatisfy { $0.0.maxX + 7.9 <= $0.1.minX }
+                    && rects.allSatisfy { $0.minX >= plot.minX && $0.maxX <= plot.maxX })
+                let dateStyle = Date.FormatStyle.dateTime.locale(Locale(identifier: language.rawValue)).month(.abbreviated).day()
+                check(name + "-visible-labels-retain-calendar-dates", !displayed.isEmpty
+                    && displayed.allSatisfy { $0.label.contains($0.date.formatted(dateStyle)) })
+                check(name + "-tick-instants-and-selection-unchanged", ticks.allSatisfy {
+                    abs($0.date.timeIntervalSince(nineDays.date(atX: Double($0.x), clamped: false))) < 0.000001
+                } && canvas.geometry?.window == nineDays.window && canvas.selectedID == selectionBeforeRuler)
+                let visibleTicks = ticks.filter { $0.x >= plot.minX && $0.x <= plot.maxX }
+                let help = canvas.accessibilityHelp() ?? ""
+                let hoverTick = try unwrap(visibleTicks.first(where: { $0.labelRect == nil }) ?? visibleTicks.first)
+                canvas.mouseMoved(with: try mouse(.mouseMoved, point: NSPoint(x: hoverTick.x, y: 16), canvas: canvas, window: window))
+                check(name + "-full-timestamps-remain-in-accessibility-and-tooltip",
+                    visibleTicks.allSatisfy { help.contains($0.fullTimestamp) } && canvas.toolTip == hoverTick.fullTimestamp)
+                observations.append(["scenario": name, "method": "Measured production glyph rectangles and native ruler hover",
+                    "gridTickCount": ticks.count, "displayedLabelCount": displayed.count,
+                    "labels": displayed.map(\.label), "labelRects": rects.map(NSStringFromRect),
+                    "selectionPreserved": canvas.selectedID == selectionBeforeRuler])
+                if language == .en {
+                    let imageName = "timeline-nine-day-axis-\(Int(width))-light.png"
+                    _ = try capture(canvas, window: window, dark: false, path: output.appendingPathComponent(imageName))
+                    renders.append(imageName)
+                }
+            }
+        }
+
         stage = "completion"
         complete = true; writeReceipt(true)
         if checks.contains(where: { $0["passed"] as? Bool != true }) { throw LensError.unavailable("A native timeline appearance check failed; inspect its receipt.") }

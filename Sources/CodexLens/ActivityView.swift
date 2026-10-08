@@ -1285,22 +1285,70 @@ struct TimelineView: NSViewRepresentable {
             outline.lineWidth = 1.5; outline.stroke()
         }
     }
-    private func drawRuler(geometry: TimelineGeometry, visible: NSRect, plot: NSRect, dirtyRect: NSRect) {
+    struct RulerTick {
+        let x: CGFloat
+        let date: Date
+        let label: String
+        let fullTimestamp: String
+        let labelRect: NSRect?
+    }
+    /// Grid positions remain unchanged. Only measured text is thinned when its
+    /// glyph bounds cannot fit without colliding with the previous label.
+    func rulerTicks(geometry: TimelineGeometry, plot: NSRect) -> [RulerTick] {
+        guard geometry.timeWidth > 0, plot.width > 0 else { return [] }
         let ticks = max(4, Int(geometry.timeWidth / 130))
         let first = max(0, Int(floor((Double(plot.minX) - geometry.labelWidth) / geometry.timeWidth * Double(ticks))))
         let last = min(ticks, Int(ceil((Double(plot.maxX) - geometry.labelWidth) / geometry.timeWidth * Double(ticks))))
-        guard first <= last else { return }
-        NSGraphicsContext.saveGraphicsState(); NSBezierPath(rect: plot.intersection(dirtyRect)).addClip()
-        for index in first...last {
+        guard first <= last else { return [] }
+        let interval = geometry.window.duration / Double(ticks)
+        let calendar = Calendar.current
+        let showsDate = !calendar.isDate(geometry.window.start, inSameDayAs: geometry.window.end)
+        let showsYear = calendar.component(.year, from: geometry.window.start) != calendar.component(.year, from: geometry.window.end)
+        let locale = Locale(identifier: LensL10n.resolvedLanguage.rawValue)
+        var compact = Date.FormatStyle.dateTime.locale(locale)
+        if showsDate { compact = compact.month(.abbreviated).day() }
+        if showsYear { compact = compact.year() }
+        if !showsDate || interval < 86400 { compact = compact.hour().minute() }
+        if interval < 60 { compact = compact.second() }
+        if interval < 1 { compact = compact.secondFraction(.fractional(3)) }
+        var full = Date.FormatStyle.dateTime.locale(locale).year().month(.abbreviated).day().hour().minute().second()
+        if interval < 1 { full = full.secondFraction(.fractional(3)) }
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        var previousMaxX = plot.minX - 8
+        return (first...last).map { index in
             let x = CGFloat(geometry.labelWidth + Double(index) / Double(ticks) * geometry.timeWidth)
+            let date = geometry.window.start.addingTimeInterval(Double(index) / Double(ticks) * geometry.window.duration)
+            let label = date.formatted(compact)
+            let size = (label as NSString).size(withAttributes: [.font: font])
+            let originX = min(x + 3, plot.maxX - size.width - 3)
+            let fits = x >= plot.minX && x <= plot.maxX && size.width + 6 <= plot.width
+                && originX >= previousMaxX + 8 && originX >= plot.minX
+            let rect = fits ? NSRect(x: originX, y: 14, width: size.width, height: size.height) : nil
+            if let rect { previousMaxX = rect.maxX }
+            return RulerTick(x: x, date: date, label: label, fullTimestamp: date.formatted(full), labelRect: rect)
+        }
+    }
+    private func visibleRulerTicks(geometry: TimelineGeometry) -> [RulerTick] {
+        let visible = visibleRect.intersection(bounds)
+        let plot = NSRect(x: visible.minX + CGFloat(geometry.labelWidth), y: visible.minY,
+            width: max(0, visible.width - CGFloat(geometry.labelWidth)), height: visible.height)
+        return rulerTicks(geometry: geometry, plot: plot).filter { $0.x >= plot.minX && $0.x <= plot.maxX }
+    }
+    override func accessibilityHelp() -> String? {
+        let help = super.accessibilityHelp() ?? ""
+        guard let geometry = displayGeometry else { return help }
+        let timestamps = visibleRulerTicks(geometry: geometry).map(\.fullTimestamp)
+        return timestamps.isEmpty ? help : help + "\n" + LensL10n.text("Horodatages de la grille : {0}", timestamps.joined(separator: " ; "))
+    }
+    private func drawRuler(geometry: TimelineGeometry, visible: NSRect, plot: NSRect, dirtyRect: NSRect) {
+        NSGraphicsContext.saveGraphicsState(); NSBezierPath(rect: plot.intersection(dirtyRect)).addClip()
+        for tick in rulerTicks(geometry: geometry, plot: plot) {
+            let x = tick.x
             NSColor.separatorColor.withAlphaComponent(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0.8 : 0.3).setStroke()
             let line = NSBezierPath(); line.move(to: NSPoint(x: x, y: 36)); line.line(to: NSPoint(x: x, y: bounds.maxY)); line.lineWidth = 0.5; line.stroke()
-            let date = geometry.window.start.addingTimeInterval(Double(index) / Double(ticks) * geometry.window.duration)
-            let label = geometry.window.duration / Double(ticks) < 1
-                ? date.formatted(.dateTime.locale(Locale(identifier: LensL10n.resolvedLanguage.rawValue)).hour().minute().second().secondFraction(.fractional(3)))
-                : date.lensFormatted(date: geometry.window.duration > 86400 ? .abbreviated : .omitted, time: .standard)
-            (label as NSString)
-                .draw(at: NSPoint(x: x + 3, y: 14), withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor])
+            if let rect = tick.labelRect {
+                (tick.label as NSString).draw(at: rect.origin, withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor])
+            }
         }
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -1475,6 +1523,13 @@ struct TimelineView: NSViewRepresentable {
     }
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if let geometry = displayGeometry, point.y >= 0, point.y < CGFloat(geometry.rulerHeight),
+           point.x >= visibleRect.minX + CGFloat(geometry.labelWidth), point.x <= visibleRect.maxX,
+           let tick = visibleRulerTicks(geometry: geometry).min(by: { abs($0.x - point.x) < abs($1.x - point.x) }) {
+            if hoverID != nil || hoverClusterID != nil { hoverID = nil; hoverClusterID = nil; needsDisplay = true }
+            toolTip = tick.fullTimestamp
+            return
+        }
         if let cluster = densityCluster(at: point) {
             if hoverClusterID != cluster.id || hoverID != nil { hoverClusterID = cluster.id; hoverID = nil; needsDisplay = true }
             toolTip = LensL10n.text("{0} événements dans ce groupe · cliquer pour zoomer", String(cluster.count))

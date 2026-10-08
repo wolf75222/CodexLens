@@ -2307,6 +2307,8 @@
     "Worktrees": "Worktrees",
     "Traces sans date : {0}. Les opérations restent accessibles dans la liste.": "Undated traces: {0}. Operations remain available in the list.",
     "Informations sur le graphe d’activité": "Activity graph information",
-    "Tous les fichiers": "All files"
+    "Tous les fichiers": "All files",
+    "Horodatages de la grille : {0}": "Grid timestamps: {0}",
+    "Limite d’énumération atteinte ; ce répertoire n’a pas été listé entièrement.": "Directory enumeration limit reached; this directory was not fully listed."
   }
 }

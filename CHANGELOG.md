@@ -6,7 +6,7 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
-## [0.43.0] - 2026-10-07
+## [0.43.0] - 2026-10-08
 
 ### Added
 
@@ -24,6 +24,8 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ### Changed
 
+- Reduce retained trace, event and graph-link copies; bound directory enumeration before file search consumes a full listing. Keep historical content and search validation semantics unchanged.
+- Start visual following paused for histories over 100,000 events; passive collection continues and live following remains available explicitly.
 - Show one aggregate history progress bar across all known session journals, weighted by their byte sizes. Keep the current file counter below it, move its name to a tooltip, and show the opening stage out of four. New descendants and growing journals update the measured totals; missing bounds remain indeterminate.
 - Keep the component fixture gallery and its Development menu in Debug builds only. Release packaging and installer validation reject test names as well as QA bundle identifiers and environment overrides.
 - Choose session chart marks from count density: bars for dense intervals, discrete stems for sparse occurrences and steps for cumulative totals, starting at zero. Make click and drag select a period, replace the full-chart focus rectangle with the selected cursor, and preserve keyboard navigation and the linked values table.

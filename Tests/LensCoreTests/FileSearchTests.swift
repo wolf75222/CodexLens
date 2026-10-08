@@ -9,6 +9,70 @@ final class FileSearchTests: XCTestCase {
     }
     private func write(_ text: String, _ url: URL) throws { try Data(text.utf8).write(to: url) }
 
+    func testLargeShallowDirectoryRespectsEntryBudgetAndReportsPartialCoverage() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        for index in 0..<2048 {
+            try autoreleasepool { try write("needle\n", root.appendingPathComponent("item-\(index).txt")) }
+        }
+        let service = FileService()
+        let listing = try await service.searchChildren(path: root.path, maxEntries: 3)
+        XCTAssertEqual(listing.entries.count, 3)
+        XCTAssertTrue(listing.hasMore, "A bounded prefix must not claim to be the entire directory")
+        XCTAssertEqual(Set(listing.entries.map(\.id)).count, 3)
+        let lexicalRoot = URL(fileURLWithPath: root.path).standardizedFileURL.path
+        XCTAssertTrue(listing.entries.allSatisfy { $0.id.hasPrefix(lexicalRoot + "/") && !$0.isRestricted })
+        let result = try await FileSearch(fileService: service).search(environment: EnvironmentRecord(path: root.path),
+            query: "needle", options: FileSearchOptions(maxFiles: 2, maxMatches: 10, maxDirectories: 1))
+        XCTAssertEqual(result.visitedDirectories, 1)
+        XCTAssertEqual(result.visitedFiles, 2)
+        XCTAssertEqual(result.searchedFiles, 2)
+        XCTAssertEqual(result.hits.count, 2, "Retain matches from fully validated files in the bounded prefix")
+        XCTAssertTrue(result.coverage.contains { $0.category == "limit.entries" })
+        XCTAssertFalse(result.complete)
+    }
+    func testCompleteBoundedListingMatchesBrowserMetadataAndKeepsAliasPaths() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let contents = root.appendingPathComponent("contents"), alias = root.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: contents.appendingPathComponent("folder"), withIntermediateDirectories: true)
+        try write("needle", contents.appendingPathComponent("public.txt"))
+        try write("synthetic secret", contents.appendingPathComponent("auth.json"))
+        try FileManager.default.createSymbolicLink(at: contents.appendingPathComponent("secret-link"), withDestinationURL: contents.appendingPathComponent("auth.json"))
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: contents)
+        let service = FileService()
+        let browser = try await service.children(path: alias.path)
+        let bounded = try await service.searchChildren(path: alias.path, maxEntries: browser.count)
+        XCTAssertEqual(bounded.entries, browser)
+        XCTAssertFalse(bounded.hasMore, "Exact EOF at the budget is complete")
+        let lexicalAlias = URL(fileURLWithPath: alias.path).standardizedFileURL.path
+        XCTAssertTrue(bounded.entries.allSatisfy { $0.id.hasPrefix(lexicalAlias + "/") })
+        XCTAssertTrue(bounded.entries.first { $0.name == "auth.json" }?.isRestricted == true)
+        XCTAssertTrue(bounded.entries.first { $0.name == "secret-link" }?.isRestricted == true)
+        XCTAssertTrue(bounded.entries.first { $0.name == "secret-link" }?.isSymbolicLink == true)
+    }
+    func testLegacyReaderUsesBoundedAdapterWithoutNewProtocolImplementation() async throws {
+        let reader = LegacyDirectorySearchReader()
+        let listing = try await reader.searchChildren(path: "/anonymous", maxEntries: 2)
+        XCTAssertEqual(listing.entries.count, 2)
+        XCTAssertTrue(listing.hasMore)
+        let result = try await FileSearch(reader: reader).search(environment: EnvironmentRecord(path: "/anonymous"),
+            query: "needle", options: FileSearchOptions(maxFiles: 1, maxDirectories: 1))
+        XCTAssertEqual(result.hits.count, 1)
+        XCTAssertTrue(result.coverage.contains { $0.category == "limit.entries" })
+        XCTAssertFalse(result.complete)
+        let reads = await reader.readCount()
+        XCTAssertEqual(reads, 1)
+    }
+    func testCancelledBoundedDirectoryEnumerationStopsBeforeListing() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let service = FileService()
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await service.searchChildren(path: root.path, maxEntries: 3)
+        }
+        do { _ = try await task.value; XCTFail("Cancelled listing accepted") }
+        catch is CancellationError {} catch { XCTFail("Unexpected \(error)") }
+    }
+
     func testSameRelativePathInTwoWorktreesHasDistinctIdentity() async throws {
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
         let first = root.appendingPathComponent("first"), second = root.appendingPathComponent("second")
@@ -180,6 +244,18 @@ final class FileSearchTests: XCTestCase {
         do { _ = try await FileSearch().search(environment: environment, query: "needle", options: FileSearchOptions(maxMatches: 0)); XCTFail("bounds accepted") }
         catch FileSearchError.invalidOptions {} catch { XCTFail("unexpected \(error)") }
     }
+}
+
+private actor LegacyDirectorySearchReader: FileSearchReader {
+    private var reads = 0
+    func children(path: String) async throws -> [FileEntry] {
+        (0..<4).map { FileEntry(id: path + "/item-\($0).txt", name: "item-\($0).txt", isDirectory: false, size: 6) }
+    }
+    func readText(path: String, offset: UInt64, limit: Int, expectedVersion: String?) async throws -> TextPage {
+        reads += 1
+        return TextPage(text: "needle", nextOffset: nil, totalBytes: 6, version: "anonymous-stable-version")
+    }
+    func readCount() -> Int { reads }
 }
 
 private actor SearchMutatingReader: FileSearchReader {

@@ -855,8 +855,11 @@ struct LensAgentMetadataRequest: Equatable { let id = UUID(); let agentID: Strin
             trendMetric = .toolCalls; trendCumulative = false; trendSelectedDate = nil; trendValuesVisible = false
                 resetChangesOverview()
             livePreview = nil; previewOrigin = nil; liveClock.reset()
-            resetFilters(); originCodeReferences = [:]; agentQuery = ""; follow = true; waitingEvents = 0; waitingUpdates = false; section = .activity
-            if liveTimelineVisible { liveClock.resume(at: Date()) }
+            // Keep a long history stable until the person chooses live follow.
+            // Collection continues, but each append must not eagerly build a
+            // second large presentation while the existing one is displayed.
+            resetFilters(); originCodeReferences = [:]; agentQuery = ""; follow = next.events.count <= 100_000; waitingEvents = 0; waitingUpdates = false; section = .activity
+            if liveTimelineVisible && follow { liveClock.resume(at: Date()) }
             showSessionPicker = false
             persistWindowRoot()
             restoreTabs(rootID: next.root.id)

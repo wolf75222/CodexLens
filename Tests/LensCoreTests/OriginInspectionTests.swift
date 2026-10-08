@@ -22,6 +22,139 @@ final class OriginInspectionTests: XCTestCase {
             AgentRecord(id: "grand", parentID: "child", relation: .subagent, missionEventID: "s2")], events: nodes,
             changes: [ChangeRecord(id: "change", path: "/beta/src/A.swift", environmentID: "/beta", agentID: "grand", eventID: "patch", kind: .requestedPatch)], collectedAt: Date(timeIntervalSince1970: 100))
     }
+    private func assertEquivalent(_ actual: OriginInspectionIndex, _ expected: OriginInspectionIndex,
+                                  collectionCut: Date, file: StaticString = #filePath, line: UInt = #line) throws {
+        XCTAssertEqual(actual.objectsByID, expected.objectsByID, file: file, line: line)
+        XCTAssertEqual(actual.links, expected.links, file: file, line: line)
+        XCTAssertEqual(actual.associatedEventIDsByInstruction, expected.associatedEventIDsByInstruction, file: file, line: line)
+        XCTAssertEqual(actual.associatedChangeIDsByInstruction, expected.associatedChangeIDsByInstruction, file: file, line: line)
+        XCTAssertEqual(actual.truncatedInstructionScopes, expected.truncatedInstructionScopes, file: file, line: line)
+        for id in expected.objectsByID.keys.sorted() {
+            let selected = actual.selection(objectID: id), baseline = expected.selection(objectID: id)
+            XCTAssertEqual(selected, baseline, "Origin selection \(id)", file: file, line: line)
+            if let selected, let baseline {
+                XCTAssertEqual(try OriginEvidence.piece(selection: selected, collectionCut: collectionCut).text,
+                    try OriginEvidence.piece(selection: baseline, collectionCut: collectionCut).text, file: file, line: line)
+            }
+        }
+    }
+    func testSharedLookupPreservesGraphSelectionsAndFrozenEvidence() throws {
+        let snapshot = chain()
+        let events = Dictionary(uniqueKeysWithValues: snapshot.events.map { ($0.id, $0) })
+        let shared = OriginInspectionIndex(snapshot: snapshot,
+            communication: CommunicationInspectionIndex(events: snapshot.events, agents: snapshot.agents),
+            activity: ActivityEvidenceIndex(events: snapshot.events, changes: snapshot.changes, resources: snapshot.resources),
+            sharedEventsByID: events)
+        try assertEquivalent(shared, index(snapshot), collectionCut: snapshot.collectedAt)
+        XCTAssertEqual(shared.changeIDs(environment: "/beta", path: "src/A.swift"), ["change"])
+        XCTAssertNil(shared.selection(objectID: OriginInspectionIndex.eventID("unrecorded")))
+    }
+    func testSharedLookupKeepsHistoricalSourcesWhenCallerChangesItsCopy() throws {
+        var snapshot = chain()
+        var events = Dictionary(uniqueKeysWithValues: snapshot.events.map { ($0.id, $0) })
+        let shared = OriginInspectionIndex(snapshot: snapshot,
+            communication: CommunicationInspectionIndex(events: snapshot.events, agents: snapshot.agents),
+            activity: ActivityEvidenceIndex(events: snapshot.events, changes: snapshot.changes, resources: snapshot.resources),
+            sharedEventsByID: events)
+        let objectID = OriginInspectionIndex.changeID("change")
+        let historical = try XCTUnwrap(shared.selection(objectID: objectID))
+        let frozen = try OriginEvidence.piece(selection: historical, collectionCut: snapshot.collectedAt).text
+        let patchOffset = try XCTUnwrap(snapshot.events.firstIndex { $0.id == "patch" })
+        let oldSource = snapshot.events[patchOffset].source
+        events["patch"]?.source = SourceRef(path: "/fixtures/new.jsonl", offset: 900, length: 200, line: 99)
+        events["patch"]?.title = "A later caller value"
+        snapshot.events[patchOffset] = try XCTUnwrap(events["patch"])
+        snapshot.collectedAt = Date(timeIntervalSince1970: 200)
+        XCTAssertEqual(shared.selection(objectID: objectID), historical)
+        XCTAssertTrue(historical.objects.contains { $0.sourceID == "patch" && $0.sources.contains(oldSource) })
+        XCTAssertEqual(try OriginEvidence.piece(selection: try XCTUnwrap(shared.selection(objectID: objectID)),
+            collectionCut: Date(timeIntervalSince1970: 100)).text, frozen)
+        XCTAssertNotEqual(index(snapshot).selection(objectID: objectID), historical)
+    }
+    func testSharedLookupPreservesPublicFirstDuplicateRecordSemantics() throws {
+        var snapshot = chain()
+        var duplicate = try XCTUnwrap(snapshot.events.first { $0.id == "patch" })
+        let firstSource = duplicate.source
+        duplicate.source = SourceRef(path: "/fixtures/duplicate.jsonl", offset: 1000, length: 250, line: 2)
+        duplicate.callID = "a-later-duplicate-call"
+        snapshot.events.append(duplicate)
+        let lastWins = snapshot.events.reduce(into: [String: LensEvent]()) { $0[$1.id] = $1 }
+        XCTAssertEqual(lastWins["patch"]?.source, duplicate.source)
+        let shared = OriginInspectionIndex(snapshot: snapshot,
+            communication: CommunicationInspectionIndex(events: snapshot.events, agents: snapshot.agents),
+            activity: ActivityEvidenceIndex(events: snapshot.events, changes: snapshot.changes, resources: snapshot.resources),
+            sharedEventsByID: lastWins)
+        try assertEquivalent(shared, index(snapshot), collectionCut: snapshot.collectedAt)
+        let selection = try XCTUnwrap(shared.selection(objectID: OriginInspectionIndex.changeID("change")))
+        XCTAssertEqual(selection.object.sources, [firstSource])
+    }
+    func testPresentationSharesLookupWithoutFilteringOriginHistory() async throws {
+        let snapshot = chain()
+        let presentation = try await SessionPresentationBuilder().prepare(snapshot: snapshot, revision: 1,
+            filters: EventFilters(kind: .toolResult))
+        XCTAssertEqual(presentation.filteredEvents.map(\.id), ["result"])
+        XCTAssertEqual(presentation.eventsByID.count, snapshot.events.count)
+        try assertEquivalent(presentation.originInspection, index(snapshot), collectionCut: snapshot.collectedAt)
+        XCTAssertNotNil(presentation.originInspection.selection(objectID: OriginInspectionIndex.eventID("patch")))
+    }
+    func testRowAdjacencyMatchesPublishedLinksForEverySelectionAndLimit() throws {
+        var snapshot = chain()
+        let motive = RecordedExplanationFacts(kind: .plan, availability: .available, threadID: "grand", turnID: "g",
+            preview: "Motif pour cet appel", declaredForCallID: "plan-call")
+        snapshot.events.append(event("plan", agent: "grand", turn: "g", offset: 25, call: "plan-call", facts: motive))
+        let model = index(snapshot)
+        for objectID in model.objectsByID.keys.sorted() {
+            let complete = try XCTUnwrap(model.selection(objectID: objectID, maximumLinks: Int.max))
+            let relevant = Set(complete.objects.map(\.id))
+            // Scan the single published graph as a reference, independently of
+            // the private adjacency representation. Target order precedes row order.
+            let expected = relevant.sorted().flatMap { target in
+                model.links.filter { $0.to == target && relevant.contains($0.from) }
+            }
+            for limit in [-1, 0, 1, 3, 64, Int.max] {
+                let selected = try XCTUnwrap(model.selection(objectID: objectID, maximumLinks: limit))
+                let retained = Array(expected.prefix(max(0, limit)))
+                XCTAssertEqual(selected.links, retained, "\(objectID), limit \(limit)")
+                XCTAssertEqual(selected.omittedLinkCount, expected.count - retained.count, "\(objectID), limit \(limit)")
+                XCTAssertEqual(selected.objects, complete.objects)
+                let frozen = try OriginEvidence.decode(OriginEvidence.encode(selected))
+                XCTAssertEqual(frozen, selected)
+                XCTAssertEqual(frozen.links, retained)
+            }
+        }
+    }
+    func testRowAdjacencyPreservesOutgoingOrderAtAndBeyondScopeLimit() throws {
+        for actionCount in [4094, 4095, 4096] {
+            let actions = (0..<actionCount).map { event("action-\($0)", offset: UInt64($0 + 1)) }
+            let snapshot = SessionSnapshot(root: SessionSummary(id: "root"), agents: [AgentRecord(id: "root")],
+                events: [event("prompt", kind: .user)] + actions + [
+                    event("unrelated-prompt", turn: "other", kind: .user), event("unrelated-action", turn: "other")],
+                changes: [], collectedAt: Date(timeIntervalSince1970: 100))
+            let model = index(snapshot)
+            let retainedIDs = Set(["prompt"] + (0..<min(actionCount, 4095)).map { "action-\($0)" })
+            XCTAssertEqual(model.associatedEventIDsByInstruction["prompt"], retainedIDs, "\(actionCount) actions")
+            XCTAssertEqual(model.associatedEventIDsByInstruction["unrelated-prompt"], Set(["unrelated-prompt", "unrelated-action"]))
+            XCTAssertEqual(model.associatedChangeIDsByInstruction["prompt"], [])
+            XCTAssertEqual(model.truncatedInstructionScopes, actionCount >= 4095 ? Set(["prompt"]) : Set<String>())
+            let selected = try XCTUnwrap(model.selection(objectID: OriginInspectionIndex.eventID("prompt")))
+            XCTAssertEqual(selected.missing.contains { $0.contains("4096 objets") }, actionCount >= 4095)
+        }
+    }
+    func testRowAdjacencyKeepsFrozenGraphWhenCallerMutatesPublishedLinkCopy() throws {
+        let snapshot = chain(), model = index(snapshot)
+        let objectID = OriginInspectionIndex.changeID("change")
+        let historical = try XCTUnwrap(model.selection(objectID: objectID))
+        let frozen = try OriginEvidence.piece(selection: historical, collectionCut: snapshot.collectedAt).text
+        let published = model.links
+        var callerLinks = published
+        callerLinks.reverse()
+        callerLinks.removeFirst()
+        XCTAssertNotEqual(callerLinks, published)
+        XCTAssertEqual(model.links, published)
+        XCTAssertEqual(model.selection(objectID: objectID), historical)
+        XCTAssertEqual(try OriginEvidence.piece(selection: try XCTUnwrap(model.selection(objectID: objectID)),
+            collectionCut: snapshot.collectedAt).text, frozen)
+    }
     func testThreeGenerationsAndBothDirectionsWithMultipleContextPrompts() throws {
         let model = index(chain()), selected = try XCTUnwrap(model.selection(objectID: OriginInspectionIndex.changeID("change")))
         XCTAssertEqual(selected.missionEventIDs, ["s2", "s1"])

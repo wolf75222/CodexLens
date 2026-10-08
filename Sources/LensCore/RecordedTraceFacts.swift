@@ -1,16 +1,24 @@
 import Foundation
 
 /// Recorded metadata with value semantics and copy-on-write storage.
-/// Sparse fields live in one shared allocation rather than inside every copied
-/// LensEvent in the journal, snapshot and presentation indexes. No fields are
-/// discarded; the on-disk Codable representation remains unchanged.
+/// Absent payloads occupy only reference slots in the shared state. Present
+/// payloads are immutable shared values, so unrelated metadata updates do not
+/// copy them. No fields are discarded; Codable retains its original wire shape.
 public struct RecordedTraceFacts: Codable, Hashable, Sendable {
+    private final class Payload<T: Codable & Hashable & Sendable>: Codable, Hashable, Sendable {
+        let value: T
+        init(_ value: T) { self.value = value }
+        init(from decoder: Decoder) throws { value = try T(from: decoder) }
+        func encode(to encoder: Encoder) throws { try value.encode(to: encoder) }
+        static func == (lhs: Payload, rhs: Payload) -> Bool { lhs.value == rhs.value }
+        func hash(into hasher: inout Hasher) { hasher.combine(value) }
+    }
     private struct Value: Codable, Hashable, Sendable {
-        var compaction: RecordedCompactionFacts?
-        var usage: RecordedUsageFacts?
-        var communication: RecordedCommunicationFacts?
-        var toolObservation: RecordedToolObservationFacts?
-        var explanation: RecordedExplanationFacts?
+        var compaction: Payload<RecordedCompactionFacts>?
+        var usage: Payload<RecordedUsageFacts>?
+        var communication: Payload<RecordedCommunicationFacts>?
+        var toolObservation: Payload<RecordedToolObservationFacts>?
+        var explanation: Payload<RecordedExplanationFacts>?
         var recordedAt: Date?
         var collectedAt: Date?
         var sourceIdentifiers: [String: String]?
@@ -26,39 +34,65 @@ public struct RecordedTraceFacts: Codable, Hashable, Sendable {
         if !isKnownUniquelyReferenced(&storage) { storage = Storage(storage.value) }
     }
     public var compaction: RecordedCompactionFacts? {
-        get { storage.value.compaction }
-        set { makeUnique(); storage.value.compaction = newValue }
+        get { storage.value.compaction?.value }
+        set {
+            guard storage.value.compaction?.value != newValue else { return }
+            makeUnique(); storage.value.compaction = newValue.map(Payload.init)
+        }
     }
     public var usage: RecordedUsageFacts? {
-        get { storage.value.usage }
-        set { makeUnique(); storage.value.usage = newValue }
+        get { storage.value.usage?.value }
+        set {
+            guard storage.value.usage?.value != newValue else { return }
+            makeUnique(); storage.value.usage = newValue.map(Payload.init)
+        }
     }
     public var communication: RecordedCommunicationFacts? {
-        get { storage.value.communication }
-        set { makeUnique(); storage.value.communication = newValue }
+        get { storage.value.communication?.value }
+        set {
+            guard storage.value.communication?.value != newValue else { return }
+            makeUnique(); storage.value.communication = newValue.map(Payload.init)
+        }
     }
     public var toolObservation: RecordedToolObservationFacts? {
-        get { storage.value.toolObservation }
-        set { makeUnique(); storage.value.toolObservation = newValue }
+        get { storage.value.toolObservation?.value }
+        set {
+            guard storage.value.toolObservation?.value != newValue else { return }
+            makeUnique(); storage.value.toolObservation = newValue.map(Payload.init)
+        }
     }
     public var explanation: RecordedExplanationFacts? {
-        get { storage.value.explanation }
-        set { makeUnique(); storage.value.explanation = newValue }
+        get { storage.value.explanation?.value }
+        set {
+            guard storage.value.explanation?.value != newValue else { return }
+            makeUnique(); storage.value.explanation = newValue.map(Payload.init)
+        }
     }
     public var recordedAt: Date? {
         get { storage.value.recordedAt }
-        set { makeUnique(); storage.value.recordedAt = newValue }
+        set {
+            guard storage.value.recordedAt != newValue else { return }
+            makeUnique(); storage.value.recordedAt = newValue
+        }
     }
     public var collectedAt: Date? {
         get { storage.value.collectedAt }
-        set { makeUnique(); storage.value.collectedAt = newValue }
+        set {
+            guard storage.value.collectedAt != newValue else { return }
+            makeUnique(); storage.value.collectedAt = newValue
+        }
     }
     public var sourceIdentifiers: [String: String]? {
         get { storage.value.sourceIdentifiers }
-        set { makeUnique(); storage.value.sourceIdentifiers = newValue }
+        set {
+            guard storage.value.sourceIdentifiers != newValue else { return }
+            makeUnique(); storage.value.sourceIdentifiers = newValue
+        }
     }
     public init(compaction: RecordedCompactionFacts? = nil, usage: RecordedUsageFacts? = nil, communication: RecordedCommunicationFacts? = nil, toolObservation: RecordedToolObservationFacts? = nil, explanation: RecordedExplanationFacts? = nil, recordedAt: Date? = nil, collectedAt: Date? = nil, sourceIdentifiers: [String: String]? = nil) {
-        storage = Storage(Value(compaction: compaction, usage: usage, communication: communication, toolObservation: toolObservation, explanation: explanation, recordedAt: recordedAt, collectedAt: collectedAt, sourceIdentifiers: sourceIdentifiers))
+        storage = Storage(Value(compaction: compaction.map(Payload.init), usage: usage.map(Payload.init),
+            communication: communication.map(Payload.init), toolObservation: toolObservation.map(Payload.init),
+            explanation: explanation.map(Payload.init), recordedAt: recordedAt, collectedAt: collectedAt, sourceIdentifiers: sourceIdentifiers))
     }
     public init(from decoder: Decoder) throws { storage = Storage(try Value(from: decoder)) }
     public func encode(to encoder: Encoder) throws { try storage.value.encode(to: encoder) }

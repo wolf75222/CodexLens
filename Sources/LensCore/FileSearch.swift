@@ -74,9 +74,23 @@ public enum FileSearchError: LocalizedError, Sendable {
 }
 
 // Internal injection supports deterministic race/cancellation tests; the public API uses guarded FileService.
+struct FileSearchDirectoryListing: Sendable {
+    let entries: [FileEntry]
+    let hasMore: Bool
+}
 protocol FileSearchReader: Sendable {
     func children(path: String) async throws -> [FileEntry]
+    func searchChildren(path: String, maxEntries: Int) async throws -> FileSearchDirectoryListing
     func readText(path: String, offset: UInt64, limit: Int, expectedVersion: String?) async throws -> TextPage
+}
+extension FileSearchReader {
+    /// Older injected readers remain compatible. Production FileService supplies
+    /// a bounded native enumerator instead of materializing this legacy array.
+    func searchChildren(path: String, maxEntries: Int) async throws -> FileSearchDirectoryListing {
+        guard maxEntries > 0 else { throw FileSearchError.invalidOptions }
+        let entries = try await children(path: path)
+        return FileSearchDirectoryListing(entries: Array(entries.prefix(maxEntries)), hasMore: entries.count > maxEntries)
+    }
 }
 extension FileService: FileSearchReader {}
 
@@ -114,13 +128,15 @@ public actor FileSearch {
             if Task.isCancelled { cancellation(directory.0); break }
             guard seen.insert(directory.0).inserted else { issue("directoryCycle", "Répertoire déjà parcouru ; aucune nouvelle lecture.", directory.0); continue }
             guard result.visitedDirectories < options.maxDirectories else { issue("limit.directories", "Limite des répertoires atteinte ; arborescence restante non parcourue.", directory.0); break }
+            let entryBudget = options.maxFiles + options.maxDirectories - inspectedEntries
+            guard entryBudget > 0 else { issue("limit.entries", "Limite des entrées examinées atteinte ; arborescence restante non parcourue.", directory.0); break }
             result.visitedDirectories += 1
-            let children: [FileEntry]
-            do { children = try await reader.children(path: directory.0) }
+            let listing: FileSearchDirectoryListing
+            do { listing = try await reader.searchChildren(path: directory.0, maxEntries: entryBudget) }
             catch is CancellationError { cancellation(directory.0); break }
             catch { issue("unavailable", error.localizedDescription, directory.0); continue }
-            // Queue growth is bounded independently of the largest single native directory listing.
-            for entry in children {
+            if listing.hasMore { issue("limit.entries", "Limite d’énumération atteinte ; ce répertoire n’a pas été listé entièrement.", directory.0) }
+            for entry in listing.entries {
                 if Task.isCancelled { cancellation(entry.id); break }
                 guard inspectedEntries < options.maxFiles + options.maxDirectories else { issue("limit.entries", "Limite des entrées examinées atteinte ; arborescence restante non parcourue.", entry.id); stop = true; break }
                 inspectedEntries += 1
@@ -158,19 +174,21 @@ public actor FileSearch {
                         guard page.totalBytes <= UInt64(budget) else { issue("limit.bytes", "La taille actuelle dépasse le budget initial de ce fichier ; correspondances écartées.", entry.id); break }
                         if let version, version != page.version { throw FileServiceError.staleFile(entry.id) }
                         version = page.version
-                        let parts = (carry + page.text).components(separatedBy: "\n")
-                        carry = parts.last ?? ""
-                        for part in parts.dropLast() {
-                            if !matchLimit { appendMatches(in: part, line: line, path: entry.id, relativePath: relative(entry.id), environmentID: environment.id, query: query, version: page.version, observedAt: page.observedAt, options: options, remainingMatches: options.maxMatches - result.hits.count, into: &pending) }
-                            if pending.count + result.hits.count >= options.maxMatches { matchLimit = true }
-                            line += 1
-                        }
-                        if let next = page.nextOffset {
-                            guard next > offset else { throw FileServiceError.invalidOffset(entry.id) }
-                            offset = next
-                        } else {
-                            if !carry.isEmpty && !matchLimit { appendMatches(in: carry, line: line, path: entry.id, relativePath: relative(entry.id), environmentID: environment.id, query: query, version: page.version, observedAt: page.observedAt, options: options, remainingMatches: options.maxMatches - result.hits.count, into: &pending) }
-                            completed = true
+                        try autoreleasepool {
+                            let parts = (carry + page.text).components(separatedBy: "\n")
+                            carry = parts.last ?? ""
+                            for part in parts.dropLast() {
+                                if !matchLimit { appendMatches(in: part, line: line, path: entry.id, relativePath: relative(entry.id), environmentID: environment.id, query: query, version: page.version, observedAt: page.observedAt, options: options, remainingMatches: options.maxMatches - result.hits.count, into: &pending) }
+                                if pending.count + result.hits.count >= options.maxMatches { matchLimit = true }
+                                line += 1
+                            }
+                            if let next = page.nextOffset {
+                                guard next > offset else { throw FileServiceError.invalidOffset(entry.id) }
+                                offset = next
+                            } else {
+                                if !carry.isEmpty && !matchLimit { appendMatches(in: carry, line: line, path: entry.id, relativePath: relative(entry.id), environmentID: environment.id, query: query, version: page.version, observedAt: page.observedAt, options: options, remainingMatches: options.maxMatches - result.hits.count, into: &pending) }
+                                completed = true
+                            }
                         }
                     }
                 } catch is CancellationError { cancellation(entry.id) }
@@ -182,6 +200,7 @@ public actor FileSearch {
                 if result.hits.count >= options.maxMatches { issue("limit.matches", "Limite des correspondances atteinte ; recherche restante non effectuée.", entry.id); stop = true }
                 if stop { break }
             }
+            if listing.hasMore { stop = true }
         }
         result.finishedAt = Date()
         return result
