@@ -6,6 +6,16 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+## [0.43.1] - 2026-10-08
+
+### Changed
+
+- Native loading bars appear immediately with current phases, measured work and remaining counts.
+- Session linking, presentation, timeline and conversation exports report their actual preparation stages; unknown totals remain indeterminate.
+- File search shows files read and discovered queued directories without treating limits as completion percentages.
+- Loading animation respects Reduce Motion and cancellation; source/diff parsing cancels its detached worker.
+- Reuse first-winner agent indexes and avoid repeated descendant scans, unobserved progress accounting and unfiltered conversation work.
+
 ## [0.43.0] - 2026-10-08
 
 ### Added
@@ -120,6 +130,7 @@ These versions were local deliveries, not published GitHub releases. Their dates
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
 
-[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.43.0...main
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.43.1...main
+[0.43.1]: https://github.com/wolf75222/CodexLens/compare/v0.43.0...v0.43.1
 [0.43.0]: https://github.com/wolf75222/CodexLens/compare/v0.41.0...v0.43.0
 [0.41.0]: https://github.com/wolf75222/CodexLens/releases/tag/v0.41.0

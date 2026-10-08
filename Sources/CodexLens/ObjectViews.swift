@@ -886,11 +886,12 @@ struct CurrentDiffView: View {
             if !current.text.isEmpty {
                 let provenance = DiffProvenance(environmentID: identity.environmentID, beforeReference: current.reference)
                 do {
-                    document = try await Task.detached(priority: .userInitiated) {
+                    let worker = Task.detached(priority: .userInitiated) {
                         try Task.checkCancellation()
                         let parsed = try RecordedDiff.parse(current.text, provenance: provenance, kind: .currentGit)
                         return try RecordedDiffPresentation(document: parsed)
-                    }.value
+                    }
+                    document = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
                 } catch { parseIssue = LensL10n.text("Présentation du diff indisponible : ") + error.localizedDescription + " Le texte exact reste accessible." }
             }
             guard isCurrent(identity, generation: generation) else { return }

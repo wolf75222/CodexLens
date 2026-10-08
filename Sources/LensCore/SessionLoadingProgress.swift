@@ -18,20 +18,30 @@ public struct SessionLoadingProgress: Sendable, Equatable {
             totalBytes.flatMap { $0 > 0 ? min(1, Double(completedBytes) / Double($0)) : nil }
         }
     }
-    public enum Stage: Sendable, Hashable { case discoveringSessions, readingMetadata, restoringIndex, readingHistory, organizingEvents, linkingEvents, savingIndex, restoringWorkspace }
+    public enum Stage: Sendable, Hashable { case discoveringSessions, readingMetadata, finalizingCatalog, restoringIndex, readingHistory, organizingEvents, linkingEvents, savingIndex, restoringWorkspace }
+    /// The counter belongs to this passage alone; passages are not time weights
+    /// and cannot be combined into a percentage for the entire opening.
+    public enum Phase: Sendable, Hashable {
+        case filteringSessions, readingTitles, savingCatalog
+        case sortingEvents, deduplicatingEvents
+        case indexingCalls, linkingResults, checkingCalls, indexingEnvironments, indexingResources, preparingAgents, checkingEnvironments, checkingResources
+        case checkingIndexSize, encodingIndex, writingIndex, preparingEventLookup, preparingSourceLookup
+    }
     public let stage: Stage
     public let completed: Int64
     public let total: Int64?
     public let fileName: String?
     public let history: History?
+    public let phase: Phase?
 
-    public init(stage: Stage, completed: Int64 = 0, total: Int64? = nil, fileName: String? = nil, history: History? = nil) {
+    public init(stage: Stage, completed: Int64 = 0, total: Int64? = nil, fileName: String? = nil, history: History? = nil, phase: Phase? = nil) {
         self.stage = stage
         let completed = max(0, completed)
         self.completed = completed
         self.total = total.flatMap { $0 > 0 ? max($0, completed) : nil }
         self.fileName = fileName
         self.history = history
+        self.phase = phase
     }
 
     public var fraction: Double? {
@@ -41,7 +51,7 @@ public struct SessionLoadingProgress: Sendable, Equatable {
 
     public var openingStep: Int {
         switch stage {
-        case .discoveringSessions, .readingMetadata, .restoringIndex: 1
+        case .discoveringSessions, .readingMetadata, .finalizingCatalog, .restoringIndex: 1
         case .readingHistory: 2
         case .organizingEvents, .linkingEvents: 3
         case .savingIndex, .restoringWorkspace: 4
@@ -97,12 +107,20 @@ final class SessionProgressReporter {
     private var publishedAt: ContinuousClock.Instant?
 
     init(_ handler: SessionProgressHandler?) { self.handler = handler }
-    func send(_ progress: SessionLoadingProgress) {
-        guard let handler, progress != previous else { return }
+    var isEnabled: Bool { handler != nil }
+    func send(_ value: @autoclosure () -> SessionLoadingProgress) {
+        // Unobserved refreshes should not allocate progress values or snapshots.
+        guard let handler else { return }
+        let progress = value()
+        guard progress != previous else { return }
         let now = ContinuousClock.now
-        let changedStage = previous?.stage != progress.stage || previous?.fileName != progress.fileName
+        let changedStage = previous?.stage != progress.stage || previous?.phase != progress.phase || previous?.fileName != progress.fileName
         let completedStage = progress.total != nil && progress.completed == progress.total
-        guard changedStage || completedStage || publishedAt.map({ now - $0 >= .milliseconds(100) }) ?? true else { return }
+        let previouslyCompleted = previous.map { $0.total != nil && $0.completed == $0.total } ?? false
+        let completedFile = progress.history.map { $0.completedFiles > (previous?.history?.completedFiles ?? 0) } ?? false
+        // A growing journal can keep completed == total for several chunks. Only
+        // its first completion bypasses coalescing; each finished file still does.
+        guard changedStage || (completedStage && !previouslyCompleted) || completedFile || publishedAt.map({ now - $0 >= .milliseconds(100) }) ?? true else { return }
         previous = progress; publishedAt = now
         handler(progress)
     }

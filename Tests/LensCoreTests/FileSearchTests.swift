@@ -2,6 +2,25 @@ import XCTest
 @testable import LensCore
 
 final class FileSearchTests: XCTestCase {
+    func testLiveProgressReportsMeasuredCountersWithoutInventingFilesystemTotal() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let child = root.appendingPathComponent("nested")
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        let a = root.appendingPathComponent("a.txt"), b = child.appendingPathComponent("b.txt")
+        try write("needle\n", a); try write("another needle\n", b)
+        let originalA = try Data(contentsOf: a), originalB = try Data(contentsOf: b)
+        let capture = SearchProgressCapture()
+        let result = try await FileSearch().search(environment: EnvironmentRecord(path: root.path), query: "needle", progress: { capture.append($0) })
+        let first = try XCTUnwrap(capture.values.first), last = try XCTUnwrap(capture.values.last)
+        XCTAssertFalse(first.finished); XCTAssertEqual(first.pendingDirectories, 1)
+        XCTAssertTrue(last.finished); XCTAssertEqual(last.pendingDirectories, 0)
+        XCTAssertEqual(last.searchedFiles, result.searchedFiles)
+        XCTAssertEqual(last.visitedDirectories, result.visitedDirectories)
+        XCTAssertEqual(last.decodedBytes, result.decodedBytes)
+        XCTAssertEqual(result.searchedFiles, 2); XCTAssertTrue(result.complete)
+        XCTAssertEqual(try Data(contentsOf: a), originalA); XCTAssertEqual(try Data(contentsOf: b), originalB)
+    }
+
     private func directory() throws -> URL {
         let url = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("codex-lens-search-test-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -170,7 +189,8 @@ final class FileSearchTests: XCTestCase {
         try write("needle", root.appendingPathComponent("slow.txt"))
         let reader = SearchCancellationReader()
         let search = FileSearch(reader: reader)
-        let task = Task { try await search.search(environment: EnvironmentRecord(path: root.path), query: "needle") }
+        let capture = SearchProgressCapture()
+        let task = Task { try await search.search(environment: EnvironmentRecord(path: root.path), query: "needle", progress: { capture.append($0) }) }
         while !(await reader.hasStarted()) { await Task.yield() }
         task.cancel()
         let result = try await task.value
@@ -178,6 +198,11 @@ final class FileSearchTests: XCTestCase {
         XCTAssertTrue(result.coverage.contains { $0.category == "cancelled" }); XCTAssertFalse(result.complete)
         let reads = await reader.readCount()
         XCTAssertEqual(reads, 1)
+        XCTAssertTrue(capture.values.last?.finished == true)
+        XCTAssertEqual(capture.values.last?.searchedFiles, 0)
+        let count = capture.values.count
+        await Task.yield()
+        XCTAssertEqual(capture.values.count, count, "No progress producer survives a completed cancellation")
     }
 
     func testMatchFileAndByteLimitsAreExplicit() async throws {
@@ -244,6 +269,13 @@ final class FileSearchTests: XCTestCase {
         do { _ = try await FileSearch().search(environment: environment, query: "needle", options: FileSearchOptions(maxMatches: 0)); XCTFail("bounds accepted") }
         catch FileSearchError.invalidOptions {} catch { XCTFail("unexpected \(error)") }
     }
+}
+
+private final class SearchProgressCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [FileSearchProgress] = []
+    func append(_ progress: FileSearchProgress) { lock.lock(); defer { lock.unlock() }; storage.append(progress) }
+    var values: [FileSearchProgress] { lock.lock(); defer { lock.unlock() }; return storage }
 }
 
 private actor LegacyDirectorySearchReader: FileSearchReader {

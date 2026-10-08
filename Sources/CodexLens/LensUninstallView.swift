@@ -25,7 +25,7 @@ import LensCore
                 .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
 
             if loading {
-                ProgressView(LensL10n.text("Vérification des emplacements…"))
+                LensProgressIndicator(LensL10n.text("Vérification des emplacements…"))
                     .frame(maxWidth: .infinity, minHeight: 70)
             }
             if let issue {
@@ -64,7 +64,7 @@ import LensCore
                         NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
                     }
                 }
-                if working { ProgressView().controlSize(.small) }
+                if working { LensProgressIndicator(accessibilityLabel: LensL10n.text("Désinstallation en cours…")).controlSize(.small) }
                 Spacer()
                 Button(LensL10n.text("Annuler")) { dismiss() }.keyboardShortcut(.cancelAction).disabled(working)
                 Button(LensL10n.text("Déplacer dans la Corbeille…"), role: .destructive) { confirming = true }

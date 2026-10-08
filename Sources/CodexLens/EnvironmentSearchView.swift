@@ -11,6 +11,7 @@ struct EnvironmentSearchView: View {
     @State private var result: FileSearchResult?
     @State private var issue: String?
     @State private var searching = false
+    @State private var searchProgress: FileSearchProgress?
     @State private var task: Task<Void, Never>?
     @State private var requestID = UUID()
     private let searcher = FileSearch()
@@ -20,8 +21,20 @@ struct EnvironmentSearchView: View {
             Text(LensL10n.text("Contenu actuel · {0}", String(describing: environment.path))).font(.caption.monospaced()).textSelection(.enabled)
             HStack {
                 LensNativeSearchField(placeholder: LensL10n.text("Texte littéral, une ligne…"), text: $query, accessibilityLabel: LensL10n.text("Texte à rechercher dans l’environnement actuel"), onSubmit: { start() }).frame(height: 28).disabled(searching)
-                if searching { LensProgressIndicator(accessibilityLabel: LensL10n.text("Recherche dans l’environnement")).controlSize(.small); Button(LensL10n.text("Interrompre")) { task?.cancel() } }
+                if searching { Button(LensL10n.text("Interrompre")) { task?.cancel() } }
                 else { Button(LensL10n.text("Rechercher")) { start() }.disabled(query.isEmpty).keyboardShortcut(.defaultAction) }
+            }
+            if searching {
+                LensOperationProgressLine(progress: .init(stage: .searchingFiles))
+                if let progress = searchProgress {
+                    Text(LensL10n.text("{0} fichiers lus · {1} dossiers en attente", progress.searchedFiles.formatted(), progress.pendingDirectories.formatted()))
+                        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                        .help(LensL10n.text("Dossiers déjà découverts ; cette file peut grandir pendant la recherche."))
+                    if let path = progress.currentPath {
+                        Text(path).font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                            .lineLimit(1).truncationMode(.middle).help(path)
+                    }
+                }
             }
             if let issue { Text(LensL10n.display(issue)).foregroundStyle(LensAppearance.warningText).font(.caption).textSelection(.enabled) }
             if let result {
@@ -46,12 +59,20 @@ struct EnvironmentSearchView: View {
     }
     private func start() {
         guard !query.isEmpty, !searching else { return }
-        searching = true; issue = nil; result = nil
+        searching = true; issue = nil; result = nil; searchProgress = nil
         let needle = query
         let request = UUID(); requestID = request
         task = Task {
+            let (updates, continuation) = AsyncStream<FileSearchProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let progressTask = Task { @MainActor in
+                for await progress in updates {
+                    guard !Task.isCancelled, request == requestID, searching else { break }
+                    searchProgress = progress
+                }
+            }
+            defer { continuation.finish(); progressTask.cancel() }
             do {
-                let next = try await searcher.search(environment: environment, query: needle)
+                let next = try await searcher.search(environment: environment, query: needle, progress: { continuation.yield($0) })
                 guard request == requestID else { return }
                 // Explicit interruption returns its partial coverage; closing invalidates the request.
                 result = next

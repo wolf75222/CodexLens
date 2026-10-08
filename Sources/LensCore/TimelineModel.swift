@@ -148,15 +148,25 @@ public struct TimelineProjection: Sendable {
     private let laneIndexes: [TimelineLaneIndex]
     public var eventCount: Int { items.count }
 
-    public static func prepare(events: [LensEvent], agents: [AgentRecord], budget: TimelineBuildBudget = TimelineBuildBudget()) throws -> TimelineProjection {
+    public static func prepare(events: [LensEvent], agents: [AgentRecord], budget: TimelineBuildBudget = TimelineBuildBudget(), progress: OperationProgressHandler? = nil) throws -> TimelineProjection {
+        try prepare(events: events, agents: agents, budget: budget, reporter: progress.map { OperationProgressReporter($0) }, stepCount: 5)
+    }
+
+    fileprivate static func prepare(events: [LensEvent], agents: [AgentRecord], budget: TimelineBuildBudget, reporter: OperationProgressReporter?, stepCount: Int) throws -> TimelineProjection {
         let span = LensSignposts.begin("TimelineProjection"); defer { span.end() }
         guard budget.maxEvents >= 0, budget.maxAgents >= 0, budget.maxQueryItems > 0, budget.maxRetentionBytes >= 0, events.count <= budget.maxEvents else { throw LensError.unsupported("Budget de préparation de chronologie dépassé ou invalide (\(events.count) événements, limite \(budget.maxEvents)).") }
         try Task.checkCancellation()
+        let eventUnit: OperationProgress.Unit = events.isEmpty ? .steps : .events
+        let eventTotal = Int64(max(1, events.count))
+        reporter?.send(OperationProgress(stage: .preparingTimeline, total: eventTotal, unit: eventUnit, detail: "timeline.validate", step: 1, stepCount: stepCount))
         var agentIDs = Set<String>(), laneAgents: [(id: String, name: String, known: Bool, accessible: Bool?)] = []
         for agent in agents { guard agentIDs.insert(agent.id).inserted else { throw LensError.corrupt("Agent dupliqué dans la chronologie : \(agent.id).") }; laneAgents.append((agent.id, agent.name.isEmpty ? agent.id : agent.name, true, agent.accessible)) }
         var eventIDs = Set<String>(), missingAgentIDs = Set<String>()
         for (offset, event) in events.enumerated() {
-            if offset % 4096 == 0 { try Task.checkCancellation() }
+            if offset % 4096 == 0 {
+                try Task.checkCancellation()
+                reporter?.send(OperationProgress(stage: .preparingTimeline, completed: Int64(offset), total: eventTotal, unit: .events, detail: "timeline.validate", step: 1, stepCount: stepCount))
+            }
             guard eventIDs.insert(event.id).inserted else { throw LensError.corrupt("Identifiant d'événement dupliqué : \(event.id).") }
             guard event.timestamp.timeIntervalSince1970.isFinite, event.endTime?.timeIntervalSince1970.isFinite != false else { throw LensError.corrupt("Horodatage non fini pour \(event.id).") }
             if !agentIDs.contains(event.agentID) { missingAgentIDs.insert(event.agentID) }
@@ -164,6 +174,10 @@ public struct TimelineProjection: Sendable {
         for id in missingAgentIDs.sorted() { laneAgents.append((id, "Agent non catalogué · \(id)", false, nil)) }
         guard laneAgents.count <= budget.maxAgents else { throw LensError.unsupported("Budget de pistes dépassé (\(laneAgents.count), limite \(budget.maxAgents)).") }
         let laneByID = Dictionary(uniqueKeysWithValues: laneAgents.enumerated().map { ($0.element.id, $0.offset) })
+        try Task.checkCancellation()
+        reporter?.send(OperationProgress(stage: .preparingTimeline, completed: eventTotal, total: eventTotal, unit: eventUnit, detail: "timeline.validate", step: 1, stepCount: stepCount))
+        reporter?.send(OperationProgress(stage: .preparingTimeline, total: 1, detail: "timeline.sort", step: 2, stepCount: stepCount))
+        try Task.checkCancellation()
         let ordered = events.indices.sorted { a, b in
             let first = events[a], second = events[b]
             if first.timestamp != second.timestamp { return first.timestamp < second.timestamp }
@@ -174,13 +188,18 @@ public struct TimelineProjection: Sendable {
             return first.id < second.id
         }
         try Task.checkCancellation()
+        reporter?.send(OperationProgress(stage: .preparingTimeline, completed: 1, total: 1, detail: "timeline.sort", step: 2, stepCount: stepCount))
+        reporter?.send(OperationProgress(stage: .preparingTimeline, total: eventTotal, unit: eventUnit, detail: "timeline.build", step: 3, stepCount: stepCount))
         var built: [TimelineItem] = []; built.reserveCapacity(events.count)
         var byID: [String: Int] = [:]; byID.reserveCapacity(events.count)
         var perLane = Array(repeating: [Int](), count: laneAgents.count)
         var invalid: [String] = []
         var first: Date?, last: Date?
         for sourceIndex in ordered {
-            if built.count % 4096 == 0 { try Task.checkCancellation() }
+            if built.count % 4096 == 0 {
+                try Task.checkCancellation()
+                reporter?.send(OperationProgress(stage: .preparingTimeline, completed: Int64(built.count), total: eventTotal, unit: .events, detail: "timeline.build", step: 3, stepCount: stepCount))
+            }
             let event = events[sourceIndex], lane = laneByID[event.agentID]!
             let item = TimelineItem(eventID: event.id, agentID: event.agentID, laneIndex: lane, lanePosition: perLane[lane].count, start: event.timestamp, recordedEnd: event.endTime, kind: event.kind, isError: event.isError)
             byID[event.id] = built.count; perLane[lane].append(built.count); built.append(item)
@@ -189,16 +208,36 @@ public struct TimelineProjection: Sendable {
             last = last.map { max($0, item.effectiveEnd) } ?? item.effectiveEnd
         }
         let lanes = laneAgents.enumerated().map { TimelineLane(id: $0.element.id, name: $0.element.name, agentIsCatalogued: $0.element.known, accessible: $0.element.accessible, eventCount: perLane[$0.offset].count) }
+        try Task.checkCancellation()
+        reporter?.send(OperationProgress(stage: .preparingTimeline, completed: eventTotal, total: eventTotal, unit: eventUnit, detail: "timeline.build", step: 3, stepCount: stepCount))
+        let laneTotal = Int64(max(1, perLane.count))
+        reporter?.send(OperationProgress(stage: .preparingTimeline, total: laneTotal, detail: "timeline.lanes", step: 4, stepCount: stepCount))
         var indexes: [TimelineLaneIndex] = []; indexes.reserveCapacity(perLane.count)
-        for lane in perLane { try Task.checkCancellation(); indexes.append(try TimelineLaneIndex(globalIndices: lane, items: built)) }
+        for lane in perLane {
+            try Task.checkCancellation()
+            reporter?.send(OperationProgress(stage: .preparingTimeline, completed: Int64(indexes.count), total: laneTotal, detail: "timeline.lanes", step: 4, stepCount: stepCount))
+            indexes.append(try TimelineLaneIndex(globalIndices: lane, items: built))
+        }
         let bounds = try first.flatMap { lo in try last.map { try TimelineWindow(start: lo, end: $0) } }
+        try Task.checkCancellation()
+        reporter?.send(OperationProgress(stage: .preparingTimeline, completed: laneTotal, total: laneTotal, detail: "timeline.lanes", step: 4, stepCount: stepCount))
+        reporter?.send(OperationProgress(stage: .preparingTimeline, total: eventTotal, unit: eventUnit, detail: "timeline.fingerprint", step: 5, stepCount: stepCount))
         var hasher = SHA256()
         func add(_ string: String) { var length = UInt64(string.utf8.count).bigEndian; hasher.update(data: Data(bytes: &length, count: 8)); hasher.update(data: Data(string.utf8)) }
         func addNumber(_ value: Double) { var bits = value.bitPattern.bigEndian; hasher.update(data: Data(bytes: &bits, count: 8)) }
         for lane in lanes { add(lane.id); add(lane.name); add(lane.agentIsCatalogued ? "known" : "missing"); add(lane.accessible.map { $0 ? "accessible" : "unavailable" } ?? "unknown") }
-        for (offset, item) in built.enumerated() { if offset.isMultiple(of: 4096) { try Task.checkCancellation() }; add(item.id); add(item.agentID); addNumber(item.start.timeIntervalSince1970); add(item.recordedEnd == nil ? "no-end" : "end"); if let end = item.recordedEnd { addNumber(end.timeIntervalSince1970) }; add(item.kind.rawValue); add(item.isError ? "error" : "no-error") }
+        for (offset, item) in built.enumerated() {
+            if offset.isMultiple(of: 4096) {
+                try Task.checkCancellation()
+                reporter?.send(OperationProgress(stage: .preparingTimeline, completed: Int64(offset), total: eventTotal, unit: .events, detail: "timeline.fingerprint", step: 5, stepCount: stepCount))
+            }
+            add(item.id); add(item.agentID); addNumber(item.start.timeIntervalSince1970); add(item.recordedEnd == nil ? "no-end" : "end"); if let end = item.recordedEnd { addNumber(end.timeIntervalSince1970) }; add(item.kind.rawValue); add(item.isError ? "error" : "no-error")
+        }
         let fingerprint = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        return TimelineProjection(lanes: lanes, bounds: bounds, fingerprintSHA256: fingerprint, invalidDurationEventIDs: invalid, maxQueryItems: budget.maxQueryItems, orderedEventIDs: built.map(\.eventID), items: built, indexByID: byID, laneIndexes: indexes)
+        let result = TimelineProjection(lanes: lanes, bounds: bounds, fingerprintSHA256: fingerprint, invalidDurationEventIDs: invalid, maxQueryItems: budget.maxQueryItems, orderedEventIDs: built.map(\.eventID), items: built, indexByID: byID, laneIndexes: indexes)
+        try Task.checkCancellation()
+        reporter?.send(OperationProgress(stage: .preparingTimeline, completed: eventTotal, total: eventTotal, unit: eventUnit, detail: "timeline.fingerprint", step: 5, stepCount: stepCount))
+        return result
     }
 
     public func item(id: String) -> TimelineItem? { indexByID[id].map { items[$0] } }
@@ -327,28 +366,49 @@ public actor TimelineModel {
     internal private(set) var completedPreparations = 0
     internal private(set) var retainedBytesEstimate = 0
     public init() {}
-    public func prepare(events: [LensEvent], agents: [AgentRecord], budget: TimelineBuildBudget = TimelineBuildBudget()) throws -> TimelineProjection {
+    public func prepare(events: [LensEvent], agents: [AgentRecord], budget: TimelineBuildBudget = TimelineBuildBudget(), progress: OperationProgressHandler? = nil) throws -> TimelineProjection {
         try Task.checkCancellation()
+        let reporter = progress.map { OperationProgressReporter($0) }
         if let cached, cachedBudget == budget, cachedEvents.count == events.count, cachedAgents.count == agents.count {
+            let eventUnit: OperationProgress.Unit = events.isEmpty ? .steps : .events
+            let eventTotal = Int64(max(1, events.count))
+            // Whether this is the entire path is only known after comparing
+            // the recorded inputs. Do not promise a one-step reuse up front.
+            reporter?.send(OperationProgress(stage: .preparingTimeline, total: eventTotal, unit: eventUnit, detail: "timeline.cache"))
             var equal = true
             for (offset, event) in events.enumerated() {
-                if offset.isMultiple(of: 4096) { try Task.checkCancellation() }
+                if offset.isMultiple(of: 4096) {
+                    try Task.checkCancellation()
+                    reporter?.send(OperationProgress(stage: .preparingTimeline, completed: Int64(offset), total: eventTotal, unit: .events, detail: "timeline.cache"))
+                }
                 if cachedEvents[offset] != TimelineEventInput(event) { equal = false; break }
             }
             if equal {
                 for (offset, agent) in agents.enumerated() where cachedAgents[offset] != TimelineAgentInput(agent) { equal = false; break }
             }
-            if equal { return cached }
+            if equal {
+                try Task.checkCancellation()
+                reporter?.send(OperationProgress(stage: .preparingTimeline, completed: eventTotal, total: eventTotal, unit: eventUnit, detail: "timeline.cache", step: 1, stepCount: 1))
+                return cached
+            }
         }
-        let result = try TimelineProjection.prepare(events: events, agents: agents, budget: budget)
+        let result = try TimelineProjection.prepare(events: events, agents: agents, budget: budget, reporter: reporter, stepCount: 6)
         try Task.checkCancellation()
-        completedPreparations += 1
+        reporter?.send(OperationProgress(stage: .preparingTimeline, total: 1, detail: "timeline.retention", step: 6, stepCount: 6))
+        try Task.checkCancellation()
         let estimate = try retentionEstimate(events: events, agents: agents, stopAfter: max(0, budget.maxRetentionBytes))
         if budget.maxRetentionBytes > 0, estimate <= budget.maxRetentionBytes {
-            cachedEvents = events.map(TimelineEventInput.init)
-            cachedAgents = agents.map(TimelineAgentInput.init)
+            let eventInputs = events.map(TimelineEventInput.init)
+            let agentInputs = agents.map(TimelineAgentInput.init)
+            try Task.checkCancellation()
+            cachedEvents = eventInputs; cachedAgents = agentInputs
             cachedBudget = budget; cached = result; retainedBytesEstimate = estimate
-        } else { invalidateCache() }
+        } else {
+            try Task.checkCancellation()
+            invalidateCache()
+        }
+        completedPreparations += 1
+        reporter?.send(OperationProgress(stage: .preparingTimeline, completed: 1, total: 1, detail: "timeline.retention", step: 6, stepCount: 6))
         return result
     }
     /// Retain at most one preparation, bounded by its build budget. A closed window can release it explicitly.
