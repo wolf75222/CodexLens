@@ -506,6 +506,10 @@ The changes overview groups changed files by worktree and folder in a native out
 - Copy a recorded path or open the current file from the contextual menu.
 - Per-window state and copied navigation checkpoints retain the tree context through Back/Forward and hide/show.
 
+![Changed-file tree beside a recorded diff](images/changes-tree/files-dark.png)
+
+*Anonymous fixture, actual production views captured offscreen from NSHostingView. The production entry point is replaced; this does not qualify the compositor or physical input.*
+
 Only retained changed-file projections populate the tree. It is not a scan of the current repository. Outside-worktree paths remain explicitly grouped; identical paths in different worktrees keep distinct identities. No Git A/M/D status or net diff is inferred from recorded patches.
 
 ## Conversation review and export

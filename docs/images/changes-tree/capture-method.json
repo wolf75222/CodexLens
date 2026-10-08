@@ -1,0 +1,18 @@
+{
+  "sourceCommit": "72ab87811d52ee7cc40bfc35a7549c1d1e0e5b00",
+  "fixture": "anonymous ChangesOverviewMain",
+  "method": "Owned NSHostingView offscreen cache renders; production entry point replaced; not desktop/compositor screenshots",
+  "images": [
+    "files-dark.png",
+    "worktree-activity.png",
+    "files-compact.png"
+  ],
+  "checks": 74,
+  "unqualified": [
+    "physical mouse/trackpad",
+    "VoiceOver",
+    "production compositor",
+    "live collector I/O",
+    "performance measurement"
+  ]
+}
