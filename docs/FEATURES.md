@@ -496,6 +496,22 @@ Formatting is bounded to **512 KiB of source, 10,000 blocks, and 50,000 formatte
 
 Source: [chat and context tray](../Sources/CodexLens/InvestigationView.swift), [local connection UI](../Sources/CodexLens/CodexLocalConnectionView.swift), [Markdown](../Sources/CodexLens/LensChatMarkdownView.swift), [message context menu](../Sources/CodexLens/LensChatMessageMenu.swift).
 
+## Changed-file tree
+
+The changes overview groups changed files by worktree and folder in a native outline, beside the selected recorded diff. The pane is on the right, resizable and hideable; compact windows place it below the reading area. Worktree Activity keeps its graph above the diff in the reading pane.
+
+- Use arrow keys to move, expand and collapse folders. Folder navigation retains the open diff.
+- Filter by file, folder, full recorded path or worktree label; this filter leaves session filters and the selected diff intact.
+- Reveal the selected file explicitly. Live publication preserves expansion and viewport instead of scrolling automatically.
+- Copy a recorded path or open the current file from the contextual menu.
+- Per-window state and copied navigation checkpoints retain the tree context through Back/Forward and hide/show.
+
+![Changed-file tree beside a recorded diff](images/changes-tree/files-dark.png)
+
+*Anonymous fixture, actual production views captured offscreen from NSHostingView. The production entry point is replaced; this does not qualify the compositor or physical input.*
+
+Only retained changed-file projections populate the tree. It is not a scan of the current repository. Outside-worktree paths remain explicitly grouped; identical paths in different worktrees keep distinct identities. No Git A/M/D status or net diff is inferred from recorded patches.
+
 ## Conversation review and export
 
 Preparation and JSON/Markdown export show phase-local message counts and the

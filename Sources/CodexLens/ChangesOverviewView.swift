@@ -33,12 +33,21 @@ struct ChangesOverviewView: View {
     @Binding var mode: ChangesOverviewMode
     @Binding var detailMode: ChangesOverviewDetailMode
     var showsModeControls = true
-    @State private var identityExpanded = false
     @State private var selectedGraphBin: GraphBin?
     @State private var graphInfoVisible = false
     @State private var selectionTask: Task<Void, Never>?
     @State private var selectionGeneration = UUID()
     @State private var pendingSelection: PendingSelection?
+    @State private var filteredTree: ChangesFileTree?
+    @State private var treeFilterRequest: TreeFilterRequest?
+    private struct TreeFilterRequest: Hashable {
+        let presentationID: UUID?
+        let rootID: String?
+        let source: URL
+        let environmentID: String?
+        let query: String
+        let visible: Bool
+    }
 
     private enum EnvironmentSelection: Hashable {
         case all, environment(String)
@@ -83,7 +92,7 @@ struct ChangesOverviewView: View {
         let lastGraphTimestamp: Date?
         let unknownDateOperationCount: Int
 
-        init(projection: ChangesOverviewProjection, environmentID: String?, fileID: String?, change: ChangeRecord?) {
+        init(projection: ChangesOverviewProjection, environmentID: String?, fileID: String?, change: ChangeRecord?, includesGraph: Bool) {
             let groupLookup = Dictionary(uniqueKeysWithValues: projection.groups.map { ($0.id, $0) })
             let scopedGroups = projection.groups.filter { environmentID == nil || $0.id == environmentID }
             let scopedFiles = scopedGroups.flatMap(\.files)
@@ -95,7 +104,7 @@ struct ChangesOverviewView: View {
             selectedEnvironment = (file?.environmentID ?? environmentID).flatMap { groupLookup[$0] }
             selectedChange = change
             selectedActivity = change.flatMap { selected in file?.activities.first { $0.traceIDs.contains(selected.id) } }
-            let activities = scopedGroups.flatMap(\.activities)
+            let activities = includesGraph ? scopedGroups.flatMap(\.activities) : []
             activitiesByID = Dictionary(uniqueKeysWithValues: activities.map { ($0.id, $0) })
             selectedGraphActivityID = change.flatMap { selected in activities.first { $0.traceIDs.contains(selected.id) }?.id }
             selectedFileTraceIDs = Set(file?.traceIDs ?? [])
@@ -105,7 +114,7 @@ struct ChangesOverviewView: View {
             let first = timestamps.min(), last = timestamps.max()
             firstGraphTimestamp = first; lastGraphTimestamp = last
             unknownDateOperationCount = activities.filter { $0.unknownTimestampCount > 0 }.count
-            lanes = scopedGroups.map { group in
+            lanes = (includesGraph ? scopedGroups : []).map { group in
                 var bins: [Int: [ChangesOverviewActivity]] = [:]
                 if let first, let last {
                     let interval = last.timeIntervalSince(first)
@@ -126,32 +135,26 @@ struct ChangesOverviewView: View {
     }
 
     var body: some View {
-        let scope = Scope(projection: projection, environmentID: environmentID, fileID: fileID, change: selectedChange)
+        let scope = Scope(projection: projection, environmentID: environmentID, fileID: fileID, change: selectedChange, includesGraph: mode == .activity)
         return GeometryReader { geometry in
-            let wide = geometry.size.width >= 850
             let horizontal = geometry.size.width >= 560
             VStack(spacing: 0) {
-                overviewHeader(scope, wide: wide, horizontal: horizontal)
+                overviewHeader(scope, horizontal: horizontal)
                 Divider()
-                HSplitView {
-                    if wide {
-                        environmentSidebar(scope).frame(minWidth: 150, idealWidth: 180, maxWidth: 300)
-                            .background(LensPaneSizing(key: "changes-environments", preferredWidth: 180, context: windowContext))
-                    }
                     if horizontal {
                         HSplitView {
-                            browser(scope).frame(minWidth: 200, idealWidth: 270, maxWidth: mode == .activity ? 580 : 440)
-                                .background(LensPaneSizing(key: "changes-files", preferredWidth: 270, context: windowContext))
-                            detailPane(scope).frame(minWidth: 280, idealWidth: 550, maxWidth: .infinity, maxHeight: .infinity)
+                            readingPane(scope).accessibilityElement(children: .contain).accessibilityIdentifier("lens-changes-reading-pane").frame(minWidth: 280, idealWidth: 550, maxWidth: .infinity, maxHeight: .infinity)
+                            if store.changesFileTreeVisible {
+                                treePane(scope).frame(minWidth: 220, idealWidth: 280, maxWidth: 440)
+                                    .background(LensPaneSizing(key: "changes-file-tree", preferredWidth: 280, context: windowContext))
+                            }
                         }
                     } else {
                         VSplitView {
-                            browser(scope).frame(minHeight: 100, idealHeight: 220, maxHeight: .infinity)
-                                .background(LensPaneSizing(key: "changes-files-vertical", preferredWidth: 220, context: windowContext, isVertical: false))
-                            detailPane(scope).frame(minHeight: 180, idealHeight: 380, maxHeight: .infinity)
+                            readingPane(scope).accessibilityElement(children: .contain).accessibilityIdentifier("lens-changes-reading-pane").frame(minHeight: 180, idealHeight: 380, maxHeight: .infinity)
+                            if store.changesFileTreeVisible { treePane(scope).frame(minHeight: 120, idealHeight: 220, maxHeight: .infinity) }
                         }
                     }
-                }
             }.accessibilityElement(children: .contain)
         }
         .accessibilityElement(children: .contain)
@@ -159,14 +162,19 @@ struct ChangesOverviewView: View {
         .task(id: selectedChange?.id) { synchronizeSelectedChange() }
         .popover(item: $selectedGraphBin) { bin in graphBinOperations(bin) }
         .onDisappear { cancelDeferredSelection() }
+        .task(id: currentTreeFilterRequest) { await filterTree() }
     }
 
-    @ViewBuilder private func browser(_ scope: Scope) -> some View {
-        if mode == .files { fileList(scope) }
-        else { activityBrowser(scope) }
+    @ViewBuilder private func readingPane(_ scope: Scope) -> some View {
+        if mode == .activity {
+            VSplitView {
+                activityBrowser(scope).frame(minHeight: 130, idealHeight: 230, maxHeight: .infinity)
+                detailPane(scope).frame(minHeight: 180, idealHeight: 400, maxHeight: .infinity)
+            }
+        } else { detailPane(scope) }
     }
 
-    private func overviewHeader(_ scope: Scope, wide: Bool, horizontal: Bool) -> some View {
+    private func overviewHeader(_ scope: Scope, horizontal: Bool) -> some View {
         VStack(spacing: 7) {
             HStack(spacing: 12) {
                 Text(fileOperationCount(files: scope.files.count, operations: scope.operationCount))
@@ -174,11 +182,17 @@ struct ChangesOverviewView: View {
                     .help(LensL10n.text("Une opération peut toucher plusieurs fichiers. Ses traces restent distinctes."))
                 Spacer(minLength: 4)
                 if horizontal && showsModeControls { modePicker(segmented: true) }
+                Button { store.changesFileTreeVisible.toggle() } label: {
+                    Image(systemName: LensSymbols.name("sidebar.right"))
+                }.buttonStyle(LensQuietButtonStyle())
+                    .help(LensL10n.text(store.changesFileTreeVisible ? "Masquer l’arborescence des fichiers" : "Afficher l’arborescence des fichiers"))
+                    .accessibilityLabel(LensL10n.text("Arborescence des fichiers"))
+                    .accessibilityValue(store.changesFileTreeVisible ? LensL10n.text("Affichée") : LensL10n.text("Masquée"))
+                    .accessibilityIdentifier("lens-changes-tree-toggle")
                 currentGitButton(scope)
             }.accessibilityElement(children: .contain)
                 .accessibilityIdentifier("lens-changes-overview-main-controls")
-            if !wide {
-                HStack(spacing: 8) {
+            HStack(spacing: 8) {
                     environmentPicker
                     if !horizontal && showsModeControls { modePicker(segmented: false) }
                     if let group = scope.selectedEnvironment {
@@ -187,7 +201,6 @@ struct ChangesOverviewView: View {
                     }
                 }.accessibilityElement(children: .contain)
                     .accessibilityIdentifier("lens-changes-overview-compact-controls")
-            }
         }.padding(.horizontal, 12).padding(.vertical, 8)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("lens-changes-overview-header")
@@ -229,36 +242,76 @@ struct ChangesOverviewView: View {
             .accessibilityIdentifier("lens-changes-environments")
     }
 
-    private func environmentSidebar(_ scope: Scope) -> some View {
-        VStack(spacing: 0) {
-            paneHeading("Environnements")
-            List(selection: environmentSelection) {
-                Label(LensL10n.text("Tous les environnements"), systemImage: LensSymbols.name("square.grid.2x2"))
-                    .font(LensUI.metadata).tag(EnvironmentSelection.all)
-                ForEach(projection.groups) { group in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Label(environmentName(group), systemImage: LensSymbols.name("folder"))
-                            .font(LensUI.metadata.weight(.medium)).lineLimit(1).truncationMode(.middle)
-                        Text(fileOperationCount(files: group.files.count, operations: group.activityCount))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }.padding(.vertical, 3).tag(EnvironmentSelection.environment(group.id))
-                        .help(group.environment.path)
-                }
-            }.listStyle(.sidebar).accessibilityIdentifier("lens-changes-environments")
-            if let group = scope.selectedEnvironment {
-                Divider()
-                DisclosureGroup(LensL10n.text("Identité enregistrée"), isExpanded: $identityExpanded) {
-                    VStack(alignment: .leading, spacing: 6) { recordedIdentity(group) }
-                        .font(.caption).foregroundStyle(.secondary).textSelection(.enabled).padding(.top, 6)
-                }.font(LensUI.metadata).padding(10)
-            }
-        }
+    private var currentTreeFilterRequest: TreeFilterRequest {
+        .init(presentationID: store.presentation?.id, rootID: store.snapshot?.root.id,
+              source: store.observedSourceHome.standardizedFileURL, environmentID: environmentID,
+              query: store.changesFileTreeQuery, visible: store.changesFileTreeVisible)
     }
 
-    private var environmentSelection: Binding<EnvironmentSelection?> {
-        Binding(get: { environmentID.map(EnvironmentSelection.environment) ?? .all }, set: { value in
-            if let value { selectEnvironment(value) }
-        })
+    private func treePane(_ scope: Scope) -> some View {
+        let request = currentTreeFilterRequest
+        let direct = request.environmentID == nil && request.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let sameReader = treeFilterRequest?.rootID == request.rootID && treeFilterRequest?.source == request.source
+        let tree = direct ? projection.fileTree : sameReader ? filteredTree ?? projection.fileTree : projection.fileTree
+        let pending = !direct && treeFilterRequest != request
+        return VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(LensL10n.text("Fichiers")).font(LensUI.metadata.weight(.semibold))
+                Spacer(minLength: 0)
+                Button { store.changesFileTreeState.revealSelectedFile() } label: {
+                    Image(systemName: LensSymbols.name("scope"))
+                }.buttonStyle(LensQuietButtonStyle()).disabled(fileID == nil)
+                    .help(LensL10n.text("Retrouver le fichier sélectionné dans l’arborescence"))
+                    .accessibilityLabel(LensL10n.text("Retrouver le fichier sélectionné"))
+                    .accessibilityIdentifier("lens-changes-tree-reveal")
+            }.padding(.horizontal, 10).padding(.vertical, 8)
+            LensNativeSearchField(placeholder: LensL10n.text("Filtrer les fichiers…"),
+                text: $store.changesFileTreeQuery, accessibilityLabel: LensL10n.text("Filtrer l’arborescence des fichiers"))
+                .frame(height: 28).padding(.horizontal, 8).padding(.bottom, 8)
+            Divider()
+                ChangesFileTreeView(tree: tree, selectedFileID: fileID, state: store.changesFileTreeState,
+                    onSelectFile: { id in if let file = scope.filesByID[id] { selectFile(file) } },
+                    onOpenCurrentFile: { id in
+                        if let file = scope.filesByID[id] {
+                            store.navigate(.file(environment: file.environmentID, path: file.path), newTab: true)
+                        }
+                    })
+                    .overlay {
+                        if tree.roots.isEmpty && !pending {
+                            LensCollectionEmptyState(title: LensL10n.text("Aucun fichier correspondant"),
+                                detail: LensL10n.text("Modifiez le filtre des fichiers ou les filtres de la session."), symbol: "doc.text")
+                        }
+                    }
+                    .overlay(alignment: .top) {
+                        if pending { LensProgressIndicator(LensL10n.text("Filtrage des fichiers…")).padding(6) }
+                    }
+        }.accessibilityElement(children: .contain).accessibilityIdentifier("lens-changes-files")
+    }
+
+    @MainActor private func filterTree() async {
+        let request = currentTreeFilterRequest
+        guard request.visible else { return }
+        let query = request.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if request.environmentID == nil && query.isEmpty {
+            treeFilterRequest = request; filteredTree = nil; return
+        }
+        if !query.isEmpty {
+            do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
+            guard !Task.isCancelled, currentTreeFilterRequest == request else { return }
+        }
+        let groups = projection.groups.filter { request.environmentID == nil || $0.id == request.environmentID }
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let tree = ChangesFileTree(groups: groups).filtered(matching: query)
+            try Task.checkCancellation()
+            return tree
+        }
+        do {
+            let tree = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+            guard !Task.isCancelled, currentTreeFilterRequest == request else { return }
+            filteredTree = tree; treeFilterRequest = request
+        } catch is CancellationError { }
+        catch { }
     }
 
     @ViewBuilder private func recordedIdentity(_ group: ChangesOverviewEnvironment) -> some View {
@@ -268,50 +321,6 @@ struct ChangesOverviewView: View {
             Text(LensL10n.text("Référence enregistrée : {0}", ref)).font(.caption.monospaced())
         }
         if group.isSynthetic { Text(LensL10n.text("Chemin cité par une trace ; identité du dépôt non établie.")) }
-    }
-
-    private func fileList(_ scope: Scope) -> some View {
-        VStack(spacing: 0) {
-            paneHeading("Fichiers enregistrés")
-            ScrollViewReader { proxy in
-                List(selection: Binding<String?>(get: { fileID }, set: { id in
-                    guard let id, let file = scope.filesByID[id] else { return }
-                    selectFile(file)
-                })) {
-                    ForEach(scope.files) { file in
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                Text(URL(fileURLWithPath: file.path).lastPathComponent).font(LensUI.body.weight(.medium)).lineLimit(1).truncationMode(.middle)
-                            }
-                            Text(file.relativePath).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle)
-                            if environmentID == nil, let group = scope.groupsByID[file.environmentID] {
-                                Text(environmentName(group)).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                            }
-                            Text(LensL10n.text("{0} · {1}",
-                                LensUI.count(file.activityCount, singular: "opération", plural: "opérations"),
-                                LensUI.count(file.traceIDs.count, singular: "trace", plural: "traces")))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }.padding(.vertical, 5).tag(file.id).id(file.id).help(file.path)
-                            .contextMenu {
-                                Button(LensL10n.text("Ouvrir le fichier actuel")) {
-                                    store.navigate(.file(environment: file.environmentID, path: file.path), newTab: true)
-                                }
-                            }
-                    }
-                }.listStyle(.plain).accessibilityIdentifier("lens-changes-files")
-                    .overlay {
-                        if scope.files.isEmpty {
-                            LensCollectionEmptyState(title: LensL10n.text("Aucune modification correspondante"),
-                                detail: LensL10n.text("Vérifiez la nature de la trace, la recherche et les filtres d’agent, d’environnement ou de période. Ces filtres restent conservés."), symbol: "doc.text")
-                        }
-                    }
-                    .task(id: fileID) {
-                        await Task.yield()
-                        guard !Task.isCancelled, let fileID else { return }
-                        proxy.scrollTo(fileID, anchor: .center)
-                    }
-            }
-        }
     }
 
     private func activityBrowser(_ scope: Scope) -> some View {

@@ -116,9 +116,21 @@ import SwiftUI
         defer { window.contentView = nil; window.close() }
         try await settle(host)
         renders.append(try capture(host, output.appendingPathComponent("changes-overview-mounted-component-cache.png")))
-        try await waitFor(host, "overview-native-controls") { identifiers(host).contains("lens-changes-files") }
-        check("overview-exposes-files-environments-and-modes", Set(["lens-changes-files", "lens-changes-environments",
-            "lens-changes-presentation", "lens-changes-presentation"]).isSubset(of: identifiers(host)))
+        try await waitFor(host, "overview-native-controls") { fileTree(in: host) != nil }
+        check("overview-exposes-file-tree-environments-and-modes", Set(["lens-changes-files", "lens-changes-file-tree",
+            "lens-changes-environments", "lens-changes-presentation", "lens-changes-tree-toggle",
+            "lens-changes-tree-reveal"]).isSubset(of: identifiers(host)))
+        let initialTree = try require(fileTree(in: host), "native changed-file tree")
+        let alphaNode = try require(projection.fileTree.nodesByID.values.first { $0.fileID == alphaFile.id }, "alpha tree leaf")
+        let betaNode = try require(projection.fileTree.nodesByID.values.first { $0.fileID == betaFile.id }, "beta tree leaf")
+        let alphaTreeItem = try treeItem(alphaNode.id, tree: projection.fileTree, outline: initialTree)
+        let betaTreeItem = try treeItem(betaNode.id, tree: projection.fileTree, outline: initialTree)
+        check("native-tree-keeps-same-path-leaves-under-distinct-worktree-objects",
+            alphaTreeItem !== betaTreeItem && alphaNode.environmentID == fixture.alpha.path
+            && betaNode.environmentID == fixture.beta.path
+            && projection.fileTree.ancestorsByFileID[alphaFile.id]?.first
+                != projection.fileTree.ancestorsByFileID[betaFile.id]?.first)
+        check("wide-layout-places-resizable-file-tree-right-of-reading-pane", treeLayout(in: host).right)
         renders.append(try capture(host, output.appendingPathComponent("changes-overview-all-files-light-component-cache.png")))
 
         stage = "same-context-publication-during-native-selection"
@@ -128,12 +140,11 @@ import SwiftUI
             let betaRequest = try require(initial.changes.first {
                 $0.environmentID == betaFile.environmentID && $0.kind == .requestedPatch && betaFile.traceIDs.contains($0.id)
             }, "beta requested trace")
-            let betaRow = try require(projection.files.firstIndex { $0.id == betaFile.id }, "beta file row")
-            let fileTables = descendants(host).compactMap { $0 as? NSTableView }.filter {
-                !$0.isHiddenOrHasHiddenAncestor && $0.numberOfRows == projection.files.count
-            }
-            guard fileTables.count == 1, let fileTable = fileTables.first else {
-                throw LensError.unavailable("Expected one native table for the four-file anonymous overview.")
+            let fileTable = try require(fileTree(in: host), "native tree before deferred selection")
+            try expandAncestors(of: betaFile.id, tree: projection.fileTree, outline: fileTable)
+            let betaItem = try treeItem(betaNode.id, tree: projection.fileTree, outline: fileTable)
+            guard fileTable.row(forItem: betaItem) >= 0 else {
+                throw LensError.unavailable("Beta leaf was not revealed by native folder disclosure.")
             }
             var callbackRan = false, interleavedNewGeneration = false, bindingChangedBeforeNavigation = false
             // @Published emits in willSet. Selecting the actual native file row
@@ -143,7 +154,7 @@ import SwiftUI
                 guard !callbackRan, let next, next.rootID == initial.root.id, next.id != previousID else { return }
                 callbackRan = true
                 interleavedNewGeneration = store.presentation?.id == previousID
-                fileTable.selectRowIndexes(IndexSet(integer: betaRow), byExtendingSelection: false)
+                fileTable.selectRowIndexes(IndexSet(integer: fileTable.row(forItem: betaItem)), byExtendingSelection: false)
                 bindingChangedBeforeNavigation = store.changesOverviewFileID == betaFile.id
                     && store.selection == previousSelection
             }
@@ -167,7 +178,7 @@ import SwiftUI
                 && store.query.isEmpty && store.agentFilter == nil && store.environmentFilter == nil
                 && store.changesKindFilter == nil && store.changesOverviewEnvironmentID == nil)
             observations.append(["scenario": "same-context-publication-during-native-selection",
-                "trigger": "NSTableView.selectRowIndexes inside presentation willSet publisher",
+                "trigger": "NSOutlineView.selectRowIndexes for the identified file object inside presentation willSet publisher",
                 "oldPresentationID": previousID.uuidString,
                 "newPresentationID": store.presentation?.id.uuidString ?? "<missing>",
                 "selectedFileID": betaFile.id, "selectedTraceID": betaRequest.id,
@@ -188,6 +199,105 @@ import SwiftUI
         check("recorded-result-route-remains-separate", store.selection == .change(alphaResult.id)
             && store.changesOverviewFileID == alphaFile.id)
         renders.append(try capture(host, output.appendingPathComponent("changes-recorded-result-light-component-cache.png")))
+
+        stage = "native-tree-navigation-and-retained-reading"
+        let nativeTree = try require(fileTree(in: host), "native tree with recorded alpha diff")
+        let alphaFolderID = try require(projection.fileTree.ancestorsByFileID[alphaFile.id]?.last, "alpha parent folder identity")
+        let betaRootID = try require(projection.fileTree.ancestorsByFileID[betaFile.id]?.first, "beta worktree root identity")
+        let alphaFolder = try treeItem(alphaFolderID, tree: projection.fileTree, outline: nativeTree)
+        let alphaLeaf = try treeItem(alphaNode.id, tree: projection.fileTree, outline: nativeTree)
+        try await waitFor(host, "programmatic-trace-reveals-identified-native-tree-leaf") {
+            (nativeTree.item(atRow: nativeTree.selectedRow) as? NSObject) === alphaLeaf
+        }
+        select(alphaFolder, in: nativeTree)
+        check("native-folder-selection-keeps-current-recorded-file-and-diff", store.changesOverviewFileID == alphaFile.id
+            && store.selection == .change(alphaResult.id) && identifiers(host).contains("lens-diff-line-columns"))
+        try arrow(.left, in: nativeTree); try await settle(host)
+        check("native-left-arrow-collapses-folder-without-clearing-diff", !nativeTree.isItemExpanded(alphaFolder)
+            && nativeTree.row(forItem: alphaLeaf) < 0 && !store.changesFileTreeState.expandedIDs.contains(alphaFolderID)
+            && store.changesOverviewFileID == alphaFile.id && store.selection == .change(alphaResult.id)
+            && identifiers(host).contains("lens-diff-line-columns"))
+        let betaRoot = try treeItem(betaRootID, tree: projection.fileTree, outline: nativeTree)
+        select(betaRoot, in: nativeTree)
+        if nativeTree.isItemExpanded(betaRoot) { try arrow(.left, in: nativeTree) }
+        select(alphaFolder, in: nativeTree); try await settle(host)
+        let collapsedState = store.changesFileTreeState.expandedIDs
+        check("native-tree-toggle-hides-navigation-without-closing-diff", press("lens-changes-tree-toggle", in: host))
+        try await waitFor(host, "native-tree-hidden") { fileTree(in: host) == nil }
+        check("hidden-tree-preserves-selected-file-and-recorded-reading", !store.changesFileTreeVisible
+            && store.changesOverviewFileID == alphaFile.id && store.selection == .change(alphaResult.id)
+            && identifiers(host).contains("lens-diff-line-columns"))
+        check("native-tree-toggle-restores-navigation", press("lens-changes-tree-toggle", in: host))
+        try await waitFor(host, "native-tree-restored") { fileTree(in: host) != nil }
+        let restoredTree = try require(fileTree(in: host), "restored native file tree")
+        let restoredFolder = try treeItem(alphaFolderID, tree: projection.fileTree, outline: restoredTree)
+        check("hide-show-restores-collapsed-folder-and-native-folder-selection",
+            store.changesFileTreeState.expandedIDs == collapsedState && !restoredTree.isItemExpanded(restoredFolder)
+            && (restoredTree.item(atRow: restoredTree.selectedRow) as? NSObject) === restoredFolder)
+
+        stage = "local-tree-filter-retains-diff"
+        let filterQuery = "NoDiff.swift"
+        let filteredTree = projection.fileTree.filtered(matching: filterQuery)
+        store.changesFileTreeQuery = filterQuery
+        try await waitFor(host, stage) {
+            fileTree(in: host).map { nativeItemCount(in: $0) == filteredTree.nodesByID.count } == true
+        }
+        check("local-file-filter-removes-current-leaf-without-changing-session-query-or-diff",
+            !filteredTree.nodesByID.values.contains { $0.fileID == alphaFile.id }
+            && store.query.isEmpty && store.changesOverviewFileID == alphaFile.id
+            && store.selection == .change(alphaResult.id) && identifiers(host).contains("lens-diff-line-columns"))
+        store.changesFileTreeQuery = ""
+        try await waitFor(host, "local-tree-filter-removed") {
+            fileTree(in: host).map { nativeItemCount(in: $0) == projection.fileTree.nodesByID.count } == true
+        }
+        let refreshedTree = try require(fileTree(in: host), "tree after removing local filter")
+        let refreshedFolder = try treeItem(alphaFolderID, tree: projection.fileTree, outline: refreshedTree)
+        let retainedAlphaObject = try treeItem(alphaNode.id, tree: projection.fileTree, outline: refreshedTree)
+        check("removing-local-filter-restores-files-and-collapsed-navigation", !refreshedTree.isItemExpanded(refreshedFolder)
+            && store.changesFileTreeState.expandedIDs == collapsedState && store.selection == .change(alphaResult.id))
+
+        stage = "tree-state-through-live-model-publication"
+        var liveTreeSnapshot = initial
+        let liveID = "anonymous-tree-added-operation"
+        liveTreeSnapshot.collectedAt = initial.collectedAt.addingTimeInterval(2)
+        liveTreeSnapshot.events.append(LensEvent(id: liveID, timestamp: ChangesOverviewFixture.epoch.addingTimeInterval(15),
+            agentID: fixture.childID, kind: .toolCall, title: "Anonymous tree publication", toolName: "apply_patch",
+            callID: liveID, environmentID: fixture.beta.path, source: SourceRef(path: "/fixture/in-memory-metadata-no-journal")))
+        liveTreeSnapshot.changes.append(ChangeRecord(id: liveID + "-trace", path: fixture.beta.path + "/src/Added.swift",
+            environmentID: fixture.beta.path, agentID: fixture.childID, eventID: liveID, kind: .requestedPatch))
+        store.snapshot = liveTreeSnapshot; await store.waitForPresentation()
+        let liveTree = try require(store.presentation?.changesOverview.fileTree, "refreshed tree projection")
+        try await waitFor(host, stage) { nativeItemCount(in: refreshedTree) == liveTree.nodesByID.count }
+        let publishedFolder = try treeItem(alphaFolderID, tree: liveTree, outline: refreshedTree)
+        let publishedAlpha = try treeItem(alphaNode.id, tree: liveTree, outline: refreshedTree)
+        let publishedBetaRoot = try treeItem(betaRootID, tree: liveTree, outline: refreshedTree)
+        check("live-tree-refresh-preserves-item-identity-collapsed-folders-and-selected-diff",
+            publishedAlpha === retainedAlphaObject && publishedFolder === refreshedFolder
+            && !refreshedTree.isItemExpanded(publishedFolder) && !refreshedTree.isItemExpanded(publishedBetaRoot)
+            && (refreshedTree.item(atRow: refreshedTree.selectedRow) as? NSObject) === publishedFolder
+            && store.changesFileTreeState.expandedIDs == collapsedState
+            && store.changesOverviewFileID == alphaFile.id && store.selection == .change(alphaResult.id)
+            && identifiers(host).contains("lens-diff-line-columns"))
+        check("native-reveal-action-is-available-after-live-refresh", press("lens-changes-tree-reveal", in: host))
+        try await waitFor(host, "native-reveal-expands-and-selects-current-file") {
+            refreshedTree.isItemExpanded(publishedFolder)
+                && (refreshedTree.item(atRow: refreshedTree.selectedRow) as? NSObject) === publishedAlpha
+        }
+        check("reveal-expands-only-selected-worktree-and-keeps-recorded-diff",
+            projection.fileTree.ancestorsByFileID[alphaFile.id]?.allSatisfy {
+                store.changesFileTreeState.expandedIDs.contains($0)
+            } == true && !refreshedTree.isItemExpanded(publishedBetaRoot)
+            && store.selection == .change(alphaResult.id) && identifiers(host).contains("lens-diff-line-columns"))
+        observations.append(["scenario": "native-tree-navigation-and-live-publication",
+            "folderAction": "NSOutlineView left/right keyboard events and identified object selection",
+            "addedMetadataFileCount": 1, "collectorIOQualified": false,
+            "selectedFileID": alphaFile.id, "selectedTraceID": alphaResult.id,
+            "expandedNodeIDs": store.changesFileTreeState.expandedIDs.sorted()])
+        renders.append(try capture(host, output.appendingPathComponent("changes-file-tree-revealed-component-cache.png")))
+        store.snapshot = initial; await store.waitForPresentation()
+        try await waitFor(host, "tree-fixture-baseline-restored") {
+            fileTree(in: host).map { nativeItemCount(in: $0) == projection.fileTree.nodesByID.count } == true
+        }
 
         stage = "filtered-selection"
         store.changesKindFilter = .requestedPatch
@@ -228,6 +338,8 @@ import SwiftUI
         try await waitFor(host, stage) { identifiers(host).contains("lens-changes-activity-graph") }
         check("worktree-activity-mode-exposes-graph-and-complete-list", Set(["lens-changes-activity-graph",
             "lens-changes-activity-list"]).isSubset(of: identifiers(host)))
+        check("worktree-activity-retains-right-file-tree-and-left-reading-pane",
+            identifiers(host).contains("lens-changes-reading-pane") && treeLayout(in: host).right && treeLayout(in: host).fits)
         check("worktree-mode-retains-selected-file-and-trace", store.changesOverviewFileID == alphaFile.id
             && store.selection == .change(alphaResult.id))
         renders.append(try capture(host, output.appendingPathComponent("changes-worktree-activity-light-component-cache.png")))
@@ -236,18 +348,28 @@ import SwiftUI
         host.rootView = mainView(store: store, context: context)
         window.setContentSize(NSSize(width: 1520, height: 980)); try await settle(host)
         store.changesOverviewEnvironmentID = fixture.alpha.path
+        store.changesFileTreeQuery = "Same.swift"; store.changesFileTreeVisible = false
+        try await settle(host)
+        let checkpointExpansion = store.changesFileTreeState.expandedIDs
         store.navigate(.event(alphaRequest.eventID), newTab: true)
         check("new-tab-opens-recorded-action-with-overview-return", store.tabContentDestination == .event(alphaRequest.eventID)
             && !store.workspacePresented && store.hasWorkspaceReturn)
         store.changesPresentation = .actions; store.changesOverviewMode = .files
         store.changesOverviewEnvironmentID = fixture.beta.path; store.changesOverviewFileID = betaFile.id
         store.changesOverviewDetailMode = .currentGit; store.changesKindFilter = .requestedPatch
+        store.changesFileTreeQuery = "NoDiff.swift"; store.changesFileTreeVisible = true
+        let temporaryTreeState = ChangesFileTreeViewState()
+        store.changesFileTreeState = temporaryTreeState
         store.goBack(); await store.waitForPresentation(); try await settle(host)
         check("back-restores-all-overview-checkpoint-bindings", store.workspacePresented && store.section == .changes
             && store.selection == .change(alphaResult.id) && store.changesPresentation == .overview
             && store.changesOverviewMode == .activity && store.changesOverviewEnvironmentID == fixture.alpha.path
             && store.changesOverviewFileID == alphaFile.id && store.changesOverviewDetailMode == .recorded
             && store.changesKindFilter == nil)
+        check("back-restores-tree-filter-visibility-and-copied-expansion-checkpoint",
+            store.changesFileTreeQuery == "Same.swift" && !store.changesFileTreeVisible
+            && store.changesFileTreeState !== temporaryTreeState
+            && store.changesFileTreeState.expandedIDs == checkpointExpansion)
         store.goForward(); await store.waitForPresentation()
         check("forward-reuses-one-reader-tab", store.tabContentDestination == .event(alphaRequest.eventID)
             && store.tabs.filter { $0.destination == .event(alphaRequest.eventID) }.count == 1)
@@ -255,23 +377,31 @@ import SwiftUI
         check("workspace-return-restores-overview-mode-file-and-environment", store.workspacePresented
             && store.changesOverviewMode == .activity && store.changesOverviewFileID == alphaFile.id
             && store.changesOverviewEnvironmentID == fixture.alpha.path)
+        check("workspace-return-restores-tree-reading-context", store.changesFileTreeQuery == "Same.swift"
+            && !store.changesFileTreeVisible && store.changesFileTreeState.expandedIDs == checkpointExpansion)
 
         stage = "adaptive-layouts"
-        store.changesOverviewMode = .files
+        store.changesOverviewMode = .files; store.changesFileTreeQuery = ""; store.changesFileTreeVisible = true
         for (name, width, scheme) in [("narrow", 440.0, ColorScheme.light), ("medium", 720.0, .light),
                                       ("wide", 1280.0, .light), ("wide-dark", 1280.0, .dark)] {
             host.rootView = component(store: store, context: context, scheme: scheme)
             window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
             window.setContentSize(NSSize(width: width, height: 980))
-            try await waitFor(host, name + "-layout") { identifiers(host).contains("lens-changes-presentation") }
+            try await waitFor(host, name + "-layout") {
+                identifiers(host).contains("lens-changes-presentation") && fileTree(in: host) != nil
+            }
             check(name + "-preserves-file-trace-and-mode", store.changesOverviewFileID == alphaFile.id
                 && store.selection == .change(alphaResult.id) && store.changesOverviewMode == .files)
-            let geometry = controlsGeometry(host, window: window,
-                selectors: ["lens-changes-presentation", "lens-changes-current-git"])
+            let geometry = try await waitForPublicControlsGeometry(host, window: window,
+                selectors: ["lens-changes-presentation", "lens-changes-current-git", "lens-changes-tree-toggle"])
             check(name + "-overview-controls-stay-in-window", geometry.fits)
+            let layout = treeLayout(in: host)
+            check(name + "-file-tree-stays-visible-in-window", layout.fits)
+            check(name + "-file-tree-uses-right-or-bottom-native-split", width >= 560 ? layout.right : layout.below)
             renders.append(try capture(host, output.appendingPathComponent("changes-" + name + "-component-cache.png")))
             observations.append(["scenario": name + "-component-layout", "width": width, "height": 980,
-                "identifiers": identifiers(host).sorted(), "geometry": geometry.observation])
+                "identifiers": identifiers(host).sorted(), "geometry": geometry.observation,
+                "fileTreeLayout": layout.observation])
         }
 
         stage = "two-window-state"
@@ -287,16 +417,50 @@ import SwiftUI
         let peerHost = NSHostingView(rootView: component(store: peer, context: peerContext, scheme: .light))
         let peerWindow = makeWindow(host: peerHost, context: peerContext, width: 1100, height: 900, x: -9000)
         defer { peerWindow.contentView = nil; peerWindow.close() }
-        try await waitFor(peerHost, stage) { identifiers(peerHost).contains("lens-changes-activity-graph") }
+        let peerOverview = try require(peer.presentation?.changesOverview, "peer-window overview projection")
+        let peerProjection = ChangesFileTree(groups: peerOverview.groups.filter { $0.id == fixture.beta.path })
+        try await waitFor(peerHost, stage) {
+            identifiers(peerHost).contains("lens-changes-activity-graph")
+                && fileTree(in: peerHost).map { nativeItemCount(in: $0) == peerProjection.nodesByID.count } == true
+        }
+        let peerTree = try require(fileTree(in: peerHost), "peer-window native file tree")
+        let peerFolderID = try require(peerProjection.ancestorsByFileID[betaFile.id]?.last, "peer beta parent folder")
+        let peerFolder = try treeItem(peerFolderID, tree: peerProjection, outline: peerTree)
+        let peerLeaf = try treeItem(betaNode.id, tree: peerProjection, outline: peerTree)
+        let peerExpansion = peer.changesFileTreeState.expandedIDs
         store.changesOverviewEnvironmentID = nil; store.changesOverviewMode = .files
         store.changesKindFilter = .recordedResult
+        store.changesFileTreeQuery = "NoDiff.swift"; store.changesFileTreeVisible = false
         await store.waitForPresentation(); try await settle(peerHost)
         check("two-windows-keep-independent-overview-bindings", peer.changesOverviewMode == .activity
             && peer.changesOverviewEnvironmentID == fixture.beta.path && peer.changesOverviewFileID == betaFile.id
             && peer.selection == .change(betaTrace) && peer.changesKindFilter == nil
             && store.changesOverviewMode == .files && store.changesKindFilter == .recordedResult)
+        check("two-windows-keep-independent-tree-filter-visibility-and-expansion", peer.changesFileTreeVisible
+            && peer.changesFileTreeQuery.isEmpty && peer.changesFileTreeState !== store.changesFileTreeState
+            && peer.changesFileTreeState.expandedIDs == peerExpansion
+            && (peerTree.item(atRow: peerTree.selectedRow) as? NSObject) === peerLeaf
+            && !store.changesFileTreeVisible && store.changesFileTreeQuery == "NoDiff.swift")
+        select(peerFolder, in: peerTree); try arrow(.left, in: peerTree); try await settle(peerHost)
+        var peerRefreshed = try require(peer.snapshot, "peer snapshot before independent publication")
+        peerRefreshed.collectedAt = peerRefreshed.collectedAt.addingTimeInterval(3)
+        let peerPresentationID = peer.presentation?.id
+        peer.snapshot = peerRefreshed; await peer.waitForPresentation(); try await settle(peerHost)
+        check("peer-window-refresh-keeps-native-collapsed-folder-and-selected-diff",
+            peer.presentation?.id != peerPresentationID && !peerTree.isItemExpanded(peerFolder)
+            && (peerTree.item(atRow: peerTree.selectedRow) as? NSObject) === peerFolder
+            && peer.changesOverviewFileID == betaFile.id && peer.selection == .change(betaTrace)
+            && identifiers(peerHost).contains("lens-diff-line-columns"))
+        check("peer-window-can-reveal-selection-independently", press("lens-changes-tree-reveal", in: peerHost))
+        try await waitFor(peerHost, "peer-native-selected-file-reveal") {
+            peerTree.isItemExpanded(peerFolder) && (peerTree.item(atRow: peerTree.selectedRow) as? NSObject) === peerLeaf
+        }
+        check("peer-reveal-does-not-change-other-window-tree-context", !store.changesFileTreeVisible
+            && store.changesFileTreeQuery == "NoDiff.swift" && store.changesOverviewFileID == alphaFile.id
+            && store.selection == .change(alphaResult.id))
         renders.append(try capture(peerHost, output.appendingPathComponent("changes-peer-worktree-activity-component-cache.png")))
-        store.changesKindFilter = nil; await store.waitForPresentation()
+        store.changesKindFilter = nil; store.changesFileTreeQuery = ""; store.changesFileTreeVisible = true
+        await store.waitForPresentation()
 
         stage = "dense-graph-model-publication"
         let denseCount = 1200
@@ -399,6 +563,127 @@ import SwiftUI
     @MainActor private static func descendants(_ view: NSView) -> [NSView] {
         [view] + view.subviews.flatMap(descendants)
     }
+    @MainActor private static func fileTree(in host: NSView) -> NSOutlineView? {
+        let matches = descendants(host).compactMap { $0 as? NSOutlineView }.filter {
+            !$0.isHiddenOrHasHiddenAncestor && $0.identifier?.rawValue == "lens-changes-file-tree-native"
+        }
+        return matches.count == 1 ? matches.first : nil
+    }
+    /// Resolve opaque native objects against the prepared node hierarchy. Row
+    /// numbers are only queried after resolving identity, so disclosure changes
+    /// cannot accidentally select the next worktree's same-named file.
+    @MainActor private static func treeItem(_ id: String, tree: ChangesFileTree, outline: NSOutlineView) throws -> NSObject {
+        let source = try require(outline.dataSource, "native tree data source")
+        func find(_ nodes: [ChangesFileTreeNode], parent: NSObject?) throws -> NSObject? {
+            let count = source.outlineView?(outline, numberOfChildrenOfItem: parent) ?? 0
+            guard count == nodes.count else { throw LensError.unavailable("Native hierarchy does not match the prepared changed-file nodes.") }
+            for (index, node) in nodes.enumerated() {
+                let object = try require(source.outlineView?(outline, child: index, ofItem: parent) as? NSObject,
+                                         "native object for changed-file node " + node.id)
+                if node.id == id { return object }
+                if let result = try find(node.children, parent: object) { return result }
+            }
+            return nil
+        }
+        return try require(find(tree.roots, parent: nil), "native changed-file node " + id)
+    }
+    @MainActor private static func nativeItemCount(in outline: NSOutlineView) -> Int {
+        guard let source = outline.dataSource else { return 0 }
+        var total = 0
+        func count(_ parent: Any?, depth: Int) {
+            guard depth < 70, total < 100_000 else { return }
+            let children = source.outlineView?(outline, numberOfChildrenOfItem: parent) ?? 0
+            for index in 0..<children {
+                guard let object = source.outlineView?(outline, child: index, ofItem: parent) else { continue }
+                total += 1; count(object, depth: depth + 1)
+            }
+        }
+        count(nil, depth: 0)
+        return total
+    }
+    @MainActor private static func select(_ item: NSObject, in outline: NSOutlineView) {
+        let row = outline.row(forItem: item)
+        guard row >= 0 else { return }
+        outline.window?.makeFirstResponder(outline)
+        outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        outline.scrollRowToVisible(row)
+    }
+    private enum TreeArrow: Equatable { case left, right }
+    @MainActor private static func arrow(_ direction: TreeArrow, in outline: NSOutlineView) throws {
+        let characters = direction == .left ? "\u{f702}" : "\u{f703}"
+        let code: UInt16 = direction == .left ? 123 : 124
+        let event = try require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .function,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: outline.window?.windowNumber ?? 0,
+            context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code),
+            "native folder disclosure key event")
+        outline.keyDown(with: event)
+    }
+    @MainActor private static func expandAncestors(of fileID: String, tree: ChangesFileTree, outline: NSOutlineView) throws {
+        let ancestors = try require(tree.ancestorsByFileID[fileID], "tree ancestors for selected file")
+        for id in ancestors {
+            let item = try treeItem(id, tree: tree, outline: outline)
+            guard outline.row(forItem: item) >= 0 else { throw LensError.unavailable("Native ancestor is not visible before disclosure.") }
+            select(item, in: outline)
+            if !outline.isItemExpanded(item) { try arrow(.right, in: outline) }
+        }
+    }
+    private struct TreeLayout {
+        let right: Bool, below: Bool, fits: Bool
+        let observation: [String: Any]
+    }
+    @MainActor private static func treeViewportFrame(_ tree: NSOutlineView, in host: NSView) -> NSRect? {
+        guard let scroll = tree.enclosingScrollView, !scroll.isHiddenOrHasHiddenAncestor else { return nil }
+        // The outline's bounds describe the entire scrolling document. Its clip
+        // bounds, converted from the clip's own coordinate system, describe the
+        // actual viewport even after scrolling a long tree.
+        return host.convert(scroll.contentView.bounds, from: scroll.contentView)
+    }
+    @MainActor private static func treeLayout(in host: NSView) -> TreeLayout {
+        guard let tree = fileTree(in: host) else {
+            return TreeLayout(right: false, below: false, fits: false, observation: ["nativeTreeFound": false])
+        }
+        var parent: NSView? = tree.superview
+        var nativeSplits: [[String: Any]] = []
+        while let current = parent {
+            if let split = current as? NSSplitView {
+                nativeSplits.append(["class": String(describing: type(of: split)),
+                    "subviewCount": split.subviews.count, "arrangedPaneCount": split.arrangedSubviews.count,
+                    "splitIsVertical": split.isVertical, "hostFrame": NSStringFromRect(host.convert(split.bounds, from: split))])
+            }
+            // SwiftUI can add auxiliary divider views to an NSSplitView.
+            // arrangedSubviews identifies the actual panes, as production pane
+            // sizing does, rather than assuming every raw subview is a pane.
+            if let split = current as? NSSplitView, split.arrangedSubviews.count == 2,
+               let first = split.arrangedSubviews.first, let last = split.arrangedSubviews.last,
+               descendants(last).contains(where: { $0 === tree }) {
+                let reading = host.convert(first.bounds, from: first)
+                let navigation = host.convert(last.bounds, from: last)
+                let visible = host.bounds.intersection(host.visibleRect)
+                let viewport = treeViewportFrame(tree, in: host)
+                let fits = viewport.map {
+                    !visible.isNull && $0.width > 0 && $0.height > 0
+                        && [$0.minX, $0.maxX, $0.minY, $0.maxY].allSatisfy(\.isFinite)
+                        && $0.minX >= visible.minX - 2 && $0.maxX <= visible.maxX + 2
+                        && $0.minY >= visible.minY - 2 && $0.maxY <= visible.maxY + 2
+                        && $0.minX >= navigation.minX - 2 && $0.maxX <= navigation.maxX + 2
+                        && $0.minY >= navigation.minY - 2 && $0.maxY <= navigation.maxY + 2
+                } ?? false
+                let right = split.isVertical && navigation.minX >= reading.maxX - 2
+                let below = !split.isVertical && (host.isFlipped
+                    ? navigation.minY >= reading.maxY - 2 : navigation.maxY <= reading.minY + 2)
+                return TreeLayout(right: right, below: below, fits: fits, observation: [
+                    "nativeTreeFound": true, "nativeResizableSplit": true, "splitIsVertical": split.isVertical,
+                    "readingPaneFrame": NSStringFromRect(reading), "treePaneFrame": NSStringFromRect(navigation),
+                    "treeViewportFrame": viewport.map(NSStringFromRect) ?? "<unavailable>",
+                    "treeDocumentFrame": NSStringFromRect(host.convert(tree.bounds, from: tree)),
+                    "hostVisibleRect": NSStringFromRect(visible), "treeIsRight": right, "treeIsBelow": below,
+                    "treeFitsVisibleContent": fits, "nativeSplits": nativeSplits])
+            }
+            parent = current.superview
+        }
+        return TreeLayout(right: false, below: false, fits: false, observation: ["nativeTreeFound": true,
+            "nativeResizableSplit": false, "nativeSplits": nativeSplits])
+    }
     private static func axValue(_ element: AXUIElement, _ key: String) -> (AXError, CFTypeRef?) {
         var value: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(element, key as CFString, &value)
@@ -454,9 +739,38 @@ import SwiftUI
     }
     private struct ControlGeometry {
         let fits: Bool
+        let publicQualified: Bool
         let observation: [String: Any]
     }
     private static let interactiveRoles: Set<String> = ["AXButton", "AXRadioButton", "AXPopUpButton", "AXMenuButton", "AXCheckBox", "AXSwitch"]
+
+    @MainActor private static func waitForPublicControlsGeometry(_ host: NSView, window: NSWindow,
+                                                                selectors: [String]) async throws -> ControlGeometry {
+        // A root replacement/resize can precede registration of this exact
+        // window in its public AX tree. Let that owned tree catch up while
+        // retaining all selector, target-count and containment requirements.
+        // Other native wait/action helpers keep their existing fallback rules.
+        let started = ProcessInfo.processInfo.systemUptime
+        let deadline = started + 5
+        var attempts = 0
+        while true {
+            await Task.yield(); draw(host)
+            let geometry = controlsGeometry(host, window: window, selectors: selectors)
+            attempts += 1
+            let ready = geometry.fits && geometry.publicQualified
+            let now = ProcessInfo.processInfo.systemUptime
+            if ready || now >= deadline {
+                var observation = geometry.observation
+                observation["publicRegistrationWaitAttempts"] = attempts
+                observation["publicRegistrationWaitSeconds"] = now - started
+                observation["publicRegistrationWaitTimedOut"] = !ready
+                // Missing public registration or control geometry remains a
+                // failed check; a native fallback alone cannot satisfy this wait.
+                return ControlGeometry(fits: ready, publicQualified: geometry.publicQualified, observation: observation)
+            }
+            try await Task.sleep(nanoseconds: UInt64(min(0.02, deadline - now) * 1_000_000_000))
+        }
+    }
 
     @MainActor private static func controlsGeometry(_ host: NSView, window: NSWindow, selectors: [String]) -> ControlGeometry {
         let nativeNodes = elements(host), publicTree = ownAXNodes(host)
@@ -485,7 +799,7 @@ import SwiftUI
         }
         func nativeRecord(_ node: NSAccessibilityProtocol) -> [String: Any] {
             let frame = node.accessibilityFrame()
-            return ["role": node.accessibilityRole()?.rawValue ?? "<unknown>", "identifier": node.accessibilityIdentifier(),
+            return ["role": node.accessibilityRole()?.rawValue ?? "<unknown>", "identifier": node.accessibilityIdentifier() ?? "",
                 "label": node.accessibilityLabel() ?? node.accessibilityTitle() ?? "",
                 "screenFrameAppKit": NSStringFromRect(frame), "hostFrame": NSStringFromRect(inHost(frame)),
                 "fitsVisibleContent": fits(inHost(frame))]
@@ -498,7 +812,7 @@ import SwiftUI
                 "screenFramePublicAX": frame.map(NSStringFromRect) ?? "<unavailable>",
                 "hostFrame": local.map(NSStringFromRect) ?? "<unavailable>", "fitsVisibleContent": fits(local)]
         }
-        var records: [[String: Any]] = [], passed = true
+        var records: [[String: Any]] = [], passed = true, publicQualified = true
         for selector in selectors {
             let nativeRoots = nativeNodes.filter { $0.accessibilityIdentifier() == selector }
             let publicRoots = publicTree.nodes.filter { axValue($0, kAXIdentifierAttribute).1 as? String == selector }
@@ -527,10 +841,13 @@ import SwiftUI
             // with all three required, rather than declare the group itself a button.
             let minimumTargets = selector == "lens-changes-presentation" ? 3 : 1
             let usePublic = !publicRoots.isEmpty
+            let publicSelectorPassed = usePublic && windowSizeMatches && publicTargets.count >= minimumTargets
+                && publicTargets.allSatisfy { fits(axFrame($0).flatMap(publicInHost)) }
             let selectorPassed = usePublic
-                ? windowSizeMatches && publicTargets.count >= minimumTargets && publicTargets.allSatisfy { fits(axFrame($0).flatMap(publicInHost)) }
+                ? publicSelectorPassed
                 : nativeTargets.count >= minimumTargets && nativeTargets.allSatisfy { fits(inHost($0.accessibilityFrame())) }
             passed = passed && selectorPassed
+            publicQualified = publicQualified && publicSelectorPassed
             records.append(["selector": selector, "passed": selectorPassed, "checkedProvider": usePublic ? "public-own-process-AX" : "NSAccessibilityProtocol",
                 "minimumInteractiveTargets": minimumTargets, "nativeCandidates": nativeRoots.map(nativeRecord),
                 "nativeInteractiveTargets": nativeTargets.map(nativeRecord), "publicCandidates": publicRoots.map(publicRecord),
@@ -543,7 +860,7 @@ import SwiftUI
             "hostFrame": NSStringFromRect(host.frame), "hostBounds": NSStringFromRect(host.bounds),
             "hostVisibleRect": NSStringFromRect(host.visibleRect), "windowFramePublicAX": publicWindowFrame.map(NSStringFromRect) ?? "<unavailable>",
             "publicWindowSizeMatchesAppKit": windowSizeMatches, "publicAXDiagnostics": publicTree.diagnostics, "controls": records]
-        return ControlGeometry(fits: passed, observation: value)
+        return ControlGeometry(fits: passed, publicQualified: publicQualified, observation: value)
     }
     private static func axFrame(_ element: AXUIElement) -> CGRect? {
         guard let position = axValue(element, kAXPositionAttribute).1, CFGetTypeID(position) == AXValueGetTypeID(),

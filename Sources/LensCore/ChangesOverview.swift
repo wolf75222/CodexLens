@@ -108,6 +108,8 @@ public struct ChangesOverviewEnvironment: Identifiable, Hashable, Sendable, Chan
 
 public struct ChangesOverviewProjection: Hashable, Sendable, ChangesOverviewSummarized {
     public let groups: [ChangesOverviewEnvironment]
+    /// Stored navigation derived from these exact filtered groups, prepared with the projection.
+    public let fileTree: ChangesFileTree
     public var files: [ChangesOverviewFile] { groups.flatMap(\.files) }
     /// An activity touching multiple files is counted once.
     public let activityCount: Int
@@ -115,6 +117,7 @@ public struct ChangesOverviewProjection: Hashable, Sendable, ChangesOverviewSumm
 
     fileprivate init(groups: [ChangesOverviewEnvironment], traces: [OverviewTrace]) {
         self.groups = groups
+        fileTree = ChangesFileTree(groups: groups)
         activityCount = Set(traces.map(\.activityID)).count
         summary = ChangesOverviewSummary(traces: traces)
     }
