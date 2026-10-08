@@ -616,7 +616,7 @@ import SwiftUI
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: outline.window?.windowNumber ?? 0,
             context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code),
             "native folder disclosure key event")
-        outline.keyDown(event)
+        outline.keyDown(with: event)
     }
     @MainActor private static func expandAncestors(of fileID: String, tree: ChangesFileTree, outline: NSOutlineView) throws {
         let ancestors = try require(tree.ancestorsByFileID[fileID], "tree ancestors for selected file")
@@ -745,7 +745,7 @@ import SwiftUI
         }
         func nativeRecord(_ node: NSAccessibilityProtocol) -> [String: Any] {
             let frame = node.accessibilityFrame()
-            return ["role": node.accessibilityRole()?.rawValue ?? "<unknown>", "identifier": node.accessibilityIdentifier(),
+            return ["role": node.accessibilityRole()?.rawValue ?? "<unknown>", "identifier": node.accessibilityIdentifier() ?? "",
                 "label": node.accessibilityLabel() ?? node.accessibilityTitle() ?? "",
                 "screenFrameAppKit": NSStringFromRect(frame), "hostFrame": NSStringFromRect(inHost(frame)),
                 "fitsVisibleContent": fits(inHost(frame))]
