@@ -793,6 +793,7 @@ struct InvestigationView: View {
         .onChange(of: investigator.recordID) { _, _ in updateTranscriptInput() }
         .onChange(of: investigator.capsule?.rootThreadID) { _, _ in updateTranscriptInput() }
         .sheet(isPresented: $showConnectionSettings) { connectionSettings }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("lens-side-chat")
     }
 

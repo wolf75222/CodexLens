@@ -17,7 +17,7 @@ import SwiftUI
 
     @MainActor private static func qualify() async throws {
         let output = URL(fileURLWithPath: CommandLine.arguments[CommandLine.arguments.firstIndex(of: "--output")! + 1])
-        var checks: [[String: Any]] = [], renders: [String] = []
+        var checks: [[String: Any]] = [], renders: [String] = [], accessibilitySamples: [[String: Any]] = []
         func check(_ name: String, _ passed: Bool) { checks.append(["name": name, "passed": passed]) }
         let preferences = UserDefaults.standard
         let keys = ["LensCodexModel", "LensCodexReasoningEfforts"]
@@ -96,6 +96,10 @@ import SwiftUI
                 try await Task.sleep(for: .milliseconds(250))
                 host.layoutSubtreeIfNeeded()
                 let controls = elements(host)
+                accessibilitySamples.append(["capture": name, "controls": controls.prefix(120).map {
+                    ["identifier": $0.accessibilityIdentifier() ?? "", "role": $0.accessibilityRole()?.rawValue ?? "",
+                     "label": $0.accessibilityLabel() ?? "", "value": String(describing: $0.accessibilityValue() ?? "")]
+                }])
                 let effort = controls.filter { $0.accessibilityIdentifier() == "lens-chat-effort-selector" }
                 check(name + "-exposes-effort-model-and-send-controls", effort.count == 1
                       && controls.contains { $0.accessibilityIdentifier() == "lens-chat-model-selector" }
@@ -119,7 +123,7 @@ import SwiftUI
         }
         await investigator.flushAndStop(); await restored.flushAndStop()
         store.stopObserving(); await store.investigation.flushAndStop()
-        let receipt: [String: Any] = ["checks": checks, "renders": renders,
+        let receipt: [String: Any] = ["checks": checks, "renders": renders, "accessibilitySamples": accessibilitySamples,
             "allExecutedChecksPassed": checks.allSatisfy { $0["passed"] as? Bool == true },
             "captureMethod": "Offscreen AppKit NSHostingView cacheDisplay; production entrypoint replaced.",
             "modelRequests": 0, "anonymousMetadataOnly": true,
