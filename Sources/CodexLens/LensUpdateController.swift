@@ -17,14 +17,15 @@ import Sparkle
     private(set) var availableVersion: String?
     private(set) var unavailableReason: String?
     @ObservationIgnored private var started = false
-    #if canImport(Sparkle)
-    @ObservationIgnored private var controller: SPUStandardUpdaterController?
-    @ObservationIgnored private var observation: NSKeyValueObservation?
-    #endif
+    @ObservationIgnored private var driver: (any LensUpdateDriving)?
+
+    init(driver: (any LensUpdateDriving)? = nil) { self.driver = driver; super.init() }
+    var actionTitle: String { sessionInProgress ? "Afficher la mise à jour…" : "Mettre à jour l’app…" }
 
     func start() {
         guard !started else { return }
         started = true
+        if driver == nil {
         #if canImport(Sparkle)
         let bundle = Bundle.main
         guard bundle.bundleIdentifier == "fr.codexlens.inspector", bundle.bundleURL.pathExtension == "app",
@@ -37,44 +38,49 @@ import Sparkle
             unavailableReason = "Les mises à jour sont disponibles dans l’application distribuée."
             return
         }
-        let controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: self, userDriverDelegate: nil)
-        self.controller = controller
-        do { try controller.updater.start() }
-        catch { unavailableReason = error.localizedDescription; return }
-        refreshProperties()
-        observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] _, _ in
-            Task { @MainActor [weak self] in self?.refreshProperties() }
-        }
+        driver = LensSparkleUpdateDriver(delegate: self)
         #else
         unavailableReason = "Les mises à jour sont disponibles dans l’application distribuée."
+        return
         #endif
+        }
+        guard let driver else { return }
+        do { try driver.start() }
+        catch { unavailableReason = error.localizedDescription; return }
+        refreshProperties()
+        driver.observeChanges { [weak self] in self?.refreshProperties() }
     }
 
     func check() {
         start()
+        guard unavailableReason == nil else { return }
+        // KVO publication can lag behind a second click. Read Sparkle's actual
+        // state before deciding whether to start or bring its window forward.
+        refreshProperties()
         guard canCheck, !LensApplicationCoordinator.shared.maintenanceInProgress else { return }
-        status = "Recherche de mises à jour…"
-        availableVersion = nil
-        #if canImport(Sparkle)
-        controller?.checkForUpdates(nil)
-        #endif
+        if !sessionInProgress {
+            status = "Recherche de mises à jour…"
+            availableVersion = nil
+        }
+        driver?.check()
+        refreshProperties()
     }
 
     func setAutomaticChecks(_ enabled: Bool) {
-        #if canImport(Sparkle)
-        controller?.updater.automaticallyChecksForUpdates = enabled
+        driver?.setAutomaticChecks(enabled)
         refreshProperties()
-        #endif
     }
 
     private func refreshProperties() {
-        #if canImport(Sparkle)
-        guard let updater = controller?.updater else { return }
-        canCheck = updater.canCheckForUpdates
-        sessionInProgress = updater.sessionInProgress
-        automaticChecks = updater.automaticallyChecksForUpdates
-        lastChecked = updater.lastUpdateCheckDate
-        #endif
+        guard let value = driver?.snapshot else { return }
+        canCheck = value.canCheck
+        sessionInProgress = value.sessionInProgress
+        automaticChecks = value.automaticChecks
+        lastChecked = value.lastChecked
+    }
+
+    func recordAvailableVersion(_ version: String) {
+        availableVersion = version; status = ""; refreshProperties()
     }
 }
 
@@ -89,7 +95,7 @@ extension LensUpdateController: SPUUpdaterDelegate {
     }
     func updater(_ updater: SPUUpdater, shouldDownloadReleaseNotesForUpdate updateItem: SUAppcastItem) -> Bool { false }
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
-        availableVersion = item.displayVersionString; status = ""
+        recordAvailableVersion(item.displayVersionString)
     }
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
         refreshProperties()
@@ -103,9 +109,35 @@ extension LensUpdateController: SPUUpdaterDelegate {
 }
 #endif
 
+struct LensUpdateButton: View {
+    @State private var updater: LensUpdateController
+    @ObservedObject private var application = LensApplicationCoordinator.shared
+    var iconOnly = false
+    var identifier = "lens-update-app"
+    init(updater: LensUpdateController = .shared, iconOnly: Bool = false, identifier: String = "lens-update-app") {
+        _updater = State(initialValue: updater); self.iconOnly = iconOnly; self.identifier = identifier
+    }
+    var body: some View {
+        Button { updater.check() } label: {
+            if iconOnly {
+                Label(LensL10n.text(updater.actionTitle), systemImage: symbol).labelStyle(.iconOnly)
+            } else {
+                Label(LensL10n.text(updater.actionTitle), systemImage: symbol).labelStyle(.titleAndIcon)
+            }
+        }
+        .disabled(!updater.canCheck || application.maintenanceInProgress)
+        .help(updater.unavailableReason.map { LensL10n.display($0) } ?? LensL10n.text("Vérifier la dernière release GitHub et ouvrir la mise à jour native."))
+        .accessibilityLabel(LensL10n.text(updater.actionTitle))
+        .accessibilityIdentifier(identifier)
+        .task { updater.start() }
+    }
+    private var symbol: String { updater.availableVersion == nil ? "arrow.down.circle" : "arrow.down.circle.fill" }
+}
+
 struct LensUpdateSettingsView: View {
-    @State private var updater = LensUpdateController.shared
+    @State private var updater: LensUpdateController
     @AppStorage("lens.language") private var language = "en"
+    init(updater: LensUpdateController = .shared) { _updater = State(initialValue: updater) }
     private func label(_ french: String, _ values: String...) -> String {
         var result = LensL10n.text(french, in: LensL10n.Language(rawValue: language) ?? .system)
         for (index, value) in values.enumerated() { result = result.replacingOccurrences(of: "{\(index)}", with: value) }
@@ -119,8 +151,7 @@ struct LensUpdateSettingsView: View {
         Toggle(label("Rechercher automatiquement les mises à jour"), isOn: Binding(get: { updater.automaticChecks }, set: updater.setAutomaticChecks))
             .disabled(updater.unavailableReason != nil)
         HStack {
-            Button(label("Rechercher des mises à jour…")) { updater.check() }.disabled(!updater.canCheck)
-                .accessibilityIdentifier("lens-check-updates")
+            LensUpdateButton(updater: updater, identifier: "lens-check-updates").buttonStyle(.borderedProminent)
             if let version = updater.availableVersion { Text(label("Version {0} disponible", version)).foregroundStyle(.secondary) }
             else if !updater.status.isEmpty { Text(label(updater.status)).foregroundStyle(.secondary) }
         }

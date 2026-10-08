@@ -6,6 +6,17 @@ Compatibility and test coverage are documented in each release's notes. A listed
 
 ## [Unreleased]
 
+## [0.43.4] - 2026-10-08
+
+### Added
+
+- A direct Update app toolbar button and a prominent equivalent in General settings, both using the existing signed GitHub release updater.
+
+### Fixed
+
+- Repeated update clicks use fresh Sparkle state and bring an existing update window forward without clearing its version or restarting the update flow.
+- Update-session state is observed directly so maintenance controls and button labels stay current.
+
 ## [0.43.3] - 2026-10-08
 
 ### Added
@@ -149,7 +160,8 @@ These versions were local deliveries, not published GitHub releases. Their dates
 
 Before public repository setup, development added passive live activity, linked agent/call/file navigation, historical version inspection, local conversation export, an isolated Codex chat, English/French settings, and native macOS menus and panels. Earlier private development receipts are not part of the public repository.
 
-[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.43.3...main
+[Unreleased]: https://github.com/wolf75222/CodexLens/compare/v0.43.4...main
+[0.43.4]: https://github.com/wolf75222/CodexLens/compare/v0.43.3...v0.43.4
 [0.43.3]: https://github.com/wolf75222/CodexLens/compare/v0.43.2...v0.43.3
 [0.43.2]: https://github.com/wolf75222/CodexLens/compare/v0.43.1...v0.43.2
 [0.43.1]: https://github.com/wolf75222/CodexLens/compare/v0.43.0...v0.43.1

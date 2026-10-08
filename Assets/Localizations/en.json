@@ -2395,6 +2395,9 @@
     "Effacer l’effort enregistré": "Clear saved effort",
     "Retirer le choix de Lens. Sans valeur par défaut annoncée, Codex conserve son réglage courant.": "Remove the Lens choice. When no default is reported, Codex keeps its current setting.",
     "Effort de raisonnement absent du catalogue de ce modèle ; choisissez-le à nouveau. Aucun tour lancé.": "This effort is not in the model’s catalogue. Choose another level. No turn was started.",
-    "Effort de raisonnement Codex invalide ; aucun envoi effectué.": "Invalid Codex reasoning effort. Nothing was sent."
+    "Effort de raisonnement Codex invalide ; aucun envoi effectué.": "Invalid Codex reasoning effort. Nothing was sent.",
+    "Mettre à jour l’app…": "Update app…",
+    "Afficher la mise à jour…": "Show update…",
+    "Vérifier la dernière release GitHub et ouvrir la mise à jour native.": "Check the latest GitHub release and open the native updater."
   }
 }

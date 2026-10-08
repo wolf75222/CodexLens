@@ -743,7 +743,8 @@ For a specific failure or unavailable record, inspect Sources and limitations an
 
 ## Application updates and removal
 
-- **Codex Lens → Check for Updates…** checks the signed stable GitHub feed. **Settings → General → Updates** offers optional automatic checks and the installed version. Installation needs your confirmation and replaces the current app in place, then relaunches it.
+- The toolbar’s download-arrow button and **Settings → General → Update app…** open the native update flow. **Codex Lens → Check for Updates…** offers the same command. The signed stable GitHub feed supplies the latest compatible release; confirmation replaces the current app in place and relaunches it.
+- During an update, **Show update…** returns to the existing progress window. Repeated clicks preserve the offered version and use current updater state. General settings also show the installed version and optional automatic checks.
 - **Settings → General → Maintenance** opens an uninstall review. Local Lens data stays by default. Optional cleanup lists only default Lens-owned folders and preferences; custom storage, Codex credentials, observed sessions, repositories and exports remain. Items move to Trash for recovery.
 - Sparkle 2.10.0 is pinned. Feed and archive signatures are verified before extraction; release-note WebViews and system profiling are disabled. Developer/QA copies cannot use the uninstall command. See [updates and removal](UPDATES.md) for installation requirements and verification limits.
 

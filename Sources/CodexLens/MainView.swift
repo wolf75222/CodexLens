@@ -176,6 +176,9 @@ struct MainView: View {
                 .labelStyle(.iconOnly)
         }
         ToolbarItem(id: "investigate", placement: .primaryAction) { LensActionButton(store: store, action: .chat).labelStyle(.iconOnly) }
+        ToolbarItem(id: "updateApp", placement: .primaryAction) {
+            if !store.busy { LensUpdateButton(iconOnly: true, identifier: "lens-toolbar-update") }
+        }
         ToolbarItem(id: "more", placement: .primaryAction) {
             Menu {
                 LensActionButton(store: store, action: .chat)
