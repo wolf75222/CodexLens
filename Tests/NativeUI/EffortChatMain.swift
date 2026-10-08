@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Foundation
 import LensCore
 import SwiftUI
@@ -6,7 +7,7 @@ import SwiftUI
 /// Anonymous capability metadata and native controls. No inference or credentials.
 @main struct EffortChatMain {
     static func main() {
-        NSApplication.shared.setActivationPolicy(.prohibited)
+        NSApplication.shared.setActivationPolicy(.accessory)
         Task { @MainActor in
             do { try await qualify() }
             catch { fputs("Chat effort qualification failed: \(error)\n", stderr) }
@@ -90,31 +91,39 @@ import SwiftUI
                 let host = NSHostingView(rootView: InvestigationView(investigator: investigator)
                     .environmentObject(store).environment(\.colorScheme, dark ? .dark : .light))
                 host.frame = NSRect(x: 0, y: 0, width: width, height: 650)
-                let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+                let window = NSWindow(contentRect: NSRect(x: 0, y: -6000, width: width, height: 650),
+                                      styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.setAccessibilityIdentifier("EffortChat-" + UUID().uuidString)
                 window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                host.sizingOptions = []
+                host.autoresizingMask = [.width, .height]
                 window.contentView = host
+                window.orderBack(nil)
                 try await Task.sleep(for: .milliseconds(250))
                 host.layoutSubtreeIfNeeded()
-                let controls = elements(host)
+                // SwiftUI virtual controls live in the public AX tree, not the
+                // raw NSView protocol hierarchy used by the native text editor.
+                let controls = try await ownControls(window: window, host: host)
                 accessibilitySamples.append(["capture": name, "controls": controls.prefix(120).map {
-                    ["identifier": $0.accessibilityIdentifier() ?? "", "role": $0.accessibilityRole()?.rawValue ?? "",
-                     "label": $0.accessibilityLabel() ?? "", "value": String(describing: $0.accessibilityValue() ?? "")]
+                    ["identifier": $0.identifier, "role": $0.role, "label": $0.label, "value": $0.value,
+                     "frame": $0.frame.map(NSStringFromRect) ?? "unavailable"]
                 }])
-                let effort = controls.filter { $0.accessibilityIdentifier() == "lens-chat-effort-selector" }
+                let effort = controls.filter { $0.identifier == "lens-chat-effort-selector" }
                 check(name + "-exposes-effort-model-and-send-controls", effort.count == 1
-                      && controls.contains { $0.accessibilityIdentifier() == "lens-chat-model-selector" }
-                      && controls.contains { $0.accessibilityIdentifier() == "lens-chat-send" })
+                      && controls.contains { $0.identifier == "lens-chat-model-selector" }
+                      && controls.contains { $0.identifier == "lens-chat-send" })
                 for identifier in ["lens-chat-model-selector", "lens-chat-send"] {
-                    let visible = controls.filter { $0.accessibilityIdentifier() == identifier }.contains {
-                        let rect = window.convertFromScreen($0.accessibilityFrame())
+                    let visible = controls.filter { $0.identifier == identifier }.contains {
+                        guard let rect = $0.frame else { return false }
                         return rect.width > 0 && rect.minX >= -1 && rect.maxX <= width + 1 && rect.minY >= -1 && rect.maxY <= 651
                     }
                     check(name + "-" + identifier + "-fits-visible-composer", visible)
                 }
                 if let element = effort.first {
-                    check(name + "-effort-label-and-value-are-accessible", element.accessibilityLabel() == LensL10n.text("Effort de raisonnement")
-                          && String(describing: element.accessibilityValue() ?? "").contains(CodexReasoningEffortControl.label(effortValue)))
-                    let rect = window.convertFromScreen(element.accessibilityFrame())
+                    check(name + "-effort-label-and-value-are-accessible", element.label == LensL10n.text("Effort de raisonnement")
+                          && element.value.contains(CodexReasoningEffortControl.label(effortValue)))
+                    let rect = element.frame ?? .zero
                     check(name + "-effort-fits-visible-composer", rect.width > 0 && rect.minX >= -1 && rect.maxX <= width + 1
                           && rect.minY >= -1 && rect.maxY <= 651)
                 }
@@ -126,6 +135,7 @@ import SwiftUI
                 check(name + "-render-keeps-draft-without-inference", investigator.question == "Explain the recorded changes."
                       && !investigator.sending && investigator.codexChatID == nil)
                 window.contentView = nil
+                window.close()
             }
         }
         await investigator.flushAndStop(); await restored.flushAndStop()
@@ -139,20 +149,60 @@ import SwiftUI
             .write(to: output.appendingPathComponent("native-design-v07-receipt.json"))
     }
 
-    @MainActor private static func elements(_ host: NSView) -> [NSAccessibilityProtocol] {
-        var result: [NSAccessibilityProtocol] = [], seen = Set<ObjectIdentifier>()
-        func walk(_ node: Any, depth: Int) {
-            guard depth < 40, seen.count < 4000, let element = node as? NSAccessibilityProtocol,
-                  seen.insert(ObjectIdentifier(element as AnyObject)).inserted else { return }
-            result.append(element)
-            for child in element.accessibilityChildren() ?? [] { walk(child, depth: depth + 1) }
-        }
-        func views(_ view: NSView) {
-            if !view.isHiddenOrHasHiddenAncestor { walk(view, depth: 0) }
-            for child in view.subviews { views(child) }
-        }
-        views(host)
+    private struct Control {
+        let identifier: String, role: String, label: String, value: String
+        let frame: CGRect?
+    }
+    private static func attribute(_ node: AXUIElement, _ key: String) -> CFTypeRef? {
+        var result: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(node, key as CFString, &result) == .success else { return nil }
         return result
+    }
+    private static func frame(_ node: AXUIElement) -> CGRect? {
+        guard let p = attribute(node, kAXPositionAttribute), let s = attribute(node, kAXSizeAttribute),
+              CFGetTypeID(p) == AXValueGetTypeID(), CFGetTypeID(s) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero, size = CGSize.zero
+        guard AXValueGetValue(p as! AXValue, .cgPoint, &point), AXValueGetValue(s as! AXValue, .cgSize, &size) else { return nil }
+        return CGRect(origin: point, size: size)
+    }
+    @MainActor private static func ownControls(window: NSWindow, host: NSView) async throws -> [Control] {
+        let app = AXUIElementCreateApplication(getpid())
+        AXUIElementSetMessagingTimeout(app, 0.5)
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        var controls: [Control] = []
+        repeat {
+            if let windows = attribute(app, kAXWindowsAttribute) as? [AXUIElement],
+               let own = windows.first(where: { attribute($0, kAXIdentifierAttribute) as? String == window.accessibilityIdentifier() }),
+               let base = frame(own), abs(base.width - window.frame.width) <= 2, abs(base.height - window.frame.height) <= 2 {
+                var nodes: [AXUIElement] = [], seen: [CFHashCode: [AXUIElement]] = [:]
+                func walk(_ node: AXUIElement, depth: Int) {
+                    guard depth < 40, nodes.count < 4000 else { return }
+                    let hash = CFHash(node)
+                    guard !(seen[hash] ?? []).contains(where: { CFEqual($0, node) }) else { return }
+                    seen[hash, default: []].append(node); nodes.append(node)
+                    for child in attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? [] { walk(child, depth: depth + 1) }
+                }
+                walk(own, depth: 0)
+                controls = nodes.map { node in
+                    let local = frame(node).map { rect in
+                        // AX and AppKit have opposite screen origins. Anchor
+                        // to this exact owned window, independent of monitors.
+                        let screen = CGRect(x: window.frame.minX + rect.minX - base.minX,
+                            y: window.frame.maxY - (rect.minY - base.minY) - rect.height,
+                            width: rect.width, height: rect.height)
+                        return host.convert(window.convertFromScreen(screen), from: nil)
+                    }
+                    return Control(identifier: attribute(node, kAXIdentifierAttribute) as? String ?? "",
+                        role: attribute(node, kAXRoleAttribute) as? String ?? "",
+                        label: attribute(node, kAXDescriptionAttribute) as? String ?? attribute(node, kAXTitleAttribute) as? String ?? "",
+                        value: String(describing: attribute(node, kAXValueAttribute) ?? "" as CFString), frame: local)
+                }
+                let required = ["lens-chat-model-selector", "lens-chat-effort-selector", "lens-chat-send"]
+                if required.allSatisfy({ id in controls.contains { $0.identifier == id && ($0.frame?.width ?? 0) > 0 } }) { return controls }
+            }
+            try await Task.sleep(for: .milliseconds(30))
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        return controls
     }
 
     private static func metadata() -> CodexLocalConnectionStatus {
