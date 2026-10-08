@@ -452,6 +452,8 @@ Entry points: the chat toolbar action, **Option-Command-C**, **Command-7**, or *
 - Settings → AI offers automatic discovery or a native installed-binary chooser, Verify/Refresh, verification cancellation, and reported engine/version/path.
 - A signed-out state offers Open Codex, or copies `codex login` if no containing app is identified. Copying does not execute the command.
 - Model selection uses the reported catalogue; stored unavailable models require an explicit selection rather than automatic replacement.
+- The chat composer and AI settings show reasoning effort beside the model. Levels and the default come from that model’s Codex catalogue; a disabled control names missing capability metadata.
+- Effort preferences are kept per model. Each send freezes an explicit choice or the advertised default and passes it to the owned chat turn. A saved level that disappears from the catalogue blocks sending until another level is selected; Lens never rewrites global Codex settings.
 - Reported plan/rate-limit data is shown only when available. Account connection, catalogue availability, and completed model access are separate states.
 - Group Investigations in Codex creates a section for new investigation chats before sending; existing user moves or renames are respected.
 

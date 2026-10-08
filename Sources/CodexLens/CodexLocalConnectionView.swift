@@ -61,6 +61,7 @@ struct CodexLocalConnectionView: View {
                         if !status.models.contains(where: { $0.id == investigator.model }) { Text(LensL10n.text("Choisir un modèle")).tag(investigator.model) }
                         ForEach(status.models) { model in Text(model.displayName).tag(model.id) }
                     }.disabled(investigator.sending)
+                    CodexReasoningEffortControl(investigator: investigator, compact: false)
                 }
                 Text(LensL10n.text("Le catalogue ne garantit pas l’accès au modèle. Seule une requête terminée confirme cet accès.")).font(.caption).foregroundStyle(.secondary)
                 if let completedModel = investigator.completedModel { Label(LensL10n.text("Requête terminée avec {0}", completedModel), systemImage: "checkmark.circle") }

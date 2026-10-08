@@ -138,6 +138,14 @@ jobs:
           for image in "$loading/"*.png; do
             if [ -f "$image" ]; then cp "$image" dist/ui-validation/loading/; fi
           done
+      - name: Chat reasoning effort regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          effort="/private/tmp/lens-ci-effort-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$effort" --corpus "$corpus" --entrypoint EffortChatMain.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/effort
+          cp "$effort/native-design-v07-receipt.json" dist/ui-validation/effort/receipt.json
+          cp "$effort/"*.png dist/ui-validation/effort/
       - name: Changes overview regression
         run: |
           corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
