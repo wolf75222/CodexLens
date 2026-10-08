@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "title": "Timeline reader return: fixed-build app-window captures",
+  "documentedOn": "2026-10-06",
+  "method": {
+    "api": "CUA native App.getScreenshot",
+    "productionAppCompositorCapture": true,
+    "bitmapCacheRender": false,
+    "croppedOrRetouched": false,
+    "systemOverlaysRetained": "Purple system badge and glowing pointer are not Lens features"
+  },
+  "source": {
+    "baselineCommit": "32d8987a370ac716eaf5f77cefd6b8cfd198bc42",
+    "branch": "fix/timeline-back-viewport",
+    "workingTreeAtCapture": "Frozen baseline plus pending ActivityView repaint correction",
+    "cleanCommitCapture": false,
+    "productionExecutableUUID": "5809E481-C054-3ECE-9B6D-CD9633C11A4B",
+    "verifiedSourceInputs": 109,
+    "sourceManifestSha256": "26264aaa856e498482ee5f11cf030b6311682fb7df3a99e30f633e5e9b23fde6"
+  },
+  "fixture": {
+    "anonymous": true,
+    "loadedEventCount": 12070,
+    "personalSourceOrAuthenticationOrAIUsed": false
+  },
+  "guiReplay": {
+    "fixedRoutes": 3,
+    "zoom": 18,
+    "selectedMessageTime": "14:01:06",
+    "selectionAndZoomRetained": true,
+    "largeLeftGapAfterReturn": false,
+    "baselineRoutes": 4,
+    "baselineLargeGapReproduced": false,
+    "paneWidthVariation": "Native inspector show/hide; not physical outer-window resizing",
+    "frameByFrameFirstPaintQualified": false,
+    "reviewReceiptSha256": "3dd5d6f5ffc73749d6b132d1ef1164e8f9e731d799b643b01a08b706ef298e5d"
+  },
+  "publishedCaptures": [
+    {
+      "file": "01-before-reader.jpg",
+      "stage": "Before opening the selected reader",
+      "format": "JPEG",
+      "pixels": [
+        2960,
+        1640
+      ],
+      "bytes": 373046,
+      "sha256": "03c4c092b558a2098241720e11b2ee7c7296577820142bf9b3ee6f5bd2dc4945",
+      "altered": false
+    },
+    {
+      "file": "02-back-immediate.jpg",
+      "stage": "First returned capture after toolbar Back",
+      "format": "JPEG",
+      "pixels": [
+        2960,
+        1640
+      ],
+      "bytes": 384004,
+      "sha256": "27f3c99c0b547014a6a961fc9728a8ac84a1219d09c336d878ef3ab09bbb30ac",
+      "altered": false
+    }
+  ],
+  "captureRelation": "Before-reader and after-Back on the same corrected build; not a before-fix/after-fix comparison",
+  "qualificationLimits": [
+    "The reported visual gap was not reproduced on the current baseline.",
+    "The original user screenshot does not establish its runtime source identity.",
+    "Normal tool observation latency can miss a transient first-paint gap.",
+    "Physical outer-window resizing, hardware trackpad input and VoiceOver unqualified.",
+    "No live-ingestion, RAM, CPU, compositor-latency or GitHub CI result established."
+  ]
+}

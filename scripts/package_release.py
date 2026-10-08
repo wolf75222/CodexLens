@@ -27,12 +27,18 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def validate_production_identity(info: dict) -> None:
+    if info.get("CFBundleIdentifier") != IDENTIFIER or "LSEnvironment" in info:
+        raise ValueError("Refusing a QA bundle or an unexpected bundle identifier.")
+    if any(info.get(key) != "Codex Lens" for key in ("CFBundleName", "CFBundleDisplayName")):
+        raise ValueError("Refusing a QA or unexpected application name.")
+
+
 def read_bundle(app: Path) -> dict:
     if app.is_symlink() or not app.is_dir() or app.suffix != ".app":
         raise ValueError("Expected a real .app directory, not a symbolic link.")
     info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
-    if info.get("CFBundleIdentifier") != IDENTIFIER or "LSEnvironment" in info:
-        raise ValueError("Refusing a QA bundle or an unexpected bundle identifier.")
+    validate_production_identity(info)
     version = info.get("CFBundleShortVersionString", "")
     if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", version):
         raise ValueError("Bundle version must be a three-part release version.")

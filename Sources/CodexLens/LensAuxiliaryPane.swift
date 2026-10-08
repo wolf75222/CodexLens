@@ -65,9 +65,9 @@ struct LensAuxiliaryContent: View {
     @ObservedObject var store: LensStore
     let windowContext: LensWindowContext?
     let isChat: Bool
-    @AppStorage("lensAppearance") private var appearance = "system"
+    @AppStorage("lensAppearance") private var appearance = "dark"
     @AppStorage("lensControlAccent") private var accent = "lens"
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
 
     @ViewBuilder private var surface: some View {
         if isChat { InvestigationView(investigator: store.investigation) }

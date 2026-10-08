@@ -1,0 +1,515 @@
+{
+  "schemaVersion": 1,
+  "captureMethod": "AppKit NSHostingView cacheDisplay component bitmap; not a macOS compositor screenshot",
+  "fixture": "Two anonymous generated Git worktrees and their generated journals; no user session",
+  "productionEntryPointReplaced": true,
+  "copiedAppSourcesModified": false,
+  "sourceManifestSHA256": "fe05bdb156c1855c70409938be56ce2ac0406211c8e9e2d1af7c4c684dbecde9",
+  "sourceFiles": {
+    "Sources/LensCore/ActivityEvidenceInspection.swift": {
+      "bytes": 36135,
+      "sha256": "61a2790a34e7df479ace6509d615a1f36e23978f1a3bfabfb168869ae0f0afd0"
+    },
+    "Sources/LensCore/AgentMetadata.swift": {
+      "bytes": 5476,
+      "sha256": "30d1a599c144278fab1943582e5dc7814706468bc1fe22224cc804f48249b553"
+    },
+    "Sources/LensCore/ChangesOverview.swift": {
+      "bytes": 11611,
+      "sha256": "d83eafb5b00d4a7c15877ccb12a3aed60fc20d0ddf6ec3c2688be9c893708aa4"
+    },
+    "Sources/LensCore/ChatContextOverview.swift": {
+      "bytes": 2349,
+      "sha256": "fc586dfc8d30e3f0a40582dc08e813776aef6fe44f8476d0573793375eec32d4"
+    },
+    "Sources/LensCore/ChatMarkdown.swift": {
+      "bytes": 14661,
+      "sha256": "7c06c9e0b1f011f9e8d885268c360ad0928e429bd9a2ea9c6303c6ea3f0c76f9"
+    },
+    "Sources/LensCore/CodexAppServerTransport.swift": {
+      "bytes": 20341,
+      "sha256": "6f68b064c875a1486da9570b7847fe5ff1a85bbae259af7d7631ccb9bf4a0a6b"
+    },
+    "Sources/LensCore/CodexInstallation.swift": {
+      "bytes": 3639,
+      "sha256": "c821dcfc3b9a6a306a3aeebf53804ab5d9c4660905516b3955e4a52a55b05d44"
+    },
+    "Sources/LensCore/CodexInvestigationClient.swift": {
+      "bytes": 12631,
+      "sha256": "6f7f12d3dc16d503adeb83995b11ee9be8d848926eae7072acd2792821eeea0d"
+    },
+    "Sources/LensCore/CodexInvestigationConnection.swift": {
+      "bytes": 33561,
+      "sha256": "8470b52b785b8e3d0eddf455b32e1592b66c4f7e30a49f29fd1169fc91dfdc9e"
+    },
+    "Sources/LensCore/CodexInvestigationEngine.swift": {
+      "bytes": 31204,
+      "sha256": "bf698c94ca1d26f2a6b74ad32a4567599d18947137a6bba5b118461751a9bb7a"
+    },
+    "Sources/LensCore/CodexInvestigationLocalStatus.swift": {
+      "bytes": 6628,
+      "sha256": "b5d6a74926fa4e27ccdefd3c628b596bc602af24db35608825d5d40a5d708470"
+    },
+    "Sources/LensCore/CodexInvestigationOrganization.swift": {
+      "bytes": 6461,
+      "sha256": "543c41624cc9cf08e9a7622e049f163fc873fbaeca355a88836e60eee648ccc7"
+    },
+    "Sources/LensCore/CodexInvestigationPolicy.swift": {
+      "bytes": 19295,
+      "sha256": "3267f956c6d95b4b255ded1ab3f9110727411e340bfbe9a2c1fd79c5ffd507e8"
+    },
+    "Sources/LensCore/CodexInvestigationRegistry.swift": {
+      "bytes": 19323,
+      "sha256": "a7faad1d5a1cb8187e8e9565820de087a332bc3854c40b88d8f5df64aeb6e8ee"
+    },
+    "Sources/LensCore/CodexSourceLocation.swift": {
+      "bytes": 1073,
+      "sha256": "870583cfd71536e54427d98df7d9403a9bfcfa1182a408a92ee2f7e80721fa05"
+    },
+    "Sources/LensCore/CommunicationInspection.swift": {
+      "bytes": 36769,
+      "sha256": "fa8c62d447fa820e01c2cc9180f46c70f74eb077fd88ae2038b12cae219491da"
+    },
+    "Sources/LensCore/ContextInspection.swift": {
+      "bytes": 33160,
+      "sha256": "e24a79390f9bf21fe8f1753eeb562f9417f2916373f95bef92ffa69b6e386ce8"
+    },
+    "Sources/LensCore/ConversationExport.swift": {
+      "bytes": 37302,
+      "sha256": "bca3c53d70bcfe5f828ef169cb046c644a76589d7b51f10519b9029e4c8c7865"
+    },
+    "Sources/LensCore/EmbeddedResource.swift": {
+      "bytes": 6954,
+      "sha256": "a293f77afe977ee197fba676d40f3967de24b590c072b661fce79cf7f61ab4bc"
+    },
+    "Sources/LensCore/EvidenceAddress.swift": {
+      "bytes": 3838,
+      "sha256": "a6c453ef2bb91bc1892358ced272fbf004e56dcd39d400db010592d7d477d17b"
+    },
+    "Sources/LensCore/EvidenceCapsule.swift": {
+      "bytes": 14320,
+      "sha256": "02407f918ad6b04c6809c40da046345312342c0671a88d982a5086dbcb46ee4d"
+    },
+    "Sources/LensCore/FileSearch.swift": {
+      "bytes": 16769,
+      "sha256": "b260e420e7be48f09f3ecd890ca381576a6df6547bea52a58347cfe1d7c9945b"
+    },
+    "Sources/LensCore/FileServices.swift": {
+      "bytes": 36659,
+      "sha256": "6530f3d75132e51284e27d9e6b6faa5006afe85f045549d1b61501b69de61f86"
+    },
+    "Sources/LensCore/InspectionEvidence.swift": {
+      "bytes": 2106,
+      "sha256": "69c5adc5544a8215dd947b394666c8bc904b39b3f06127fae7b685c9445f5ec6"
+    },
+    "Sources/LensCore/InspectionNavigation.swift": {
+      "bytes": 2105,
+      "sha256": "22cd2e0d580c7d6758959a517b6dd92f7ea406d9f9cd1d49e6ec2e8efe1bc994"
+    },
+    "Sources/LensCore/InvestigationArchive.swift": {
+      "bytes": 11810,
+      "sha256": "ba104b0593bafc0be3eeb739176e0e0c85058abc6a79e7962cd635c3b22dc23e"
+    },
+    "Sources/LensCore/InvestigationClient.swift": {
+      "bytes": 10911,
+      "sha256": "62caf9a02ce7b109f06675846641b77b5fe8ec536ab3e23f0dc2103cffa3790e"
+    },
+    "Sources/LensCore/LensArchiveTransfer.swift": {
+      "bytes": 24751,
+      "sha256": "b4bc160069dfffbf35b761a2a615ef11c39ca978bb9050f94598faa276786289"
+    },
+    "Sources/LensCore/LensDemoFixtures.swift": {
+      "bytes": 9423,
+      "sha256": "d4fecca9c0b85ef71cb65ba4d4455c98252fc16f2ab9898e8ee7333c5365bddd"
+    },
+    "Sources/LensCore/LensOnboarding.swift": {
+      "bytes": 1940,
+      "sha256": "4835246294c6f105959cc877c9ea968f5c3ab276eab441d30c0b469459c26b66"
+    },
+    "Sources/LensCore/LensSignposts.swift": {
+      "bytes": 1076,
+      "sha256": "4f6b46513142163e6141ad35b9b563abebdda6f2b02d3cedffc46e76212f0759"
+    },
+    "Sources/LensCore/LensUninstallPolicy.swift": {
+      "bytes": 11068,
+      "sha256": "0d53a9c23b83e434c545b78bd0739e309478bcfc5186e8bd8e26368f886720aa"
+    },
+    "Sources/LensCore/LocalContentGuard.swift": {
+      "bytes": 890,
+      "sha256": "4a6ae19ecc3727805784d610234e2eb282300e47cd7a6a62e211190348fffc50"
+    },
+    "Sources/LensCore/Models.swift": {
+      "bytes": 9199,
+      "sha256": "0ef7f76510e023d61b7d680efc96e55317f9115931983ad6e6a2b24ed1ac0d70"
+    },
+    "Sources/LensCore/OriginCodeReference.swift": {
+      "bytes": 3597,
+      "sha256": "954c7a157fc694b3be511d61cc82874cd66b3e8f57a35e8ddbff07fde8961a22"
+    },
+    "Sources/LensCore/OriginEvidence.swift": {
+      "bytes": 7909,
+      "sha256": "14601f6093517bd64c499e2bdd0cc22fe52e430f8f0c81652d56a1cdb006a864"
+    },
+    "Sources/LensCore/OriginInspection.swift": {
+      "bytes": 24630,
+      "sha256": "fbd526d1c3df5ada50a9bf4e04bcec3f551c9e8e727f9b695c47edcf16f64960"
+    },
+    "Sources/LensCore/RecordedChangeEvidence.swift": {
+      "bytes": 6462,
+      "sha256": "21325f788bfd54adaf791c251d97be0794dd836572787cafaf20eaa7581e41cf"
+    },
+    "Sources/LensCore/RecordedDiff.swift": {
+      "bytes": 36456,
+      "sha256": "e4bdd7baa89b1bc05afed4653221c3dcb1c560550132fdc4519657b4e1eff1a6"
+    },
+    "Sources/LensCore/RecordedDocumentPager.swift": {
+      "bytes": 3696,
+      "sha256": "0bda034af699c8c2e997b6304f732148a00cfb8da88125d7f2bc6a010072fb9d"
+    },
+    "Sources/LensCore/RecordedExplanation.swift": {
+      "bytes": 17167,
+      "sha256": "6a91cf159d8e6784d8027e6e7e8868f80218745f9fd0970e5111404611b3d678"
+    },
+    "Sources/LensCore/RecordedFileVersion.swift": {
+      "bytes": 9806,
+      "sha256": "16d3e9bb2f4fa65237481c50a0aaa4e62cdcbdec20409a26d4c953c5e56d52e5"
+    },
+    "Sources/LensCore/RecordedListState.swift": {
+      "bytes": 1362,
+      "sha256": "735bff4524748ad2da028af61539ec0c80d890237fc990d9a4437f1fe010bf51"
+    },
+    "Sources/LensCore/RecordedPager.swift": {
+      "bytes": 25589,
+      "sha256": "61418386f2c143d4b540b5913675e6d187ba12f8d60cce2775cc278ac3fe3da5"
+    },
+    "Sources/LensCore/RecordedTraceFacts.swift": {
+      "bytes": 5096,
+      "sha256": "a67fee8931bec5d30a006c18b64a0fab8499e03fdbaa9a807be5757d0e7bb851"
+    },
+    "Sources/LensCore/ResourceRecovery.swift": {
+      "bytes": 27111,
+      "sha256": "088780fe695791311ac56c3b1b264c1245e0f08768636e867e3eab50d96d0a18"
+    },
+    "Sources/LensCore/SessionCatalogCache.swift": {
+      "bytes": 8193,
+      "sha256": "c5b9d260ecc3d13e04d4324b42212048f82b88cdcdd599ddfef96246d8b39e37"
+    },
+    "Sources/LensCore/SessionEngine.swift": {
+      "bytes": 104622,
+      "sha256": "bfa6a804e0e0c339a0c50dfc5c7f6dbf0c1896f7cad18165f184791f4a6f0a92"
+    },
+    "Sources/LensCore/SessionLoadingProgress.swift": {
+      "bytes": 5176,
+      "sha256": "4ce277d8b3fc7c920d3a1a84b28fb01fb8db87e0ce242c95dc72c27f7c7a0eac"
+    },
+    "Sources/LensCore/SessionPickerTarget.swift": {
+      "bytes": 1835,
+      "sha256": "19747eac9e44713e883b10462bc43b2cb4d9430f760fe2d1e316b5947f9e04dd"
+    },
+    "Sources/LensCore/SessionPresentation.swift": {
+      "bytes": 18774,
+      "sha256": "69f42587d6a980e4415c1037d48b662cf970edc3a3153316280167e07abbe09c"
+    },
+    "Sources/LensCore/SessionReaderPool.swift": {
+      "bytes": 13697,
+      "sha256": "4ee1abb0347ee081d514f1c71c6347b38a7289777eb89a26b66066ed3816b47f"
+    },
+    "Sources/LensCore/SessionTrends.swift": {
+      "bytes": 18938,
+      "sha256": "62a156a8e8999e9fb9a0252cea90cb1ecbcf8089ead2ed379b976e9bcc5029f9"
+    },
+    "Sources/LensCore/TimelineInteraction.swift": {
+      "bytes": 5580,
+      "sha256": "5d12dd5fac7fb2c559bab8bdce999cdd1d82d76cda1b9e7e988dce874a3a93d5"
+    },
+    "Sources/LensCore/TimelineLiveState.swift": {
+      "bytes": 3222,
+      "sha256": "fbd6989b4c7aa92241c12b7d17f35ab314b55368441d70b9c726e0cbbeb783da"
+    },
+    "Sources/LensCore/TimelineLiveTransition.swift": {
+      "bytes": 1207,
+      "sha256": "a7bef59ce8f0bf239047a513adf6241e6c98656553f144fce358866904e44525"
+    },
+    "Sources/LensCore/TimelineModel.swift": {
+      "bytes": 41494,
+      "sha256": "0bbfcd93ad1422f91d8bb8563ec775e2dfa2a9de5ba7ee2eebcca28518e3ce5c"
+    },
+    "Sources/CSQLite/module.modulemap": {
+      "bytes": 80,
+      "sha256": "bbfe59a972a3e8e09e347c04bc22c0eacd2544881af8a4b6068bfc30b38466e8"
+    },
+    "Sources/CSQLite/shim.h": {
+      "bytes": 21,
+      "sha256": "b052d8e561e942f97b503033ecd2eaa2b35213bdbf374983efe9e68eabdfc024"
+    },
+    "Sources/CodexLens/ActivityObservationView.swift": {
+      "bytes": 6715,
+      "sha256": "746676c8fe4565aecbe0c056ff189606f35f344f81b27788f53965c0a94831e8"
+    },
+    "Sources/CodexLens/ActivityView.swift": {
+      "bytes": 102197,
+      "sha256": "ab6dda32e8484acfadc96b375cd87147a5837e00b96a11a840ab3f5acb76a296"
+    },
+    "Sources/CodexLens/AgentMetadataView.swift": {
+      "bytes": 9777,
+      "sha256": "b0312cefa088b260570a4bf051d9c77fe54b4f941e4f640d31afe27252959407"
+    },
+    "Sources/CodexLens/ChangesOverviewView.swift": {
+      "bytes": 39329,
+      "sha256": "5dfba6b48c1cba26e017fd30a2de20b82f890c5450fcc1456c50520082fb5feb"
+    },
+    "Sources/CodexLens/CodeDocumentView.swift": {
+      "bytes": 31278,
+      "sha256": "5ab83b87bd6453817d4ecc95b13e7879f1f9120f22c15c346bb20473495e7386"
+    },
+    "Sources/CodexLens/CodexLocalConnectionView.swift": {
+      "bytes": 6499,
+      "sha256": "bd8ad3f51db2a7169f9c1e7448bab6ce09ff060acd4783bd794ffe7d2ace9fac"
+    },
+    "Sources/CodexLens/CommunicationSequenceView.swift": {
+      "bytes": 9047,
+      "sha256": "a406fc629e7168182e70479351b773447b9f394daaf0793feed57443e27abc73"
+    },
+    "Sources/CodexLens/ComponentGalleryView.swift": {
+      "bytes": 21295,
+      "sha256": "72c4a4bf9818e372798b5d74c82c2a65d1924ebeff5a82e105ec1c275a71c517"
+    },
+    "Sources/CodexLens/ContextEvidenceViews.swift": {
+      "bytes": 14911,
+      "sha256": "fbfa94d0cb37a514c97b1b274be4ca3cacbfd1165dc0a15c89e9baed802edf08"
+    },
+    "Sources/CodexLens/ConversationEvidence.swift": {
+      "bytes": 3123,
+      "sha256": "53dd224faaa0e11f794ef044b3e2718e47e925d54cf0afdcbe193d2259b622d5"
+    },
+    "Sources/CodexLens/ConversationExportView.swift": {
+      "bytes": 32536,
+      "sha256": "04c2afb932bbf2a9a269d6999dd3c83f1e30a8eade182fa5e927354c6d272ea2"
+    },
+    "Sources/CodexLens/EnvironmentSearchView.swift": {
+      "bytes": 4995,
+      "sha256": "9ffa912a03aad8bcab06646f38e772c5ad2ed48aeb61d5b84f3736777efec173"
+    },
+    "Sources/CodexLens/EvidenceImageView.swift": {
+      "bytes": 10940,
+      "sha256": "fa7197796d1af0596daba19591d82942a70e3bf28f3a5ace5069736d8571903c"
+    },
+    "Sources/CodexLens/InspectorView.swift": {
+      "bytes": 55490,
+      "sha256": "e72386a3995222472db1dfad63b5f1e2dfa97dad8b8f0bc6bd6a550e84c84169"
+    },
+    "Sources/CodexLens/InvestigationView.swift": {
+      "bytes": 117657,
+      "sha256": "88de259ecd065d19ffea365639050c7d3d9963221399fbbd2454677f60c4e43c"
+    },
+    "Sources/CodexLens/LensActions.swift": {
+      "bytes": 25591,
+      "sha256": "68dde4a9e2bb4aa96b7225aa0309a5ead864a7911263129c1f57ca542ac51fc9"
+    },
+    "Sources/CodexLens/LensAppIcon.swift": {
+      "bytes": 3622,
+      "sha256": "1fa5df27570620c4c08604a40a7e30b4eab861d2bd24b50e77e1ebab4a086ac8"
+    },
+    "Sources/CodexLens/LensAppearance.swift": {
+      "bytes": 1091,
+      "sha256": "b24bb4c8188fce35fc5e7b219369b138fcce2f8029dd44cfff38dc9f1ad26137"
+    },
+    "Sources/CodexLens/LensAuxiliaryPane.swift": {
+      "bytes": 4071,
+      "sha256": "7e35a2f4c065fcfd22bd7b28d8994cfe73f56be05138cbd03a02dd65e7565e87"
+    },
+    "Sources/CodexLens/LensAuxiliaryViews.swift": {
+      "bytes": 15344,
+      "sha256": "0e5a57e457eb0ce31f995c99cdaab497785ad43b1b9a5dcd9ed62fb610ed9ae8"
+    },
+    "Sources/CodexLens/LensBrand.swift": {
+      "bytes": 12350,
+      "sha256": "6943cec24396260dd01ca09fcf7fa5f577d1ca711bddf09cb7872ab27f5bdf9b"
+    },
+    "Sources/CodexLens/LensChatInput.swift": {
+      "bytes": 4555,
+      "sha256": "2f87d73c9060066a5e46ceb06161d7b105dbd45cf1ce53f60e0fa18016ad8e84"
+    },
+    "Sources/CodexLens/LensChatMarkdownView.swift": {
+      "bytes": 11350,
+      "sha256": "352e2d42317613435741292f51d2f5589180c6dd8575fef281091cca76ea95c2"
+    },
+    "Sources/CodexLens/LensChatMessageMenu.swift": {
+      "bytes": 4892,
+      "sha256": "4de58ab4c752ae3c1620eb4ca27a81ca0bba39199f607b3ea7ee02c819b3d02c"
+    },
+    "Sources/CodexLens/LensChatSourcesView.swift": {
+      "bytes": 6170,
+      "sha256": "11bbc3d3a4ae05d6183fde40288bfdd6fb98df2d0adbe938a3fdc4bbdfd7e83a"
+    },
+    "Sources/CodexLens/LensComponents.swift": {
+      "bytes": 23314,
+      "sha256": "dff06f9c3ebcbd1c722f260deeca4f87db421890b10c0b62c0b4226d4bef5289"
+    },
+    "Sources/CodexLens/LensGuideContent.swift": {
+      "bytes": 7245,
+      "sha256": "18d21ea59a8fc7d0aa5e441d701277989f689beaa5dc0a1871b221fa57a1263d"
+    },
+    "Sources/CodexLens/LensGuideView.swift": {
+      "bytes": 10949,
+      "sha256": "43be6296b5e9ac04c71ffaad2063bcaff877f53b8ff5051d26d080903e072ea2"
+    },
+    "Sources/CodexLens/LensIdentity.swift": {
+      "bytes": 644,
+      "sha256": "d468605d12d0b9d83c78607643e5d15364c135f7598a8ec62e777197497413a8"
+    },
+    "Sources/CodexLens/LensLiveTimeline.swift": {
+      "bytes": 13542,
+      "sha256": "b811a5a9a2039247413dade91b0e75c455b9237b2b9b5e4f124ae8f8c7b16620"
+    },
+    "Sources/CodexLens/LensLocalization.swift": {
+      "bytes": 8518,
+      "sha256": "6a4b77098e8f31b0ce8016fc47456ca7599ebac7499aa87cb5a05e491050aad8"
+    },
+    "Sources/CodexLens/LensMacIntegration.swift": {
+      "bytes": 46541,
+      "sha256": "bd65a7ea328124e41b737e9758069941a278c3e1a417278ad6f107bb4cdd59e6"
+    },
+    "Sources/CodexLens/LensMotion.swift": {
+      "bytes": 11620,
+      "sha256": "73f16c5403962f775d24ea79e5a0345bef97f2dcb099ee546b6f27e38d368ae5"
+    },
+    "Sources/CodexLens/LensNativePrimaryButton.swift": {
+      "bytes": 1875,
+      "sha256": "98beddb1a03dcc478095b073debb892a39937f5ab070e93aa695fae65217540e"
+    },
+    "Sources/CodexLens/LensNativeSearchField.swift": {
+      "bytes": 6370,
+      "sha256": "cf6d4e11b8ede9edfb616aa500333ad747966be3b614cced6db79457349bd2a6"
+    },
+    "Sources/CodexLens/LensNativeWorkspaceSplit.swift": {
+      "bytes": 4317,
+      "sha256": "d4d4a77d3a4a822d146ed4bafecb44a28789f4ddf77e4201246408618aebbe02"
+    },
+    "Sources/CodexLens/LensPaneKeyboard.swift": {
+      "bytes": 8075,
+      "sha256": "40c3032d57c0f9beeed7e6dfa95d72de95c2042c600700a14586760046016abd"
+    },
+    "Sources/CodexLens/LensPaneSizing.swift": {
+      "bytes": 3780,
+      "sha256": "1f009dad7a9a4f06b2da036203ab75bfa34ac84cb9d8ef92aaf8d300f3dd07f7"
+    },
+    "Sources/CodexLens/LensQuestionMenu.swift": {
+      "bytes": 4550,
+      "sha256": "57c0c03608107c37e2081b66e1c3a73bc0a8ca4bc816d7e55ab491b920cacaa7"
+    },
+    "Sources/CodexLens/LensReadingPreferences.swift": {
+      "bytes": 6687,
+      "sha256": "d088d57fc5ce63013ca469c08ee27f59bef1e70aceea940106dcaa6345370d9c"
+    },
+    "Sources/CodexLens/LensSettingsNavigation.swift": {
+      "bytes": 6813,
+      "sha256": "ba9003d3a682e580ed1456aafa33b14d9c7755153cf00cfd06d3a91f4ce6660e"
+    },
+    "Sources/CodexLens/LensStore.swift": {
+      "bytes": 88793,
+      "sha256": "e287849c3fc7af9c79e733df77d358599d2eeadc115b400220197f1640a99ada"
+    },
+    "Sources/CodexLens/LensSymbols.swift": {
+      "bytes": 3772,
+      "sha256": "9b7b60837c5528af8b73e2f6da3797da9b8ebeaab99193488e8703fcec8a9983"
+    },
+    "Sources/CodexLens/LensUI.swift": {
+      "bytes": 10113,
+      "sha256": "27bbe9fa6973a3d6e519159cef3f8d6585b34db2785a3cb130d67eea6791a1d2"
+    },
+    "Sources/CodexLens/LensUninstallView.swift": {
+      "bytes": 12067,
+      "sha256": "42eba03aebf4f84b05ee3375b740c2a64d21675162350e535e1d1fb22f9c1e22"
+    },
+    "Sources/CodexLens/LensUpdateController.swift": {
+      "bytes": 6942,
+      "sha256": "7e75fab525ae7520eaff380ec6baea55f6bb6566a35a093c35a5af22bd833726"
+    },
+    "Sources/CodexLens/LensWindowRoot.swift": {
+      "bytes": 2183,
+      "sha256": "cf83a15c771e237490c9ab45fc677a6b55dc8c181e4c3ebd35504cd6fd64b3f2"
+    },
+    "Sources/CodexLens/LensWorkspaceTabs.swift": {
+      "bytes": 4565,
+      "sha256": "b1a813231d0cd067ad9dd3ffaab40fa58318696e52be4be8a0af3e2d36ea6f55"
+    },
+    "Sources/CodexLens/MainView.swift": {
+      "bytes": 47250,
+      "sha256": "1b6bfd7978f7efbbd2ad6e64e71fd35c4f06411aee232c42d928d7130aaa03ef"
+    },
+    "Sources/CodexLens/NativeFileActions.swift": {
+      "bytes": 21341,
+      "sha256": "1cd9d86e55cdd20dcff68fc360b790d13d580907d9cc42b5108bb72efcc7edb2"
+    },
+    "Sources/CodexLens/ObjectViews.swift": {
+      "bytes": 71414,
+      "sha256": "c7a497a33b7e63ff9aacba743fd085f5b2fdcf3d7fed5b77bde0b56c4f33c4b7"
+    },
+    "Sources/CodexLens/OriginEvidenceView.swift": {
+      "bytes": 15031,
+      "sha256": "a24d2ab644bbe2b3ae7a8c44351f09f0ef8f23b5eaf35ccd619b4e7483abfe2e"
+    },
+    "Sources/CodexLens/RecordedDiffView.swift": {
+      "bytes": 46945,
+      "sha256": "dc17ce4f0d76a58ed704ba02a928c65b403d7134abd10108bc5bcd1ea4cb97ea"
+    },
+    "Sources/CodexLens/RecordedFileVersionsView.swift": {
+      "bytes": 13074,
+      "sha256": "c6adc936300928316c7ff7a659d16cb213d09b8ba5598a7f696d3ea9ad87d6cf"
+    },
+    "Sources/CodexLens/RecordedMarkdownTypography.swift": {
+      "bytes": 2614,
+      "sha256": "591b6f18c10ff75e788feb448b61bca95fc2fe095d2b112efab7bd26a47e9d01"
+    },
+    "Sources/CodexLens/RecoveredResourcePreview.swift": {
+      "bytes": 5064,
+      "sha256": "4b99afc709da8c64c9023aedf779db20053ffeccf8a8b9ab01899cbc1787ab33"
+    },
+    "Sources/CodexLens/ResourceRecoveryView.swift": {
+      "bytes": 14223,
+      "sha256": "2268417fa553871b74c42796e1555357cade0898507b47e9d003280eba090329"
+    },
+    "Sources/CodexLens/SessionTrendValuesTable.swift": {
+      "bytes": 13406,
+      "sha256": "5d50416ca67aefc8f957bed6da52fd036f708aeca0db84b1a93bc819198ec5d7"
+    },
+    "Sources/CodexLens/SessionTrendsView.swift": {
+      "bytes": 22994,
+      "sha256": "8b671971e7526303dc798405067e2955450405a9556542f4f1f181ac65e20809"
+    },
+    "Tests/NativeUI/ChangesOverviewMain.swift": {
+      "bytes": 49964,
+      "sha256": "5f60f319e7e22f2b321b9491a103c2f3b7b0bcf68fe19b4c7e1166795c9c99fc"
+    }
+  },
+  "checks": 43,
+  "allChecksPassed": true,
+  "images": {
+    "files-dark.png": {
+      "sha256": "3e7537c400d7f34123813fbc56dd1359085ffbe2e12d599f0431592c2468a48f",
+      "sourceImage": "changes-wide-dark-component-cache.png"
+    },
+    "worktrees-light.png": {
+      "sha256": "32689a251b3dbd7de80ebd83c51ca82459940b2abab0c9790f267dc1efa11eb6",
+      "sourceImage": "changes-worktree-activity-light-component-cache.png"
+    },
+    "current-git.png": {
+      "sha256": "71bd7bf4e2875ef8b8f64b11ba30e94e54ca2a2519d715fbf237eb7b910edc1c",
+      "sourceImage": "changes-current-git-global-component-cache.png"
+    },
+    "narrow.png": {
+      "sha256": "fed4d6547557bfcff2e3574f958dd452277861c6727b17cfb9f920050e01f605",
+      "sourceImage": "changes-narrow-component-cache.png"
+    }
+  },
+  "qualificationLimits": [
+    "Programmatic store and AppKit checks do not qualify physical clicks, trackpad gestures, VoiceOver or the production compositor.",
+    "The dense scenario publishes anonymous metadata in memory; it is not a live collector-ingestion test.",
+    "A bounded number of graph marks is not a CPU, memory or latency improvement measurement.",
+    "Recorded trace timestamps, worktree labels and explicit agent-parent links establish no Git ancestry, creation date, authorship or net historical patch."
+  ],
+  "sourceCommit": "04f8e30ef83c7e292a9c55305485107a6ad57b4f",
+  "version": "0.43.0",
+  "versionOnlyPreparationAfterCapture": true
+}

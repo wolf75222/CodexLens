@@ -18,13 +18,19 @@ If a session is missing, check its source directory and local availability first
 
 ![Activity timeline and event list](images/activity.png)
 
-Select an event to highlight it in the timeline and list. Double-click it or press Return to read its contents. The inspector links the event to its agent, environment, resources, and related actions. Back and Forward return to earlier selections and filters.
+Select an event to highlight it in the timeline and list. Double-click it or press Return to read its contents. The inspector links the event to its agent, environment, resources, and related actions. Opening a reader keeps an **Activity** return item beside the reading tabs. It restores the selection, filters, timeline framing and list position you left. Ordinary list clicks keep explicitly opened tabs intact.
 
-At a wide time scale, nearby events form groups. Click a group to zoom in; zoom out to see groups again. The event list keeps the individual records accessible. Use search, event-type filters, and a selected time range to narrow the view.
+**Back** and **Forward** also restore these positions. Closing the last reader returns to the originating collection. **Control-Tab** cycles between the collection and its readers, including when there is only one reader. Right-click a timeline event or a reading tab and choose **Open in a new window** to inspect it separately; the original window keeps its place. This command requires accessible session journals. Archived context remains readable in its current window when those journals are unavailable.
+
+Separated events keep their individual colored marks at intermediate zoom. Dense or overlapping events form slim groups at wider time scales. A group's colored portions show its event-type counts, rather than the order or position of actions within that period. Counts appear in the tooltip, contextual menu and accessible label, keeping numbers off the marks themselves. Click a group to zoom in; zoom out to see groups again. The event list keeps the individual records accessible. Use search, event-type filters, and a selected time range to narrow the view.
 
 **Live** keeps a moving timeline above the reading area, so you can inspect a call or diff while keeping recent activity visible. Pausing or moving back in time pauses visual following, not collection. **Return to Live** publishes arrivals and returns to the current window. The display follows persisted logs, not a direct connection to another Codex process; events can appear with a delay.
 
 Recorded compaction events and inter-agent communications appear when supported data exists. A sent message, a known receipt, and confirmed inclusion in a request are separate states. An opaque compaction is not replaced with an invented summary.
+
+Choose **Activity → Charts** to examine recorded activity over time. Select a metric, switch between per-interval and cumulative counts, then select a period and choose **View activity**. **Back** restores the chart's metric, selected period and values panel. The table button exposes the same values for keyboard navigation. Existing agent, environment, search and time filters apply.
+
+MCP curves count explicitly named MCP calls, not mentions inside scripts. Requested changes count files targeted by patches per call and environment; they do not establish the current file state. Undated records remain in the activity history but are excluded from the plot. An empty interval does not establish that a partially observed session was inactive.
 
 ## Follow an action to its files
 
@@ -37,9 +43,16 @@ Recorded compaction events and inter-agent communications appear when supported 
 
 The app distinguishes a requested patch, its recorded tool result, available historical content, and the current Git diff. A reported successful patch does not establish a complete historical file version. The current worktree diff is not automatically attributed to Codex.
 
-**Before**, **After**, and **Compare** are available when their content can be read or verifiably reconstructed. When complete versions are unavailable, patch fragments retain local coordinates rather than pretending to be full files. The two unified-diff gutters refer to the before and after versions.
+**Before**, **After**, and **Compare** are available when their content can be read or verifiably reconstructed. When complete versions are unavailable, patch fragments retain local coordinates rather than pretending to be full files. The two unified-diff gutters refer to the before and after versions. Choose **Unified** or **Side by side** from the diff header's **More (…)** menu.
 
 Use a file's context menu to reveal its current location in Finder or open it with another app. These actions refer to the **current** file; they do not change the historical content displayed in Lens. Editing in an external app is outside Lens's read-only inspection boundary.
+
+## Review changes across worktrees
+
+1. Open **Changes → Files**. Pick an environment or keep all environments visible, then select a file.
+2. Choose its recorded activity and trace to inspect the corresponding diff. **Worktrees** shows parallel lanes; grouped points give access to every operation.
+3. Use **Current Git diff** only when you want a current local comparison. Open its options to compare staged changes or changes from the recorded commit, then choose **Read diff**. Recorded activity and current Git state are separate.
+4. Open an action in a tab and use **Back** to return to the overview selection. **Actions** restores the individual change list.
 
 ## Explore environments and resources
 
@@ -54,7 +67,7 @@ For a missing attachment, **Find File…** lets you search chosen local director
 ![Investigation chat with selected context](images/chat.png)
 
 1. Open the chat with **Option-Command-C**. Lens checks the installed Codex and its connection without sending a question.
-2. If needed, open **Settings → AI** to inspect or choose the executable. This adapter requires Codex **0.159.2** with a ChatGPT connection. Sign in using Codex itself if it is signed out.
+2. If needed, open **Settings → AI** to inspect or choose the executable. This adapter requires Codex **0.159.2 or 0.160.1** with a ChatGPT connection. Sign in using Codex itself if it is signed out.
 3. Write a question. Optionally use **Add to Question**, the attachment menu, or an item's **Ask AI…** context action to include messages, calls, diffs, agents, or excerpts.
 4. Review the attached context and version references, then send. Return sends; Shift-Return inserts a newline.
 5. Continue in the same chat. Open a cited source to inspect the content attached to that response, or add it to a follow-up.
@@ -75,7 +88,7 @@ Investigation import/export preserves selected context and the chat archive in L
 
 Drag pane dividers to resize the sidebar, content, inspector, and chat. The **View** menu hides panels and adjusts the active pane; windows can be moved, resized, and used in full screen. Each window keeps its own navigation.
 
-**Settings → General** controls language, appearance, reading fonts, zoom increments, and pinch behavior. Content surfaces remain stable while macOS 26 can use Liquid Glass for navigation controls. Reduced-motion and transparency preferences are respected.
+**New installations open in English with Dark appearance.** Existing language and appearance choices are preserved. **Settings → General** controls language, appearance, reading fonts, zoom increments, and pinch behavior. Content surfaces remain stable while macOS 26 can use Liquid Glass for navigation controls. Reduced-motion and transparency preferences are respected.
 
 | Action | Shortcut |
 | --- | --- |

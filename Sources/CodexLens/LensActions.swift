@@ -4,11 +4,11 @@ import LensCore
 
 enum LensAction: String, CaseIterable, Identifiable {
     case openSession, back, forward, follow, liveTimeline, clearFilters, copyLink, inspector, chat, investigate, bookmark, largerText, smallerText
-    case provenance, revealInFinder, exportInvestigation, importArchive, conversation
+    case provenance, revealInFinder, exportInvestigation, importArchive, conversation, openInNewTab, openInNewWindow
     var id: String { rawValue }
     var scope: LensCommandScope {
         switch self {
-        case .copyLink, .investigate, .bookmark, .provenance, .revealInFinder: return .selection
+        case .copyLink, .investigate, .bookmark, .provenance, .revealInFinder, .openInNewTab, .openInNewWindow: return .selection
         default: return .window
         }
     }
@@ -34,6 +34,8 @@ enum LensAction: String, CaseIterable, Identifiable {
         case .exportInvestigation: return LensL10n.text("Exporter l’enquête…")
         case .importArchive: return LensL10n.text("Importer une archive d’enquête…")
         case .conversation: return LensL10n.text("Conversation et orientations…")
+        case .openInNewTab: return LensL10n.text("Ouvrir dans un onglet")
+        case .openInNewWindow: return LensL10n.text("Ouvrir dans une nouvelle fenêtre")
         }
     }
     @MainActor func symbol(in store: LensStore, target: Destination? = nil) -> String {
@@ -65,11 +67,14 @@ enum LensAction: String, CaseIterable, Identifiable {
         case .exportInvestigation: return "square.and.arrow.up"
         case .importArchive: return "square.and.arrow.down"
         case .conversation: return "bubble.left.and.bubble.right"
+        case .openInNewTab: return "plus.rectangle.on.rectangle"
+        case .openInNewWindow: return "macwindow"
         }
     }
 }
 extension LensStore {
     func canPerform(_ action: LensAction, target: Destination? = nil) -> Bool {
+        guard !LensApplicationCoordinator.shared.maintenanceInProgress else { return false }
         if action.scope == .selection, !knownCommandDestination(target ?? selection) { return false }
         switch action {
         case .back: return canGoBack
@@ -83,6 +88,10 @@ extension LensStore {
         case .revealInFinder: return finderLocation(for: target ?? selection) != nil
         case .exportInvestigation: return investigation.capsule != nil && !investigation.preparing && !investigation.sending
         case .conversation: return snapshot != nil && !showSessionPicker && !showConversation
+        case .openInNewWindow:
+            return isObserving && hasSessionReader && snapshot != nil && observedSourceHome.isFileURL
+                && deepLink(for: target ?? selection) != nil
+                && LensApplicationCoordinator.shared.newWindowHandler != nil
         case .largerText: return fontSize < 24
         case .smallerText: return fontSize > 10
         default: return true
@@ -103,7 +112,10 @@ extension LensStore {
     func perform(_ action: LensAction, target: Destination? = nil) {
         guard canPerform(action, target: target) else { return }
         switch action {
-        case .openSession: showConversation = false; showSessionPicker = true
+        case .openSession:
+            // Cmd-O is an explicit choice to browse; a restored/in-flight Lens
+            // read must not cover that list or subsequently replace the choice.
+            cancelSessionOpening(); showConversation = false; showSessionPicker = true
         case .back: goBack()
         case .forward: goForward()
         case .liveTimeline: if liveTimelineVisible { disableLiveTimeline() } else { enableLiveTimeline() }
@@ -120,6 +132,11 @@ extension LensStore {
         case .provenance: if let target = target ?? selection { navigate(target) }; inspectorVisible = true
         case .revealInFinder, .exportInvestigation, .importArchive: break // Native window operations use LensCommandTarget.
         case .conversation: showConversation = true
+        case .openInNewTab: if let destination = target ?? selection { navigate(destination, newTab: true) }
+        case .openInNewWindow:
+            if let destination = target ?? selection {
+                LensApplicationCoordinator.shared.openInNewWindow(destination: destination, from: self)
+            }
         }
     }
 }
@@ -143,7 +160,10 @@ private struct LensWindowActionButton: View {
     let action: LensAction
     let target: Destination?
     var body: some View {
-        Button { context.capture(action, destination: target).execute() } label: { Label(action.title(in: store, target: target), systemImage: LensSymbols.name(action.symbol(in: store, target: target))) }
+        // Explicit row/menu targets retain the window, root and source that
+        // supplied them. Toolbar commands continue to use the current selection.
+        let prepared = target != nil && action.scope == .selection ? context.capture(action, destination: target) : nil
+        Button { (prepared ?? context.capture(action, destination: target)).execute() } label: { Label(action.title(in: store, target: target), systemImage: LensSymbols.name(action.symbol(in: store, target: target))) }
             .disabled(!store.canPerform(action, target: target) || context.operationBusy)
     }
 }
@@ -177,10 +197,11 @@ extension FocusedValues {
 }
 
 struct LensCommands: Commands {
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @ObservedObject private var application = LensApplicationCoordinator.shared
+    @State private var updater = LensUpdateController.shared
     @FocusedValue(\.lensSearchAction) private var focusedSearch
     private var context: LensWindowContext? { application.context(for: NSApp.keyWindow) }
     private var store: LensStore? { context?.store }
@@ -190,10 +211,13 @@ struct LensCommands: Commands {
             Button(LensL10n.text("À propos de Codex Lens")) {
                 NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "Codex Lens", .credits: NSAttributedString(string: LensL10n.text("Inspection locale des sessions Codex. Sources en lecture seule.\nLes enquêtes restent distinctes des traces observées."))])
             }
+            Button(LensL10n.text("Rechercher des mises à jour…")) { updater.check() }
+                .disabled(!updater.canCheck || application.maintenanceInProgress)
         }
         CommandGroup(replacing: .newItem) {
-            Button(LensGlobalAction.newWindow.title) { LensGlobalAction.newWindow.perform(newWindow: { openWindow(id: "session", value: UUID()) }) }.keyboardShortcut("n")
-            Button(LensGlobalAction.openSession.title) { LensGlobalAction.openSession.perform(focusedStore: store, newWindow: { openWindow(id: "session", value: UUID()) }) }.keyboardShortcut("o")
+            Button(LensGlobalAction.newWindow.title) { LensGlobalAction.newWindow.perform(newWindow: { openWindow(id: "session", value: UUID()) }) }.keyboardShortcut("n").disabled(application.maintenanceInProgress)
+            Button(LensGlobalAction.openSession.title) { LensGlobalAction.openSession.perform(focusedStore: store, newWindow: { openWindow(id: "session", value: UUID()) }) }.keyboardShortcut("o").disabled(application.maintenanceInProgress)
+            command(.openInNewWindow)
             Menu(LensL10n.text("Ouvrir une session récente")) {
                 if application.recentIDs.isEmpty { Button(LensL10n.text("Aucune session récente")) {}.disabled(true) }
                 ForEach(application.recentIDs, id: \.self) { id in
@@ -201,7 +225,7 @@ struct LensCommands: Commands {
                         .help(id).accessibilityLabel(application.recentTitle(for: id) + " · " + id)
                 }
                 Divider(); Button(LensL10n.text("Effacer le menu")) { application.clearRecents() }.disabled(application.recentIDs.isEmpty)
-            }
+            }.disabled(application.maintenanceInProgress)
         }
         // Apple's saveItem group owns Close as well as document saves. Lens
         // owns no editable source document, so supply its real tab/window
@@ -294,6 +318,10 @@ struct LensCommands: Commands {
             Button(LensL10n.text("Onglet suivant")) { context?.cycleTab(forward: true) }
                 .keyboardShortcut(.tab, modifiers: [.control]).disabled(context?.canCycleTabs != true)
             Menu(LensL10n.text("Onglets de la fenêtre")) {
+                if let store, store.hasWorkspaceReturn {
+                    Toggle(LensL10n.display(store.workspaceSection.rawValue), isOn: Binding(get: { store.workspacePresented }, set: { selected in if selected { store.showWorkspace() } }))
+                        .disabled(context?.operationBusy == true)
+                }
                 if store?.tabs.isEmpty != false { Button(LensL10n.text("Aucun onglet ouvert")) {}.disabled(true) }
                 ForEach(store?.tabs ?? []) { tab in
                     Toggle(store?.label(tab.destination) ?? "", isOn: Binding(get: { store?.isTabPresented(tab) == true }, set: { selected in if selected { store?.selectTab(tab) } }))
@@ -305,10 +333,12 @@ struct LensCommands: Commands {
         CommandGroup(replacing: .help) {
             Button(LensL10n.text("Aide Codex Lens")) { LensGuideCoordinator.shared.showHelp(); openSettings() }
             Button(LensL10n.text("Revoir les premiers pas")) { LensGuideCoordinator.shared.showHelp(replay: true); openSettings() }
+            #if DEBUG
             Divider()
             Menu(LensL10n.text("Développement")) {
                 Button(LensL10n.text("Galerie des composants")) { openWindow(id: "components") }
             }
+            #endif
         }
     }
     private func command(_ action: LensAction) -> some View {
@@ -321,6 +351,7 @@ struct LensCommands: Commands {
     }
     private func fallbackTitle(_ action: LensAction) -> String {
         switch action {
+        case .openInNewTab: return LensL10n.text("Ouvrir dans un onglet")
         case .openSession: return LensL10n.text("Ouvrir une session…")
         case .back: return LensL10n.text("Précédent")
         case .forward: return LensL10n.text("Suivant")
@@ -339,6 +370,7 @@ struct LensCommands: Commands {
         case .exportInvestigation: return LensL10n.text("Exporter l’enquête…")
         case .importArchive: return LensL10n.text("Importer une archive d’enquête…")
         case .conversation: return LensL10n.text("Conversation et orientations…")
+        case .openInNewWindow: return LensL10n.text("Ouvrir dans une nouvelle fenêtre")
         }
     }
 }

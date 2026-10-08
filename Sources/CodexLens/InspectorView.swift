@@ -28,6 +28,9 @@ struct InspectorView: View {
                 }
                 Menu {
                     if contextOnly { LensActionButton(store: store, action: .investigate) }
+                    if case .agent(let id) = store.selection {
+                        Button(LensL10n.text("Informations sur l’agent")) { store.showAgentMetadata(id) }
+                    }
                     LensActionButton(store: store, action: .copyLink)
                     if let event = store.selectedEvent {
                         Button(LensL10n.text("Afficher dans la timeline")) { store.showInTimeline(event.id) }
@@ -92,6 +95,11 @@ struct InspectorView: View {
             .onChange(of: store.selection) { _, _ in
                 detailsExpanded = false
                 sourceProvenanceExpanded = false
+            }
+            .onChange(of: store.agentMetadataRequest?.id, initial: true) { _, _ in
+                guard let request = store.agentMetadataRequest,
+                      store.selection == .agent(request.agentID) else { return }
+                detailsExpanded = true
             }
             .onChange(of: store.selectedEvent?.id, initial: true) { _, _ in
                 // A new object starts at its recorded payload. Updates to the
@@ -177,10 +185,11 @@ struct InspectorView: View {
             case .agent(let id):
                 if let a = snap.agents.first(where: { $0.id == id }) {
                     Text(a.name.nonempty ?? a.id).font(.headline)
+                    AgentRoleCaption(agent: a).foregroundStyle(.secondary)
                     Text(a.accessible ? LensL10n.text("Journal accessible") : LensL10n.text("Historique du descendant inaccessible")).font(.caption).foregroundStyle(a.accessible ? Color.secondary : LensAppearance.warningText)
                     Text(a.mission.nonempty ?? LensL10n.text("Mission non disponible"))
                         .font(LensUI.readingFont(store.fontSize)).lineLimit(4).textSelection(.enabled)
-                        .help(a.mission.nonempty ?? LensL10n.text("Mission non disponible"))
+                        .help(a.missionEventID != nil ? LensL10n.text("Ouvrez le message d’origine pour consulter la mission complète.") : "")
                     if let env = a.environmentIDs.first {
                         Text(LensL10n.text("Worktree : {0}", env)).font(LensUI.metadata).foregroundStyle(.secondary)
                             .lineLimit(2).truncationMode(.middle).help(a.environmentIDs.joined(separator: "\n"))
@@ -189,7 +198,7 @@ struct InspectorView: View {
                         .buttonStyle(.bordered).controlSize(.small).accessibilityLabel(LensL10n.text("Filtrer l’activité de cet agent"))
                     DisclosureGroup(LensL10n.text("Détails"), isExpanded: $detailsExpanded) {
                         VStack(alignment: .leading, spacing: 12) {
-                            field(LensL10n.text("Mission enregistrée"), a.mission.nonempty ?? LensL10n.text("Mission non disponible"))
+                            AgentMetadataView(agent: a)
                             if let origin = store.presentation?.originInspection.selection(objectID: OriginInspectionIndex.agentID(id)) { OriginEvidenceView(selection: origin, target: selection).id(id) }
                             if let eventID = a.missionEventID { metadata(LensL10n.text("Mission complète et contexte"), value: LensL10n.text("Ouvrir l’instruction / la délégation d’origine")) { store.navigate(.event(eventID), newTab: true) } }
                             AgentInstructionHistoryView(agentID: a.id)
@@ -658,6 +667,7 @@ struct PagedTextView: View {
     }
 }
 struct NativeTextView: NSViewRepresentable {
+    @Environment(\.lensAccent) private var accent
     var text: String
     var monospaced = true
     var fontSize: Double = LensUI.defaultReadingSize
@@ -679,11 +689,13 @@ struct NativeTextView: NSViewRepresentable {
         view.font = monospaced ? codeFont.nativeFont(size: fontSize) : NSFont.systemFont(ofSize: LensUI.readingSize(fontSize))
         view.textColor = .labelColor; view.backgroundColor = .textBackgroundColor; scroll.documentView = view
         view.string = text
+        accent.applyTextSelection(to: view)
         applyMarkdown(to: view, coordinator: context.coordinator)
         return scroll
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let view = scroll.documentView as? NSTextView else { return }
+        accent.applyTextSelection(to: view)
         (view as? RecordedCopyTextView)?.recordedCopyActions = recordedCopyActions
         (view as? RecordedCopyTextView)?.onMagnify = onMagnify
         let selected = view.selectedRanges, origin = scroll.contentView.bounds.origin

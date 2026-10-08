@@ -13,6 +13,9 @@ import subprocess
 import tempfile
 import zipfile
 
+from sparkle_bundle import validate_embedded
+from package_release import validate_production_identity
+
 
 def run(args: list[str]) -> bytes:
     result = subprocess.run(args, capture_output=True)
@@ -52,8 +55,7 @@ def checksum_files(directory: Path) -> None:
 
 def bundle_checks(app: Path, metadata: dict) -> dict:
     info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
-    if info.get("CFBundleIdentifier") != "fr.codexlens.inspector" or "LSEnvironment" in info:
-        raise ValueError("Release contains QA configuration.")
+    validate_production_identity(info)
     if info.get("CFBundleShortVersionString") != metadata["version"] or info.get("CFBundleVersion") != metadata["build"]:
         raise ValueError("Bundle version differs from release metadata.")
     if info.get("LSMinimumSystemVersion") != metadata["minimumMacOS"]:
@@ -64,11 +66,12 @@ def bundle_checks(app: Path, metadata: dict) -> dict:
     if metadata["uuid"] not in run(["xcrun", "dwarfdump", "--uuid", str(exe)]).decode():
         raise ValueError("Release executable UUID differs.")
     run(["codesign", "--verify", "--deep", "--strict", str(app)])
+    validate_embedded(app)
     build = json.loads((app / "Contents/Resources/BuildInfo.json").read_text())
     if build.get("sourceCommit") != metadata["sourceCommit"] or build.get("dirty") != metadata["dirty"]:
         raise ValueError("Bundle build provenance differs.")
     resources = app / "Contents/Resources"
-    required = ["CodexLens.icns", "CodexLens-Dark.icns", "CodexLens-Light.icns", "Localizations/en.json", "THIRD_PARTY_NOTICES.txt"]
+    required = ["CodexLens.icns", "CodexLens-Dark.icns", "CodexLens-Light.icns", "Localizations/en.json", "THIRD_PARTY_NOTICES.txt", "Sparkle-LICENSE.txt"]
     if not all((resources / name).is_file() for name in required):
         raise ValueError("Release resources are missing.")
     return {str(p.relative_to(app)): digest(p) for p in sorted(app.rglob("*")) if p.is_file()}

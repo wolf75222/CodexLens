@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import LensCore
 
 private struct LensReduceMotionOverrideKey: EnvironmentKey {
     static let defaultValue: Bool? = nil
@@ -73,20 +75,56 @@ struct LensProgressIndicator: View {
     }
 }
 
-/// A content-area loading state. Inline indicators remain compact; the title,
-/// spinner and optional cancellation here share the same horizontal centre.
+/// Measured stages use a native determinate bar immediately. Unknown totals use
+/// an indeterminate indicator; elapsed time never invents a completion fraction.
 struct LensLoadingState: View {
     let title: String
     var cancelTitle: String? = nil
     var onCancel: (() -> Void)? = nil
+    var longRunningDelay: Duration = .milliseconds(1500)
+    var operationID: UUID? = nil
+    var progress: SessionLoadingProgress? = nil
+    var showsOpeningSteps = false
+    @State private var showsProgressBar = false
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.lensReduceMotionOverride) private var override
 
     var body: some View {
         VStack(spacing: 12) {
-            LensProgressIndicator(accessibilityLabel: title)
-            Text(title).font(.callout).foregroundStyle(.secondary)
+            Group {
+                if showsProgressBar || progress?.fraction != nil {
+                    LensLoadingBar(animationEnabled: !(override ?? systemReduceMotion), fraction: progress?.fraction)
+                        // A new measured stage/file resets AppKit's retained fill.
+                        .id(LoadingBarIdentity(stage: progress?.stage, fileName: progress?.history == nil ? progress?.fileName : nil, totalBytes: progress?.history?.totalBytes))
+                        // The small AppKit control reserves 12 pt for its thin track.
+                        .frame(height: 12)
+                        .accessibilityIdentifier("lens-progress-long-running")
+                        .accessibilityLabel(progress?.stageTitle ?? title)
+                        .accessibilityValue(progress?.counterTitle ?? LensL10n.text("En cours"))
+                } else {
+                    LensProgressIndicator(accessibilityLabel: title)
+                }
+            }
+            .frame(maxWidth: 240)
+            .frame(height: 20)
+            Text(progress.map { showsOpeningSteps ? LensL10n.text("{0} · {1}/4", $0.stageTitle, $0.openingStep.formatted()) : $0.stageTitle } ?? title).font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 420)
+            if let progress {
+                if let counter = progress.counterTitle {
+                    Text(counter).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                        .accessibilityIdentifier("lens-progress-counter")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let detail = progress.fileDetailTitle {
+                    Text(detail).font(.caption2).monospacedDigit().foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true).help(progress.fileName ?? detail)
+                } else if let fileName = progress.fileName {
+                    Text(fileName).font(.caption2).foregroundStyle(.tertiary)
+                        .lineLimit(1).truncationMode(.middle).frame(maxWidth: 320).help(fileName)
+                }
+            }
             if let cancelTitle, let onCancel {
                 Button(cancelTitle, action: onCancel).controlSize(.small)
             }
@@ -94,5 +132,122 @@ struct LensLoadingState: View {
         .padding(20)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
+        .task(id: LoadingIdentity(title: title, operationID: operationID, delay: longRunningDelay)) {
+            showsProgressBar = false
+            do {
+                try await Task.sleep(for: longRunningDelay)
+                try Task.checkCancellation()
+                showsProgressBar = true
+            } catch { return }
+        }
+    }
+
+    private struct LoadingIdentity: Equatable {
+        let title: String
+        let operationID: UUID?
+        let delay: Duration
+    }
+}
+
+private struct LoadingBarIdentity: Hashable {
+    let stage: SessionLoadingProgress.Stage?
+    let fileName: String?
+    var totalBytes: Int64? = nil
+}
+
+/// Native animation stays in AppKit, with no repeating SwiftUI timer or extra I/O.
+/// Keeping an indeterminate control stopped also respects Reduce Motion without
+/// falsely presenting a measured fraction of completion.
+private struct LensLoadingBar: NSViewRepresentable {
+    let animationEnabled: Bool
+    let fraction: Double?
+
+    func makeNSView(context: Context) -> LensLoadingBarIndicator {
+        let indicator = LensLoadingBarIndicator()
+        indicator.style = .bar
+        indicator.controlSize = .small
+        indicator.isIndeterminate = true
+        indicator.isDisplayedWhenStopped = true
+        indicator.stopAnimation(nil)
+        return indicator
+    }
+
+    func updateNSView(_ indicator: LensLoadingBarIndicator, context: Context) {
+        indicator.isIndeterminate = fraction == nil
+        indicator.minValue = 0; indicator.maxValue = 1
+        if let fraction { indicator.doubleValue = fraction }
+        indicator.setAnimationEnabled(animationEnabled && fraction == nil)
+    }
+
+    static func dismantleNSView(_ indicator: LensLoadingBarIndicator, coordinator: ()) {
+        indicator.setAnimationEnabled(false)
+    }
+}
+
+/// A refresh keeps valid rows available while reporting its measured work.
+struct LensSessionProgressLine: View {
+    let progress: SessionLoadingProgress
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        HStack(spacing: 10) {
+            LensLoadingBar(animationEnabled: !reduceMotion, fraction: progress.fraction)
+                .id(LoadingBarIdentity(stage: progress.stage, fileName: progress.fileName))
+                .frame(width: 120, height: 12)
+                .accessibilityLabel(progress.stageTitle)
+                .accessibilityValue(progress.counterTitle ?? LensL10n.text("En cours"))
+            Text(progress.counterTitle ?? progress.stageTitle).font(.caption).monospacedDigit()
+                .foregroundStyle(.secondary).lineLimit(1)
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+extension SessionLoadingProgress {
+    var stageTitle: String {
+        switch stage {
+        case .discoveringSessions: LensL10n.text("Recherche des sessions…")
+        case .readingMetadata: LensL10n.text("Lecture du catalogue…")
+        case .restoringIndex: LensL10n.text("Chargement de l’index…")
+        case .readingHistory: LensL10n.text("Lecture de l’historique…")
+        case .organizingEvents: LensL10n.text("Organisation des événements…")
+        case .linkingEvents: LensL10n.text("Association des actions…")
+        case .savingIndex: LensL10n.text("Enregistrement de l’index…")
+        case .restoringWorkspace: LensL10n.text("Restauration de la session…")
+        }
+    }
+
+    var counterTitle: String? {
+        switch stage {
+        case .discoveringSessions:
+            return completed > 0 ? LensL10n.text("{0} fichiers trouvés", completed.formatted()) : nil
+        case .readingMetadata:
+            return total.map { LensL10n.text("{0} / {1} fichiers traités", completed.formatted(), $0.formatted()) }
+        case .readingHistory:
+            if let history {
+                if let total = history.totalBytes {
+                    return LensL10n.text("{0} / {1} au total", ByteCountFormatter.string(fromByteCount: history.completedBytes, countStyle: .file), ByteCountFormatter.string(fromByteCount: total, countStyle: .file))
+                }
+                return LensL10n.text("{0} / {1} fichiers traités", history.completedFiles.formatted(), history.totalFiles.formatted())
+            }
+            return total.map { LensL10n.text("{0} / {1} · fichier en cours", ByteCountFormatter.string(fromByteCount: completed, countStyle: .file), ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)) }
+        case .organizingEvents:
+            return total.map { LensL10n.text("{0} / {1} événements traités", completed.formatted(), $0.formatted()) }
+        default: return nil
+        }
+    }
+
+    var fileDetailTitle: String? {
+        guard let history, let total, stage == .readingHistory else { return nil }
+        return LensL10n.text("Fichier {0}/{1} · {2} / {3}", history.currentFile.formatted(), history.totalFiles.formatted(), ByteCountFormatter.string(fromByteCount: completed, countStyle: .file), ByteCountFormatter.string(fromByteCount: total, countStyle: .file))
+    }
+}
+
+final class LensLoadingBarIndicator: NSProgressIndicator {
+    private(set) var animationEnabled = false
+
+    func setAnimationEnabled(_ enabled: Bool) {
+        guard animationEnabled != enabled else { return }
+        animationEnabled = enabled
+        if enabled { startAnimation(nil) } else { stopAnimation(nil) }
     }
 }

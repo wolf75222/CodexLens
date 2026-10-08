@@ -4,6 +4,42 @@ import XCTest
 
 /// These readers consume only invented histories in /private/tmp, never the user's Codex home.
 final class SessionReaderPoolTests: XCTestCase {
+    func testSuspendedAcquisitionsRejectNewReadersUntilExplicitRecovery() async throws {
+        let f = try ReaderFixture(); defer { f.remove() }
+        let pool = SessionReaderPool()
+        await pool.setAcquisitionsSuspended(true)
+        do { _ = try await pool.acquire(home: f.home, cacheDirectory: f.cache, rootID: ReaderFixture.a); XCTFail("Maintenance must reject new acquisitions") }
+        catch is CancellationError { }
+        let count = await pool.activeReaderCount
+        XCTAssertEqual(count, 0)
+        await pool.setAcquisitionsSuspended(false)
+        let lease = try await pool.acquire(home: f.home, cacheDirectory: f.cache, rootID: ReaderFixture.a)
+        await lease.release()
+    }
+    func testMaintenanceDrainsReadersDuringLastLeaseReleaseAndCanRecover() async throws {
+        let f = try ReaderFixture(); defer { f.remove() }
+        let log = try f.write(id: ReaderFixture.a, count: 1000)
+        let original = try Data(contentsOf: log)
+        let pool = SessionReaderPool()
+        let lease = try await pool.acquire(home: f.home, cacheDirectory: f.cache, rootID: ReaderFixture.a)
+        let flight = Task { try await lease.reader.load() }
+        while await lease.reader.startedCollections == 0 { await Task.yield() }
+        async let release: Void = lease.release()
+        await pool.quiesce()
+        await release
+        _ = await flight.result
+        let count = await pool.activeReaderCount
+        XCTAssertEqual(count, 0)
+        do { _ = try await lease.reader.load(); XCTFail("A drained reader must not resume writing its cache") }
+        catch LensError.unavailable(_) { }
+        XCTAssertEqual(try Data(contentsOf: log), original)
+        let restored = try await pool.acquire(home: f.home, cacheDirectory: f.cache, rootID: ReaderFixture.a)
+        XCTAssertFalse(restored.reader === lease.reader)
+        let result = try await restored.reader.load()
+        XCTAssertEqual(result.snapshot.root.id, ReaderFixture.a)
+        XCTAssertEqual(try Data(contentsOf: log), original)
+        await restored.release()
+    }
     func testSameCanonicalSourceCacheAndRootShareReaderButOtherKeysDoNot() async throws {
         let f = try ReaderFixture(); defer { f.remove() }
         let pool = SessionReaderPool()
@@ -21,6 +57,91 @@ final class SessionReaderPoolTests: XCTestCase {
         await first.release(); count = await pool.activeReaderCount; XCTAssertEqual(count, 4)
         for lease in [second, otherRoot, otherCache, catalog] { await lease.release() }
         count = await pool.activeReaderCount; XCTAssertEqual(count, 0)
+    }
+
+    func testMissingNestedCacheUnderAliasSharesAfterFirstReaderCreatesIt() async throws {
+        let f = try ReaderFixture(); defer { f.remove() }
+        let log = try f.write(id: ReaderFixture.a, count: 2)
+        let sourceBytes = try Data(contentsOf: log)
+        let physicalParent = f.base.appendingPathComponent("physical-cache-parent")
+        try FileManager.default.createDirectory(at: physicalParent, withIntermediateDirectories: true)
+        let alias = f.base.appendingPathComponent("cache-parent-alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: physicalParent)
+        let cache = alias.appendingPathComponent("missing/nested/index")
+        let physicalCache = physicalParent.appendingPathComponent("missing/nested/index")
+        let pool = SessionReaderPool()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: physicalCache.path))
+        let first = try await pool.acquire(home: f.home, cacheDirectory: cache, rootID: ReaderFixture.a)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: physicalCache.path), "Acquiring a key must not create the cache")
+        let initial = try await first.reader.load()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: physicalCache.path))
+
+        let second = try await pool.acquire(home: f.home.resolvingSymlinksInPath(), cacheDirectory: physicalCache, rootID: ReaderFixture.a)
+        let third = try await pool.acquire(home: f.home, cacheDirectory: cache, rootID: ReaderFixture.a)
+        XCTAssertTrue(first.reader === second.reader); XCTAssertTrue(first.engine === second.engine)
+        XCTAssertTrue(first.reader === third.reader)
+        let peer = try await second.reader.load()
+        XCTAssertEqual(initial.revision, peer.revision)
+        XCTAssertEqual(initial.snapshot.events.map(\.id), peer.snapshot.events.map(\.id))
+        let starts = await first.reader.startedCollections; XCTAssertEqual(starts, 1)
+        var count = await pool.activeReaderCount; XCTAssertEqual(count, 1)
+        await first.release(); await first.release()
+        count = await pool.activeReaderCount; XCTAssertEqual(count, 1)
+        await second.release()
+        count = await pool.activeReaderCount; XCTAssertEqual(count, 1)
+        await third.release()
+        count = await pool.activeReaderCount; XCTAssertEqual(count, 0)
+        XCTAssertEqual(try Data(contentsOf: log), sourceBytes)
+    }
+
+    func testProspectiveSourceBelowExistingAliasSharesAfterDirectoryCreation() async throws {
+        let f = try ReaderFixture(); defer { f.remove() }
+        let physicalParent = f.base.appendingPathComponent("physical-source-parent")
+        try FileManager.default.createDirectory(at: physicalParent, withIntermediateDirectories: true)
+        let alias = f.base.appendingPathComponent("source-parent-alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: physicalParent)
+        let source = alias.appendingPathComponent("missing/nested/home")
+        let physicalSource = physicalParent.appendingPathComponent("missing/nested/home")
+        let pool = SessionReaderPool()
+        let first = try await pool.acquire(home: source, cacheDirectory: f.cache, rootID: ReaderFixture.a)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: physicalSource.path), "A prospective source must stay read-only")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.cache.path))
+
+        let directory = physicalSource.appendingPathComponent("sessions/2026/10/02")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let log = directory.appendingPathComponent("rollout-2026-10-02T00-00-00-" + ReaderFixture.a + ".jsonl")
+        var bytes = try f.record("session_meta", ["id": ReaderFixture.a, "cwd": f.environment.path, "source": "cli"])
+        bytes.append(try f.message("Invented message in a source created after subscription"))
+        try bytes.write(to: log)
+        let second = try await pool.acquire(home: physicalSource, cacheDirectory: f.cache, rootID: ReaderFixture.a)
+        XCTAssertTrue(first.reader === second.reader); XCTAssertTrue(first.engine === second.engine)
+        let publication = try await second.reader.load()
+        XCTAssertEqual(publication.snapshot.root.id, ReaderFixture.a)
+        XCTAssertTrue(publication.snapshot.events.contains { $0.preview.contains("source created after subscription") })
+        XCTAssertEqual(try Data(contentsOf: log), bytes)
+        await first.release()
+        var count = await pool.activeReaderCount; XCTAssertEqual(count, 1)
+        await second.release()
+        count = await pool.activeReaderCount; XCTAssertEqual(count, 0)
+    }
+
+    func testBlockedCacheStillReportsCoverageWithoutBlockingReadOnlyHistory() async throws {
+        let f = try ReaderFixture(); defer { f.remove() }
+        let log = try f.write(id: ReaderFixture.a, count: 2)
+        let sourceBytes = try Data(contentsOf: log)
+        let blocker = f.base.appendingPathComponent("cache-parent-is-a-file")
+        let blockerBytes = Data("Cache fixture: this path is a regular file.\n".utf8)
+        try blockerBytes.write(to: blocker)
+        let pool = SessionReaderPool()
+        let lease = try await pool.acquire(home: f.home, cacheDirectory: blocker.appendingPathComponent("nested/index"), rootID: ReaderFixture.a)
+        let publication = try await lease.reader.load()
+        XCTAssertEqual(publication.snapshot.root.id, ReaderFixture.a)
+        XCTAssertEqual(publication.snapshot.events.filter { $0.kind == .assistant }.count, 2)
+        XCTAssertTrue(publication.snapshot.coverage.contains { $0.category == "cache" })
+        XCTAssertEqual(try Data(contentsOf: blocker), blockerBytes)
+        XCTAssertEqual(try Data(contentsOf: log), sourceBytes)
+        await lease.release()
+        let count = await pool.activeReaderCount; XCTAssertEqual(count, 0)
     }
 
     func testCoalescedInitialLoadAndSequentialRefreshPublishAppendToEverySubscriber() async throws {

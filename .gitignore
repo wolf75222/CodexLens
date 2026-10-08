@@ -33,6 +33,7 @@ __pycache__/
 /scripts/*.swift
 !/scripts/build.sh
 !/scripts/test.sh
+!/scripts/measure-session-catalog.py
 !/scripts/run.sh
 !/scripts/stop.sh
 !/scripts/lens_local.py
@@ -45,6 +46,7 @@ __pycache__/
 !/scripts/create-version-corpus-v18.py
 !/scripts/create-context-corpus-v20.py
 !/scripts/create-origin-corpus-v21.py
+!/scripts/create-curves-corpus-v77.py
 !/scripts/verify-design-v07.sh
 !/scripts/qualify-production-v06.py
 !/scripts/package-release.sh
@@ -53,6 +55,10 @@ __pycache__/
 !/scripts/check-repository.py
 !/scripts/release_notes.py
 !/scripts/render-docs.sh
+!/scripts/sparkle_bundle.py
+!/scripts/update_appcast.py
+!/scripts/verify-updates.sh
+!/scripts/verify_updates.py
 
 # OS/user-specific project state
 *.xcuserstate

@@ -29,6 +29,7 @@ private extension LensStore {
 }
 
 struct AgentsView: View {
+    @Environment(\.lensAccent) private var accent
     @EnvironmentObject var store: LensStore
     @State private var searchFocused = false
     @FocusState private var listFocused: Bool
@@ -53,30 +54,41 @@ struct AgentsView: View {
                 }
             }.padding(.horizontal, 14).padding(.vertical, 10)
             List(tree, id: \.0.id, selection: store.objectListSelection(in: .agents)) { agent, depth in
-                Button { store.navigate(.agent(agent.id)); listFocused = true } label: {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: LensSymbols.agent(agent.relation)).font(.system(size: 13, weight: .medium)).foregroundStyle(agent.accessible ? LensBrand.ink : LensAppearance.warningText).frame(width: 20, height: 18).accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack(spacing: 8) {
-                                Text(agent.name.nonempty ?? String(agent.id.prefix(8))).font(LensUI.body.weight(.semibold)).lineLimit(1).truncationMode(.middle).help(agent.name.nonempty ?? agent.id)
-                                Spacer(minLength: 6)
-                                LensSelectionMark(selected: store.selection == .agent(agent.id))
+                HStack(alignment: .top, spacing: 6) {
+                    Button { store.navigate(.agent(agent.id)); listFocused = true } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: LensSymbols.agent(agent.relation)).font(.system(size: 13, weight: .medium)).foregroundStyle(agent.accessible ? accent.color : LensAppearance.warningText).frame(width: 20, height: 18).accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack(spacing: 8) {
+                                    Text(agent.name.nonempty ?? String(agent.id.prefix(8))).font(LensUI.body.weight(.semibold)).lineLimit(1).truncationMode(.middle).help(agent.name.nonempty ?? agent.id)
+                                    Spacer(minLength: 6)
+                                    LensSelectionMark(selected: store.selection == .agent(agent.id))
+                                }
+                                HStack(spacing: 8) {
+                                    Text(relationLabel(agent.relation)).lineLimit(1)
+                                    AgentRoleCaption(agent: agent)
+                                    Spacer(minLength: 6)
+                                    Text(LensUI.count(store.presentation?.eventCountByAgent[agent.id] ?? 0, singular: "événement", plural: "événements")).monospacedDigit().lineLimit(1)
+                                }.font(LensUI.metadata).foregroundStyle(.secondary)
+                                Text(agent.mission.nonempty ?? LensL10n.text("Mission non enregistrée")).font(LensUI.readingFont(store.fontSize)).lineLimit(3).foregroundStyle(.secondary)
+                                Text(agent.id).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(agent.id)
+                                if !agent.accessible { Label(LensL10n.text("Historique inaccessible"), systemImage: LensSymbols.name("doc.questionmark")).font(.caption).foregroundStyle(.secondary) }
                             }
-                            HStack(spacing: 8) {
-                                Text(relationLabel(agent.relation)).lineLimit(1)
-                                Spacer(minLength: 6)
-                                Text(LensUI.count(store.presentation?.eventCountByAgent[agent.id] ?? 0, singular: "événement", plural: "événements")).monospacedDigit().lineLimit(1)
-                            }.font(LensUI.metadata).foregroundStyle(.secondary)
-                            Text(agent.mission.nonempty ?? LensL10n.text("Mission non enregistrée")).font(LensUI.readingFont(store.fontSize)).lineLimit(3).foregroundStyle(.secondary)
-                            Text(agent.id).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(agent.id)
-                            if !agent.accessible { Label(LensL10n.text("Historique inaccessible"), systemImage: LensSymbols.name("doc.questionmark")).font(.caption).foregroundStyle(.secondary) }
-                        }
-                    }.padding(.leading, CGFloat(depth) * 20).padding(.vertical, 9).contentShape(Rectangle())
-                }.buttonStyle(.plain).tag(agent.id).listRowBackground(store.selection == .agent(agent.id) ? LensBrand.selection : .clear)
-                    .simultaneousGesture(TapGesture(count: 2).onEnded { store.navigate(.agent(agent.id), newTab: true) })
-                    .help(LensL10n.text("Double-clic ou Retour pour ouvrir l’agent sélectionné."))
-                    .accessibilityAddTraits(store.selection == .agent(agent.id) ? .isSelected : [])
+                        }.padding(.vertical, 9).contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                        .simultaneousGesture(TapGesture(count: 2).onEnded { store.navigate(.agent(agent.id), newTab: true) })
+                        .help(LensL10n.text("Double-clic ou Retour pour ouvrir l’agent sélectionné."))
+                        .accessibilityAddTraits(store.selection == .agent(agent.id) ? .isSelected : [])
+                        Button { store.showAgentMetadata(agent.id) } label: {
+                            Image(systemName: LensSymbols.name("info.circle")).frame(width: 24, height: 24)
+                        }.buttonStyle(.borderless).padding(.top, 7)
+                            .help(LensL10n.text("Informations sur l’agent"))
+                            .accessibilityLabel(LensL10n.text("Informations sur l’agent {0}", agent.name.nonempty ?? agent.id))
+                            .accessibilityIdentifier("lens-agent-information")
+                }.padding(.leading, CGFloat(depth) * 20).tag(agent.id)
+                    .listRowBackground(store.selection == .agent(agent.id) ? accent.selectionColor : .clear)
                     .contextMenu {
+                        Button(LensL10n.text("Informations sur l’agent")) { store.showAgentMetadata(agent.id) }
                         LensActionButton(store: store, action: .investigate, target: .agent(agent.id))
                         Button(LensL10n.text("Ouvrir dans un onglet")) { store.navigate(.agent(agent.id), newTab: true) }
                         Button(LensL10n.text("Filtrer son activité")) { store.showActivity(for: .agent(agent.id)) }
@@ -298,6 +310,7 @@ enum FileTreeSelection {
     }
 }
 struct FileTreeRow: View {
+    @Environment(\.lensAccent) private var accent
     @EnvironmentObject var store: LensStore
     let entry: FileEntry
     let environmentID: String
@@ -320,7 +333,7 @@ struct FileTreeRow: View {
                         if entry.isDirectory { Image(systemName: LensSymbols.name(expanded ? "chevron.down" : "chevron.right")).imageScale(.small) }
                         else { Color.clear }
                     }.frame(width: 10).accessibilityHidden(true)
-                    Image(systemName: LensSymbols.name(entry.isSymbolicLink ? "link" : LensUI.fileSymbol(entry.id, isDirectory: entry.isDirectory))).foregroundStyle(entry.isDirectory ? Color.accentColor : .secondary).accessibilityHidden(true)
+                    Image(systemName: LensSymbols.name(entry.isSymbolicLink ? "link" : LensUI.fileSymbol(entry.id, isDirectory: entry.isDirectory))).foregroundStyle(entry.isDirectory ? accent.color : .secondary).accessibilityHidden(true)
                     Text(entry.name).font(LensUI.body.weight(isSelected ? .semibold : .regular)).lineLimit(1)
                     Spacer(minLength: 0)
                     LensSelectionMark(selected: isSelected)
@@ -331,7 +344,7 @@ struct FileTreeRow: View {
                 .accessibilityValue(entry.isRestricted ? LensL10n.text("Accès non autorisé") : entry.isDirectory ? (expanded ? LensL10n.text("Développé") : LensL10n.text("Réduit")) : "")
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .help(entry.id + (entry.isRestricted ? LensL10n.text(" · accès non autorisé") : ""))
-                .background(isSelected ? LensBrand.selection : .clear)
+                .background(isSelected ? accent.selectionColor : .clear)
                 .contextMenu { NativeFilePathActions(path: entry.id, worktreeRoot: worktreeRoot, isDirectory: entry.isDirectory, restricted: entry.isRestricted, onIssue: { issue = $0 }) }
             if let issue { Text(LensL10n.display(issue)).font(.caption).foregroundStyle(LensAppearance.warningText).textSelection(.enabled).padding(.leading, CGFloat(depth + 1) * 13) }
             if expanded {
@@ -342,6 +355,7 @@ struct FileTreeRow: View {
 }
 
 struct ResourcesView: View {
+    @Environment(\.lensAccent) private var accent
     @EnvironmentObject var store: LensStore
     @State private var role: ResourceRole?
     @State private var showRecovery = false
@@ -365,7 +379,7 @@ struct ResourcesView: View {
                     Button { store.navigate(.resource(resource.id)) } label: {
                         LensResourceRowLabel(resource: resource, isKnownDirectory: directories.contains(NativeFileLocation.localPath(resource.location) ?? ""), isSelected: store.selection == .resource(resource.id))
                             .padding(.vertical, 7).contentShape(Rectangle())
-                    }.buttonStyle(.plain).tag(resource.id).listRowBackground(store.selection == .resource(resource.id) ? LensBrand.selection : .clear)
+                    }.buttonStyle(.plain).tag(resource.id).listRowBackground(store.selection == .resource(resource.id) ? accent.selectionColor : .clear)
                         .accessibilityAddTraits(store.selection == .resource(resource.id) ? .isSelected : [])
                         .contextMenu {
                             if let path = NativeFileLocation.localPath(resource.location) { NativeFilePathActions(path: path, isDirectory: directories.contains(path)) }
@@ -695,24 +709,38 @@ struct PDFPreview: NSViewRepresentable {
     func updateNSView(_ view: PDFView, context: Context) { if view.document !== document { view.document = document } }
 }
 
+enum ChangesPresentationMode: String, Codable { case overview, actions }
+private enum ChangesReviewLayout: String { case files, worktrees, actions }
+
 struct ChangesView: View {
+    @Environment(\.lensAccent) private var accent
     @EnvironmentObject var store: LensStore
     @Environment(\.lensWindowContext) private var windowContext
-    @State private var kind: ChangeKind?
-    private var changes: [ChangeRecord] {
-        (store.snapshot?.changes ?? []).filter { c in
-            (kind == nil || c.kind == kind) && (store.agentFilter == nil || c.agentID == store.agentFilter) && (store.environmentFilter == nil || c.environmentID == store.environmentFilter) && store.matches(c.path + c.evidence, eventIDs: [c.eventID]) && (store.period == nil || store.event(c.eventID).map { $0.overlaps(store.period!) } == true)
-        }
+    private var kind: ChangeKind? { store.changesKindFilter }
+    private var changes: [ChangeRecord] { store.presentation?.filteredChanges ?? [] }
+    private var reviewLayout: Binding<ChangesReviewLayout> {
+        Binding(get: {
+            store.changesPresentation == .actions ? .actions : store.changesOverviewMode == .files ? .files : .worktrees
+        }, set: { value in
+            store.changesPresentation = value == .actions ? .actions : .overview
+            if value == .files { store.changesOverviewMode = .files }
+            if value == .worktrees { store.changesOverviewMode = .activity }
+        })
     }
     var body: some View {
         let filtered = changes
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Text(LensUI.count(filtered.count, singular: "modification", plural: "modifications")).font(LensUI.metadata).foregroundStyle(.secondary)
-                if let kind { Text(changeLabel(kind)).font(LensUI.metadata).foregroundStyle(.secondary).lineLimit(1) }
+                Picker(LensL10n.text("Présentation des modifications"), selection: reviewLayout) {
+                    Text(LensL10n.text("Fichiers")).tag(ChangesReviewLayout.files)
+                    Text(LensL10n.text("Worktrees")).tag(ChangesReviewLayout.worktrees)
+                    Text(LensL10n.text("Actions")).tag(ChangesReviewLayout.actions)
+                }.pickerStyle(.segmented).labelsHidden().frame(width: 250)
+                    .accessibilityIdentifier("lens-changes-presentation")
+                if let kind { Text(changeLabel(kind)).font(LensUI.metadata).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: 140, alignment: .leading) }
                 Spacer(minLength: 8)
                 Menu {
-                    Picker(LensL10n.text("Nature de la trace"), selection: $kind) {
+                    Picker(LensL10n.text("Nature de la trace"), selection: $store.changesKindFilter) {
                         Text(LensL10n.text("Toutes les traces")).tag(ChangeKind?.none)
                         Text(LensL10n.text("Patch demandé")).tag(Optional(ChangeKind.requestedPatch))
                         Text(LensL10n.text("Résultat enregistré")).tag(Optional(ChangeKind.recordedResult))
@@ -726,7 +754,10 @@ struct ChangesView: View {
             if store.period != nil, store.isProjecting {
                 HStack { LensProgressIndicator().controlSize(.small); Text(LensL10n.text("Préparation des correspondances avec la période sélectionnée…")).font(LensUI.metadata).foregroundStyle(.secondary); Spacer() }.padding(.horizontal, 14).padding(.bottom, 8).fixedSize(horizontal: false, vertical: true)
             }
-            if case .change(let id) = store.selection, let change = store.snapshot?.changes.first(where: { $0.id == id }) {
+            if store.changesPresentation == .overview, let projection = store.presentation?.changesOverview {
+                ChangesOverviewView(projection: projection, environmentID: $store.changesOverviewEnvironmentID,
+                    fileID: $store.changesOverviewFileID, mode: $store.changesOverviewMode, detailMode: $store.changesOverviewDetailMode, showsModeControls: false)
+            } else if case .change(let id) = store.selection, let change = store.change(id) {
                 if !filtered.contains(where: { $0.id == id }) {
                     Label(LensL10n.text("Cette modification ne correspond pas aux filtres de la liste."), systemImage: LensSymbols.name("line.3.horizontal.decrease"))
                         .font(LensUI.metadata).foregroundStyle(.secondary)
@@ -755,7 +786,7 @@ struct ChangesView: View {
                     Text(LensL10n.text("{0} · {1}", String(describing: store.agentName(change.agentID)), String(describing: change.environmentID))).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     Text(change.evidence).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }.padding(.vertical, 8).contentShape(Rectangle())
-            }.buttonStyle(.plain).id(change.id).tag(change.id).listRowBackground(store.selection == .change(change.id) ? LensBrand.selection : .clear)
+            }.buttonStyle(.plain).id(change.id).tag(change.id).listRowBackground(store.selection == .change(change.id) ? accent.selectionColor : .clear)
                 .accessibilityAddTraits(store.selection == .change(change.id) ? .isSelected : [])
                 .contextMenu {
                     Button(LensL10n.text("Voir l’action et son contexte")) { store.navigate(.event(change.eventID), newTab: true) }
@@ -768,7 +799,7 @@ struct ChangesView: View {
                     let hasChanges = !(store.snapshot?.changes.isEmpty ?? true)
                     LensCollectionEmptyState(title: LensL10n.text(hasChanges ? "Aucune modification correspondante" : "Aucune modification enregistrée"),
                         detail: LensL10n.text(hasChanges ? "Vérifiez la nature de la trace, la recherche et les filtres d’agent, d’environnement ou de période. Ces filtres restent conservés." : "Les données disponibles ne contiennent aucune trace de modification. Le diff Git actuel reste distinct et accessible dans chaque environnement."), symbol: "plus.forwardslash.minus",
-                        onClear: hasChanges && (kind != nil || !store.query.isEmpty) ? { kind = nil; store.query = "" } : nil)
+                        onClear: hasChanges && (kind != nil || !store.query.isEmpty) ? { store.changesKindFilter = nil; store.query = "" } : nil)
                 }
             }
             .task(id: store.selection) {
@@ -791,21 +822,27 @@ struct CurrentDiffView: View {
     @State private var diff: CurrentDiff?
     @State private var issue: String?
     @State private var staged = false
+    @State private var recordedBaseline = false
     @State private var loading = false
     @State private var parsed: RecordedDiffPresentation?
     @State private var loadGeneration: UInt64 = 0
     @State private var loadTask: Task<Void, Never>?
     @State private var loadedIdentity: CurrentDiffReadIdentity?
-    private var readIdentity: CurrentDiffReadIdentity { CurrentDiffReadIdentity(rootID: store.snapshot?.root.id, environmentID: environment.id, staged: staged) }
+    private var readIdentity: CurrentDiffReadIdentity { CurrentDiffReadIdentity(rootID: store.snapshot?.root.id, environmentID: environment.id, staged: staged, recordedReference: recordedBaseline ? environment.recordedRef : nil) }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 if parsed == nil { Text(LensL10n.text("Diff Git actuel")).font(LensUI.metadata.weight(.semibold)) }
                 Spacer(minLength: 8)
                 Button(LensL10n.text("Lire le diff")) { startLoad() }.buttonStyle(LensQuietButtonStyle()).controlSize(.small).disabled(loading)
+                    .accessibilityIdentifier("lens-current-diff-read")
                 Menu {
                     Toggle(LensL10n.text("Index Git"), isOn: $staged)
+                        .disabled(recordedBaseline)
                         .help(LensL10n.text("Comparer les changements préparés pour commit. Choisissez Lire le diff pour charger cette comparaison."))
+                    Toggle(LensL10n.text("Depuis le commit enregistré"), isOn: $recordedBaseline)
+                        .disabled(environment.recordedRef == nil)
+                        .help(LensL10n.text("Comparer le commit enregistré aux fichiers actuels, y compris les changements déjà commités. Le contenu non commité de l’ancienne session reste inconnu."))
                 } label: { LensIconMenuLabel() }
                     .lensIconMenu("Options du diff Git actuel")
                     .accessibilityIdentifier("lens-current-diff-options")
@@ -816,7 +853,7 @@ struct CurrentDiffView: View {
             if let issue { Text(LensL10n.display(issue)).font(.caption).foregroundStyle(LensAppearance.warningText).textSelection(.enabled) }
             if let diff {
                 if let loadedIdentity {
-                    Label(loadedIdentity.staged ? LensL10n.text("Diff chargé : index Git") : LensL10n.text("Diff chargé : fichiers de travail"), systemImage: LensSymbols.name("doc.text")).font(.caption)
+                    Label(loadedIdentity.recordedReference != nil ? LensL10n.text("Diff chargé : commit enregistré → fichiers actuels") : loadedIdentity.staged ? LensL10n.text("Diff chargé : index Git") : LensL10n.text("Diff chargé : fichiers de travail"), systemImage: LensSymbols.name("doc.text")).font(.caption)
                     if loadedIdentity != readIdentity { Text(LensL10n.text("Les paramètres ont changé. Lire le diff pour actualiser ; la comparaison précédente reste affichée.")).font(.caption).foregroundStyle(.secondary) }
                 }
                 if parsed == nil { Text(diff.reference).font(.system(size: 11, design: .monospaced)).textSelection(.enabled) }
@@ -825,11 +862,16 @@ struct CurrentDiffView: View {
                 if let parsed { RecordedDiffView(document: parsed.document).id(parsed.identity).frame(minHeight: 300) }
                 else { PagedTextView(text: diff.text.nonempty ?? LensL10n.text("Aucune différence observée pour cette référence."), identity: environment.id + staged.description).frame(minHeight: 170) }
             }
-        }.onChange(of: readIdentity) { _, _ in invalidateLoad() }.onDisappear { invalidateLoad() }
+        }.onChange(of: readIdentity) { _, _ in invalidateLoad() }
+            .onChange(of: recordedBaseline) { _, enabled in if enabled { staged = false } }
+            .onDisappear { invalidateLoad() }
     }
     private func invalidateLoad() { loadTask?.cancel(); loadGeneration &+= 1; loading = false }
     private func startLoad() {
         guard !loading else { return }
+        guard !recordedBaseline || environment.recordedRef != nil else {
+            issue = LensL10n.text("Le commit enregistré est indisponible pour cet environnement."); return
+        }
         invalidateLoad(); loading = true; issue = nil
         let generation = loadGeneration, identity = readIdentity, capturedEnvironment = environment
         loadTask = Task { await load(environment: capturedEnvironment, identity: identity, generation: generation) }
@@ -838,7 +880,7 @@ struct CurrentDiffView: View {
     private func load(environment: EnvironmentRecord, identity: CurrentDiffReadIdentity, generation: UInt64) async {
         let span = LensSignposts.begin("CurrentDiffLoad"); defer { span.end(); if generation == loadGeneration { loading = false } }
         do {
-            let current = try await store.files.currentDiff(environment: environment, staged: identity.staged)
+            let current = try await store.files.currentDiff(environment: environment, staged: identity.staged, recordedReference: identity.recordedReference)
             guard isCurrent(identity, generation: generation) else { return }
             var document: RecordedDiffPresentation?, parseIssue: String?
             if !current.text.isEmpty {
@@ -860,6 +902,7 @@ struct CurrentDiffReadIdentity: Hashable {
     let rootID: String?
     let environmentID: String
     let staged: Bool
+    var recordedReference: String? = nil
 }
 @ViewBuilder func paneHeader(_ title: String, subtitle: String, showsTitle: Bool = true) -> some View {
     if showsTitle {

@@ -15,6 +15,18 @@ enum LensControlAccent: String, CaseIterable, Identifiable {
         switch self { case .lens: return LensBrand.inkNSColor; case .system: return .controlAccentColor; case .slate: return LensBrand.slateInkNSColor; case .sage: return LensBrand.sageInkNSColor }
     }
     var color: Color { Color(nsColor: nsColor) }
+    var selectionColor: Color { color.opacity(0.12) }
+    var hoverColor: Color { color.opacity(0.08) }
+    var textSelectionNSColor: NSColor {
+        self == .system ? .selectedTextBackgroundColor : nsColor.withAlphaComponent(0.24)
+    }
+    func applyTextSelection(to editor: NSTextView) {
+        editor.insertionPointColor = nsColor
+        var attributes = editor.selectedTextAttributes
+        attributes[.backgroundColor] = textSelectionNSColor
+        attributes[.foregroundColor] = self == .system ? NSColor.selectedTextColor : NSColor.textColor
+        editor.selectedTextAttributes = attributes
+    }
     /// Link ink becomes pale in dark mode. Filled controls need a separate
     /// shade because the native prominent/segmented label is white.
     var filledNSColor: NSColor {
@@ -26,6 +38,14 @@ enum LensControlAccent: String, CaseIterable, Identifiable {
         }
     }
     static var current: Self { Self(rawValue: UserDefaults.standard.string(forKey: "lensControlAccent") ?? "lens") ?? .lens }
+}
+
+private struct LensAccentKey: EnvironmentKey { static let defaultValue = LensControlAccent.lens }
+extension EnvironmentValues {
+    var lensAccent: LensControlAccent {
+        get { self[LensAccentKey.self] }
+        set { self[LensAccentKey.self] = newValue }
+    }
 }
 
 private struct LensFilledControlAccentStyle: ViewModifier {
@@ -41,7 +61,7 @@ private struct LensControlAccentStyle: ViewModifier {
         // macOS List selections and Color.accentColor still use the accent
         // environment, while segmented controls use tint. Keep both aligned.
         // accentColor is a soft deprecation in the current macOS SDK.
-        content.tint(accent.color).accentColor(accent.color)
+        content.environment(\.lensAccent, accent).tint(accent.color).accentColor(accent.color)
     }
 }
 
@@ -82,8 +102,6 @@ enum LensBrand {
     static let sidebarNSColor = adaptive((0.973, 0.974, 0.978), (0.112, 0.114, 0.125))
     static let sidebar = Color(nsColor: sidebarNSColor)
     static let chrome = Color(nsColor: adaptive((0.990, 0.991, 0.994), (0.125, 0.127, 0.139)))
-    static let controlHover = Color(nsColor: adaptive((0.937, 0.935, 0.955), (0.210, 0.204, 0.255)))
-    static var selection: Color { Color.accentColor.opacity(0.12) }
     static var addition: Color { Color(nsColor: sage).opacity(0.20) }
     static var removal: Color { Color(nsColor: rose).opacity(0.20) }
     static func eventNSColor(_ kind: EventKind) -> NSColor {
@@ -140,6 +158,7 @@ struct LensNavigationEffectGroup<Content: View>: View {
 }
 
 private struct LensNavigationItem: ViewModifier {
+    @Environment(\.lensAccent) private var accent
     let selected: Bool
     private var material = LensNavigationMaterial()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -149,7 +168,7 @@ private struct LensNavigationItem: ViewModifier {
     init(selected: Bool) { self.selected = selected }
     func body(content: Content) -> some View {
         surface(content.overlay(alignment: .bottom) {
-            if selected { Capsule().fill(Color.accentColor).frame(width: 18, height: 2).padding(.bottom, 3).accessibilityHidden(true) }
+            if selected { Capsule().fill(accent.color).frame(width: 18, height: 2).padding(.bottom, 3).accessibilityHidden(true) }
         })
             .contentShape(shape)
             .onHover { hovering = $0 }
@@ -158,12 +177,12 @@ private struct LensNavigationItem: ViewModifier {
     }
     @ViewBuilder private func surface<V: View>(_ content: V) -> some View {
         if #available(macOS 26.0, *), material.usesGlass, selected {
-            content.glassEffect(.regular.tint(Color.accentColor.opacity(0.08)).interactive(), in: shape)
+            content.glassEffect(.regular.tint(accent.hoverColor).interactive(), in: shape)
         } else {
             content.background {
                 if selected || hovering {
                     shape.fill(LensBrand.chrome)
-                        .overlay(shape.fill(selected ? LensBrand.selection : LensBrand.controlHover))
+                        .overlay(shape.fill(selected ? accent.selectionColor : accent.hoverColor))
                         .overlay(shape.strokeBorder(contrast == .increased ? Color.primary : .clear, lineWidth: 1))
                 }
             }
@@ -198,6 +217,7 @@ private struct LensChromeButton: ViewModifier {
 }
 
 private struct LensChromeMenu: ViewModifier {
+    @Environment(\.lensAccent) private var accent
     private var material = LensNavigationMaterial()
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -216,7 +236,7 @@ private struct LensChromeMenu: ViewModifier {
         if #available(macOS 26.0, *), material.usesGlass {
             content.glassEffect(.regular.interactive(isEnabled), in: shape)
         } else {
-            content.background(isEnabled && hovering ? LensBrand.controlHover : Color(nsColor: .controlBackgroundColor), in: shape)
+            content.background(isEnabled && hovering ? accent.hoverColor : Color(nsColor: .controlBackgroundColor), in: shape)
                 .overlay(shape.strokeBorder(contrast == .increased ? Color.primary : Color(nsColor: .separatorColor), lineWidth: 1))
         }
     }

@@ -4,6 +4,7 @@ import SwiftUI
 /// AppKit retains text selection, undo, paste and input-method composition.
 /// Only an explicit Return in this editor submits a message.
 struct LensChatInput: NSViewRepresentable {
+    @Environment(\.lensAccent) private var accent
     @Binding var text: String
     let fontSize: CGFloat
     let enabled: Bool
@@ -47,7 +48,7 @@ struct LensChatInput: NSViewRepresentable {
         editor.isSelectable = true
         editor.font = .systemFont(ofSize: LensUI.readingSize(Double(fontSize)))
         editor.textColor = .textColor
-        editor.insertionPointColor = .controlAccentColor
+        accent.applyTextSelection(to: editor)
         editor.setAccessibilityLabel(label)
         editor.setAccessibilityIdentifier("lens-chat-composer")
         if editor.string != text, !editor.hasMarkedText() {

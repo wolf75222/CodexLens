@@ -2,6 +2,10 @@
 
 This is the detailed catalogue of the existing Codex Lens app, reviewed on **2026-10-06** against source commit **`5378bd5`**, app **0.41.0**, build **75**. It describes implemented entry points and the conditions under which their data is available. It is not a roadmap or a claim that every workflow has been retested on every macOS version.
 
+The navigation section also includes the current unreleased workspace-return fixes. Their baseline, verification and separate captures are documented in the [navigation audit](QA/WORKSPACE_NAVIGATION.md).
+
+The current unreleased **session curves** are described separately below and in their [model and verification notes](QA/SESSION_CURVES.md).
+
 The images show native macOS windows from an isolated QA app with anonymous session data. New captures in `images/features/` use CUA's native-window screenshot API; earlier images retain their documented capture methods. See the [capture notes](images/features/README.md) for methods and provenance. Recorded fixture text keeps its original language; some macOS-owned menus may be French. The chat image shows a prepared, unsent question. No personal account identity or live model answer is shown.
 
 For a shorter walkthrough, see the [User guide](USER_GUIDE.md). For module and data-flow details, see [Architecture](ARCHITECTURE.md).
@@ -11,6 +15,7 @@ For a shorter walkthrough, see the [User guide](USER_GUIDE.md). For module and d
 - [Platform and operating model](#platform-and-operating-model)
 - [First use and opening sessions](#first-use-and-opening-sessions)
 - [Activity timeline, event list, and filters](#activity-timeline-event-list-and-filters)
+- [Session curves](#session-curves)
 - [Live following and previews](#live-following-and-previews)
 - [Agents and their instructions](#agents-and-their-instructions)
 - [Tool-call inspection and long output](#tool-call-inspection-and-long-output)
@@ -54,6 +59,8 @@ Entry points: **File → Open Session…**, the toolbar's session action, **Comm
 | --- | --- | --- |
 | Optional introduction | Three steps introduce a session, the timeline, and the sidebar chat | Skip is available; the guide can be replayed without resetting the observed session |
 | Session catalogue | Search and select locally available session summaries | A summary is not a guarantee that every descendant or source file remains readable |
+| Agent information | Inspect recorded role, available description, configured model/effort, requested spawn settings and original tasks/instructions | Requests remain distinct from recorded thread data. Child attribution needs explicit IDs; current definitions do not fill historical gaps. [Data boundaries](QA/AGENT_METADATA.md) |
+| Validated catalogue cache | Reuse compact first-record metadata in memory and after restart; refresh titles and relations from current sources | File identity, nanosecond modification/change times, size, mode and cloud flags validate hits; new/deleted files and investigation exclusions are checked on each scan. No prompt or transcript bodies are cached here |
 | ID input | Paste a complete session or thread UUID | Turn IDs and call IDs are not interchangeable with session IDs |
 | Codex link input | Paste `codex://threads/<thread-id>` | The recognized route resolves the UUID; it does not launch or resume that thread in Codex |
 | Archived sessions | Existing archived local sessions can be discovered | The underlying local records must remain accessible |
@@ -62,7 +69,7 @@ Entry points: **File → Open Session…**, the toolbar's session action, **Comm
 | Source location | The picker displays the Codex directory being consulted | “My Codex sessions” appears when this differs from the personal source |
 | Refresh | Reload the available session catalogue | No Codex session is started |
 | Row context menu | Open session, copy its ID, or copy its initial directory | An absent initial directory cannot be copied as if known |
-| Loading and cancellation | A centered state covers the catalogue during opening; Cancel Opening remains available | Cancelling does not discard the previous successfully opened session |
+| Loading and cancellation | A single native bar shows aggregate history bytes across all known journals, with the current file count/bytes below and the opening stage out of four; Cancel Opening remains available | Byte progress measures the history-reading stage across all known files, not estimated time remaining. Discovery, cache restoration, linking and saving use an indeterminate indicator when no total is available. Refresh preserves existing rows; cancellation retains the previously opened session |
 | Opening failure | Show the error while preserving the existing session | An ambiguous session-to-thread mapping requires the exact thread ID |
 
 The catalogue displays a session's title, identifier, date, and initial directory when recorded. Long paths and titles retain full text through tooltips or copy actions.
@@ -88,7 +95,7 @@ Entry point: **Activity** in the sidebar or **Command-1**. The timeline, list, a
 | Event selection | Click selects. Timeline double-click/Return frames; event-list double-click/Return opens a tab; Command-Return opens a timeline event in a tab | Overlapping marks may need disambiguation |
 | Event context menu | Open in Tab, open agent/environment, copy event ID/internal link, or prepare a question | Actions capture the selected event identity |
 | Timeline/list linking | An event opened elsewhere can be shown and framed in the timeline | Framing is a reading/navigation action, not evidence of causality |
-| Density grouping | Nearby events are grouped at wide time scales | Individual records remain accessible through the event list |
+| Density grouping | Separated events keep individual colored marks; dense groups retain their event-type colors | Colored group portions describe exact type counts, not a sequence of actions; individual records stay available in the event list |
 | Group zoom | Clicking a group narrows the time scale; zooming out restores grouping | Grouping changes presentation, not source records |
 | Zoom and pan | Timeline keyboard zoom, pinch when enabled, and horizontal movement | Zoom shortcuts follow focus and the configured behavior |
 | Frame selection | Timeline menu → Frame | Requires an event selection |
@@ -108,6 +115,41 @@ Entry point: **Activity** in the sidebar or **Command-1**. The timeline, list, a
 *The lanes expose parallel activity, while the list gives each message or call an individual opening target. Selection links those two representations to the inspector.*
 
 Source: [activity views and native timeline](../Sources/CodexLens/ActivityView.swift), [timeline model](../Sources/LensCore/TimelineModel.swift), [filter/search area](../Sources/CodexLens/MainView.swift).
+
+## Session curves
+
+Entry point: **Activity → Charts**, in the shared activity view picker. This is another view of the session's recorded history, with the existing filters.
+
+Choose a metric, then **Per interval** or **Cumulative**. Select an interval in the chart or reveal the values table with its table icon. **View activity** opens that period in the existing chronology; toolbar **Back** returns to the chart's metric, counting mode and selected period. The graph does not open a separate analytics window.
+
+| Feature | Available behavior | Boundary |
+| --- | --- | --- |
+| Shared activity scope | Session, agent, environment, event type, search and period filters also apply to Charts | Changing the metric does not change the session being inspected |
+| Metrics | Events, tool calls, MCP calls, requested file changes, reported errors, recorded waits and identified compactions | Counts describe recorded items, not productivity, time spent or causal influence |
+| Per-interval and cumulative counts | Native Swift Charts zero-based columns or cumulative steps, with UTC-aligned intervals and local-time labels | Cumulative counts include the filtered, dated records only; they are not context-token usage |
+| Call identities | Count a recorded invocation once; a mirrored result does not add another call | Identical call IDs from different agents are kept separate |
+| MCP classification | Count explicit qualified MCP tool names | A mention in a shell command or JavaScript source is not another captured call |
+| Requested file changes | A file target counts per logical patch call and environment | Same relative paths in two worktrees stay distinct; a request does not establish application |
+| Reported errors | Associate known failure records with their call when identifiers allow it | A completion failure uses its recorded end time; an unknown completion time is not replaced by the call start |
+| Waits and compactions | Count recorded waits and canonical compaction operations | No idle-time estimate, compression ratio or extra compaction for each mirrored representation |
+| Period inspection | Select a point or table row, then View activity; Back restores the chart state | The timeline opens the period's context, including overlapping recorded calls |
+| Values table | Show or hide a resizable native table of periods, interval counts and cumulative counts | It provides a textual alternative to the graph; scrolling qualification is detailed in the audit |
+| Keyboard navigation | Left/Right selects chart intervals; native table arrows change the shared selection; Return or a table-row double-click opens activity | These actions need focus in the chart or table; hardware trackpad and VoiceOver qualification are separate |
+| Bounded rendering | At most 240 plotted intervals; metadata aggregation runs in the presentation actor | Every associated source ID stays available; a bounded graph is not source truncation |
+| Missing data and coverage | Undated items are counted separately; collection limits remain accessible below the chart | Empty intervals do not establish inactivity or complete observation |
+| Empty and updating states | No-dated-data guidance and a preparation indicator use the existing activity scope | An empty plot does not silently create timestamps for undated records |
+
+The [curve audit](QA/SESSION_CURVES.md) distinguishes counting regressions, native-view checks and actual app-window inspection, including the remaining interaction limits.
+
+![Native cumulative MCP-call chart in light appearance with the selected interval visible in the values table](images/curves/selected-mcp-harmonized-light.jpg)
+
+*Choose the metric at the upper left and interval/cumulative mode at the upper right. The selected period and highlighted values row agree; the footer keeps undated items and collection limits visible. This is the final palette's frozen development-source capture, identified in the [capture notes](images/curves/README.md).*
+
+![The same cumulative MCP-call chart in dark appearance with violet filled controls and a pastel-violet selected row](images/curves/selected-mcp-harmonized-dark.jpg)
+
+*The dark view retains MCP calls, cumulative mode, the values panel and 14:01:03–14:01:04. Selected controls use the same violet family, and the active row adds an edge marker. This visual check is separate from the native navigation tests and Back-return replay; the [curve audit](QA/SESSION_CURVES.md) records their respective source identities and an isolated unexplained state change.*
+
+Source: [curve model](../Sources/LensCore/SessionTrends.swift), [native chart](../Sources/CodexLens/SessionTrendsView.swift), [values table](../Sources/CodexLens/SessionTrendValuesTable.swift), [presentation preparation](../Sources/LensCore/SessionPresentation.swift).
 
 ## Live following and previews
 
@@ -309,10 +351,26 @@ Source: [resource views](../Sources/CodexLens/ObjectViews.swift), [recovery UI](
 
 Entry point: **Changes** or **Command-6**, a recorded call's changes, or a live-diff preview.
 
+### Worktree overview
+
+![Files overview in Dark appearance](images/changes-overview/files-dark.png)
+
+![Worktree activity and recorded diff](images/changes-overview/worktrees-light.png)
+
+These anonymous fixtures are native AppKit component bitmap captures. Their [manifest](images/changes-overview/capture-manifest.json) records the source hashes and capture limits; they are not screenshots of personal sessions.
+
+**Files** groups changed files by their exact environment. Choose **Files** for a PR-style file list or **Worktrees** for parallel activity lanes. Selecting a file or a point opens its original activity and recorded diff; grouped points list every included operation. **Actions** keeps the individual trace list available.
+
+Requests and linked tool results are one activity, with their traces available separately. The overview does not compose an invented final patch, add unrelated worktrees together, infer Git ancestry or date a worktree's creation from its first recorded operation. Recorded branch/reference fields remain available in the identity disclosure; undated operations remain in the list.
+
+**Current Git diff** is an explicit read of the selected environment. Its options include staged changes or comparison from the recorded full commit, which includes later committed and tracked working-file changes. The comparison labels its current observation and excludes untracked files; it does not reconstruct earlier uncommitted content or attribute current edits to Codex. An unavailable recorded commit stays an error.
+
+Preparation reuses the session's indexed facts outside SwiftUI. Graph marks are bounded to 160 bins per lane, with all constituent operations accessible. The layout adapts between three panes, two panes and a vertical split; Back and reading tabs retain the overview selection.
+
 | Feature | Available behavior | Boundary |
 | --- | --- | --- |
 | Change collection | Inspect/filter changes by file, agent, environment, period, and trace kind | The collector creates requested-patch and recorded-result rows; current filesystem/Git changes remain separate |
-| Native diff | Unified or side-by-side presentation | Before/after columns are version coordinates, not duplicate copies of one line number |
+| Native diff | More (…) menu → Unified or Side by side | Before/after columns are version coordinates, not duplicate copies of one line number |
 | File/hunk navigation | Select a file/fragment and move through recorded hunks | Partial patches can only offer fragment-local coordinates |
 | Version header | Worktree, repository, compared references, trace kind, and known availability | The missing full version is not guessed from its patch |
 | Multiple diff sources | Select the recorded diff representation | A result lacking a diff is not silently filled using request text |
@@ -366,20 +424,21 @@ Source: [origin views](../Sources/CodexLens/OriginEvidenceView.swift), [origin m
 
 | Feature | Entry point or behavior | Boundary |
 | --- | --- | --- |
-| Selection history | Toolbar Back/Forward; Command-[ / Command-]; native horizontal swipe | Scoped to the current window; restores navigation/filter/time state |
+| Selection history | Toolbar Back/Forward; Command-[ / Command-]; native horizontal swipe | Scoped to the current window; restores selection, filters, timeline framing and event-list scroll anchor |
 | Reading tabs | Open Selection, double-click/Return, or Open in Tab | Tabs are app destinations, not native macOS window tab groups |
+| Collection return | Activity, Calls, or the originating collection remains beside reading tabs | Closing the last reader restores the collection; ordinary row selection does not retarget explicit tabs |
 | Tab overflow | One menu exposes all tabs; active tab stays visible | Does not require a wide horizontal scrollbar |
 | Pin/close tab | Tab context menu and close control | Pinning is distinct from bookmarking |
-| Tab cycling | Control-Tab / Shift-Control-Tab; Window → Window Tabs | Requires more than one tab |
+| Tab cycling | Control-Tab / Shift-Control-Tab; Window → Window Tabs | Includes the collection and its readers; works with one reader |
 | Bookmarks | Shift-Command-D or a context action; session menu → Bookmarks | Stored destinations keep their session identity |
 | Internal links | Shift-Command-C or context menu | Source/version references are included where supported; a link cannot restore deleted bytes by itself |
 | Quick Access | Session menu → Agents/Environments | Menu lists are bounded; All Agents/Environments opens the complete corresponding view |
 | Inspector/chat | Option-Command-I / Option-Command-C | They share the optional right pane; they are not two simultaneous independent sidebars |
 | Panel sizing | Drag native split dividers; Option-Command-Left/Right | Keyboard resize follows the focused pane and its minimum/maximum |
 | Region focus | Option-Command-1…4 | Sidebar, content, inspector, chat respectively; hidden auxiliary regions can be opened |
-| New windows | Command-N | Each window owns its navigation/selection; readers can be shared internally |
+| New windows | Command-N; context menu/File → Open in a new window for a selected item | Each window owns navigation/selection; a selected-item window uses the same observed source and full destination/version identity. Accessible journals are required |
 
-Source: [tabs](../Sources/CodexLens/LensWorkspaceTabs.swift), [window/pane integration](../Sources/CodexLens/LensMacIntegration.swift), [navigation state](../Sources/LensCore/InspectionNavigation.swift).
+Source: [tabs](../Sources/CodexLens/LensWorkspaceTabs.swift), [window/pane integration](../Sources/CodexLens/LensMacIntegration.swift), [navigation state](../Sources/CodexLens/LensStore.swift).
 
 ## Investigation chat
 
@@ -388,7 +447,7 @@ Entry points: the chat toolbar action, **Option-Command-C**, **Command-7**, or *
 ### Local Codex connection
 
 - Detects the installed Codex at chat/AI-settings opening and checks account metadata without sending a message.
-- The qualified adapter accepts **Codex 0.159.2** with **ChatGPT authentication**; an API-authenticated or signed-out account is not silently accepted as the requested personal connection.
+- The qualified adapter accepts **Codex 0.159.2 or 0.160.1** with **ChatGPT authentication**; an API-authenticated or signed-out account is not silently accepted as the requested personal connection.
 - Codex manages its own credentials. Lens does not read/copy `auth.json`, export tokens, alter global Codex configuration, or log out the shared CLI.
 - Settings → AI offers automatic discovery or a native installed-binary chooser, Verify/Refresh, verification cancellation, and reported engine/version/path.
 - A signed-out state offers Open Codex, or copies `codex login` if no containing app is identified. Copying does not execute the command.
@@ -608,11 +667,13 @@ Source: [collector](../Sources/LensCore/SessionEngine.swift), [content guard](..
 
 ## Developer tools
 
-These shipped tools are separate from normal session inspection; they do not make fixture content into production history.
+The component fixture gallery and its Development menu are available in Debug builds only. Public Release builds omit that scene and menu.
+
+These tools are separate from normal session inspection; fixtures are never production history. The component gallery requires a Debug build.
 
 | Tool | Entry point/use | Qualification boundary |
 | --- | --- | --- |
-| Native component gallery | Help → Development → Component Gallery | Anonymous fixture identities, activity, provenance/citations, diffs, selection/questions, and loading/limit states |
+| Native component gallery | Debug builds only: Help → Development → Component Gallery | Anonymous fixture identities, activity, provenance/citations, diffs, selection/questions, and loading/limit states |
 | Gallery appearance/text controls | System/light/dark and standard/enlarged | Preview controls for the gallery, not account/session changes |
 | `lens-inspect` | Built beside the app; see its command help | Read-only diagnostics, not a terminal embedded in the app |
 | Build/test scripts | `bash scripts/build.sh`, `bash scripts/test.sh -c release` | Local checks are distinct from GitHub CI on the pushed commit |
@@ -630,7 +691,7 @@ The following distinctions prevent implemented lower-level helpers or requested 
 
 | Capability | Current status |
 | --- | --- |
-| Universal Codex App Server compatibility | Local chat adapter is qualified for **0.159.2**, not arbitrary newer/older binaries |
+| Universal Codex App Server compatibility | Local chat adapter is qualified for **0.159.2 and 0.160.1**, not arbitrary newer/older binaries |
 | Observation through another process's App Server | Observation uses persisted local sources; a private chat server is not assumed to see external activity |
 | Hook installation/instrumentation | No observation-hook setup is required or offered by this release |
 | Trigger compaction to inspect it | No such action; Lens reads recorded compaction |
@@ -653,3 +714,13 @@ The following distinctions prevent implemented lower-level helpers or requested 
 | Notarized distribution | Community release is locally/ad hoc signed; no Developer ID/notarization claim |
 
 For a specific failure or unavailable record, inspect Sources and limitations and the exact selected version before treating today's file as historical content.
+
+## Application updates and removal
+
+- **Codex Lens → Check for Updates…** checks the signed stable GitHub feed. **Settings → General → Updates** offers optional automatic checks and the installed version. Installation needs your confirmation and replaces the current app in place, then relaunches it.
+- **Settings → General → Maintenance** opens an uninstall review. Local Lens data stays by default. Optional cleanup lists only default Lens-owned folders and preferences; custom storage, Codex credentials, observed sessions, repositories and exports remain. Items move to Trash for recovery.
+- Sparkle 2.10.0 is pinned. Feed and archive signatures are verified before extraction; release-note WebViews and system profiling are disabled. Developer/QA copies cannot use the uninstall command. See [updates and removal](UPDATES.md) for installation requirements and verification limits.
+
+## Control accents
+
+**Settings → General → Reading → Control color** selects Lens violet, slate, sage or the macOS system accent. Owned settings navigation, primary controls, search focus, text selection and navigation indicators share that choice and update in Light/Dark appearances. The System choice retains native macOS colors. Event-type, diff and syntax colors keep their separate meanings. System-owned menus and alerts retain platform styling.

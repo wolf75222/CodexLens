@@ -6,14 +6,58 @@ struct LensSettingsView: View {
     @ObservedObject private var reading = LensReadingPreferences.shared
     @ObservedObject private var guide = LensGuideCoordinator.shared
     @AppStorage("lensControlAccent") private var controlAccent = "lens"
-    @AppStorage("lensAppearance") private var appearance = "system"
+    @AppStorage("lensAppearance") private var appearance = "dark"
     @AppStorage("lensAppIconAppearance") private var iconAppearance = LensAppIconController.defaultAppearance
     @AppStorage("lensTabMaterial") private var tabMaterial = "system"
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
+    @State private var uninstallPresented = false
+    @State private var maintenancePrepared = false
+    @State private var uninstallPreservedStorage: [URL] = []
+    @State private var languageRevision = 0
     var body: some View {
-        TabView(selection: $guide.settingsPage) {
-            generalSettings.tabItem { Label(LensL10n.text("Général"), systemImage: "gearshape") }.tag(LensSettingsPage.general)
-            Form {
+        LensSettingsNavigation(selection: $guide.settingsPage,
+            accent: LensControlAccent(rawValue: controlAccent) ?? .lens,
+            language: LensL10n.Language(rawValue: language) ?? .system, content: AnyView(settingsContent.id(languageRevision)))
+        .frame(minWidth: 640, idealWidth: 850, maxWidth: .infinity, minHeight: 520, idealHeight: 720, maxHeight: .infinity)
+        .lensControlAccent(LensControlAccent(rawValue: controlAccent) ?? .lens)
+        .onChange(of: language) { _, value in
+            LensL10n.language = LensL10n.Language(rawValue: value) ?? .system
+            languageRevision &+= 1
+        }
+        .environment(\.locale, Locale(identifier: LensL10n.resolvedLanguage == .fr ? "fr" : "en"))
+        .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
+        .sheet(isPresented: $guide.replayPresented, onDismiss: { guide.onboarding.dismiss() }) {
+            LensOnboardingView { guide.replayPresented = false }
+                .lensControlAccent(LensControlAccent(rawValue: controlAccent) ?? .lens)
+        }
+        .sheet(isPresented: $uninstallPresented) {
+            LensUninstallView(prepareForUninstall: {
+                guard !LensUpdateController.shared.sessionInProgress else {
+                    throw NSError(domain: "LensUninstall", code: 2, userInfo: [NSLocalizedDescriptionKey: LensL10n.text("Fermez la fenêtre de mise à jour avant de désinstaller Lens.")])
+                }
+                maintenancePrepared = true
+                await LensApplicationCoordinator.shared.beginMaintenance()
+                await investigationSettings.flushAndStop()
+                try await LensApplicationCoordinator.shared.prepareForUninstall()
+                if investigationSettings.draftSaveState == .failed {
+                    throw NSError(domain: "LensUninstall", code: 1, userInfo: [NSLocalizedDescriptionKey: investigationSettings.issue ?? LensL10n.text("Brouillon non sauvegardé")])
+                }
+            }, preservedStorageURLs: uninstallPreservedStorage, resumeAfterFailure: {
+                maintenancePrepared = false
+                await LensApplicationCoordinator.shared.resumeAfterFailedUninstall()
+            }).lensControlAccent(LensControlAccent(rawValue: controlAccent) ?? .lens)
+        }
+        .onDisappear { if !maintenancePrepared { Task { await investigationSettings.flushAndStop() } } }
+    }
+    @ViewBuilder private var settingsContent: some View {
+        switch guide.settingsPage {
+        case .general: generalSettings
+        case .ai: aiSettings
+        case .help: LensGuideView()
+        }
+    }
+    private var aiSettings: some View {
+        Form {
                 Section(LensL10n.text("IA")) {
                     CodexLocalConnectionView(investigator: investigationSettings)
                     if let issue = investigationSettings.issue { Text(LensL10n.display(issue)).font(.caption).foregroundStyle(LensAppearance.warningText).textSelection(.enabled) }
@@ -25,21 +69,10 @@ struct LensSettingsView: View {
                 }
             }.formStyle(.grouped).padding(12)
                 .task { await investigationSettings.refreshConnection() }
-                .tabItem { Label(LensL10n.text("IA"), systemImage: "text.bubble") }.tag(LensSettingsPage.ai)
-            LensGuideView().tabItem { Label(LensL10n.text("Aide"), systemImage: "questionmark.circle") }.tag(LensSettingsPage.help)
-        }
-        .frame(minWidth: 640, idealWidth: 850, maxWidth: .infinity, minHeight: 520, idealHeight: 720, maxHeight: .infinity)
-        .lensControlAccent(LensControlAccent(rawValue: controlAccent) ?? .lens)
-        .onChange(of: language) { _, value in LensL10n.language = LensL10n.Language(rawValue: value) ?? .system }
-        .environment(\.locale, Locale(identifier: LensL10n.resolvedLanguage == .fr ? "fr" : "en"))
-        .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
-        .sheet(isPresented: $guide.replayPresented, onDismiss: { guide.onboarding.dismiss() }) {
-            LensOnboardingView { guide.replayPresented = false }
-        }
-        .onDisappear { Task { await investigationSettings.flushAndStop() } }
     }
     private var generalSettings: some View {
         Form {
+            Section(LensL10n.text("Mises à jour")) { LensUpdateSettingsView().id(language) }
             Section(LensL10n.text("Langue")) {
                 Picker(LensL10n.text("Langue de l’interface"), selection: $language) {
                     Text(LensL10n.text("Système")).tag("system"); Text(LensL10n.text("Français")).tag("fr"); Text(LensL10n.text("English")).tag("en")
@@ -92,6 +125,16 @@ struct LensSettingsView: View {
                 Text(LensL10n.text("Les journaux Codex et les dépôts sont consultés en lecture seule. Les enquêtes sont enregistrées dans Application Support/CodexLens/Investigations. Au-delà de 32 Mio, les plus anciennes sauvegardes sont supprimées."))
                 Text(LensL10n.text("Aucune synchronisation ni télémétrie.")).foregroundStyle(.secondary)
                 Text(LensL10n.text("Codex gère la connexion et ses identifiants. Lens enregistre le contexte sélectionné, les échanges et l’ID du thread d’enquête. Les exports peuvent contenir des conversations et du code ; vous choisissez leur destination.")).foregroundStyle(.secondary)
+            }
+            Section(LensL10n.text("Maintenance")) {
+                Button(LensL10n.text("Désinstaller Codex Lens…")) {
+                    Task {
+                        uninstallPreservedStorage = await LensApplicationCoordinator.shared.storageURLsForUninstall()
+                        uninstallPresented = true
+                    }
+                }
+                    .disabled(LensUpdateController.shared.sessionInProgress)
+                    .accessibilityIdentifier("lens-uninstall-review")
             }
         }.formStyle(.grouped).padding(12)
     }

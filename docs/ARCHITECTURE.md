@@ -49,7 +49,7 @@ Record readers verify source identity while paging; source mutation produces an 
 
 ## Isolated chat
 
-`CodexInstallation` discovers executable candidates and qualifies their version. `CodexInvestigationEngine` communicates with a private `codex app-server` subprocess through newline-delimited JSON over stdio. The adapter currently accepts **0.159.2** only.
+`CodexInstallation` discovers executable candidates and qualifies their version. `CodexInvestigationEngine` communicates with a private `codex app-server` subprocess through newline-delimited JSON over stdio. The adapter currently accepts **0.159.2 and 0.160.1** only. Their version-generated schemas and isolated permission profiles are qualified; the engine reports the actual chosen version.
 
 Official `account/read` metadata verifies that the active account is ChatGPT. Codex manages its own credentials; Lens does not parse or copy `auth.json`. The model catalogue and rate-limit data are shown only when supplied by the interface. A catalogue response is not proof that a model request will succeed.
 

@@ -9,9 +9,11 @@ public struct EventFilters: Equatable, Sendable {
     public var query: String
     public var sourceMatches: Set<String>?
     public var originInstructionID: String?
-    public init(agentID: String? = nil, environmentID: String? = nil, resourceID: String? = nil, kind: EventKind? = nil, period: ClosedRange<Date>? = nil, query: String = "", sourceMatches: Set<String>? = nil, originInstructionID: String? = nil) {
+    public var changeKind: ChangeKind?
+    public init(agentID: String? = nil, environmentID: String? = nil, resourceID: String? = nil, kind: EventKind? = nil, period: ClosedRange<Date>? = nil, query: String = "", sourceMatches: Set<String>? = nil, originInstructionID: String? = nil, changeKind: ChangeKind? = nil) {
         self.agentID = agentID; self.environmentID = environmentID; self.resourceID = resourceID; self.kind = kind; self.period = period; self.query = query; self.sourceMatches = sourceMatches
         self.originInstructionID = originInstructionID
+        self.changeKind = changeKind
     }
     public func includes(_ event: LensEvent) -> Bool {
         (agentID == nil || event.agentID == agentID) && (environmentID == nil || event.environmentID == environmentID) &&
@@ -34,6 +36,8 @@ public struct SessionPresentation: Sendable {
     public let rootID: String
     public let filteredEvents: [LensEvent]
     public let filteredCalls: [LensEvent]
+    /// Undated records remain in the list; they must not stretch the time axis to year one.
+    public let timelineEvents: [LensEvent]
     public let callCount: Int
     public let filteredEventRowIndices: [String: Int]
     public let filteredCallRowIndices: [String: Int]
@@ -56,7 +60,11 @@ public struct SessionPresentation: Sendable {
     public let changesByAgent: [String: [ChangeRecord]]
     public let sequence: CommunicationSequenceProjection
     public let activityEvidence: ActivityEvidenceIndex
+    public let filteredChanges: [ChangeRecord]
+    public let changesOverviewIndex: ChangesOverviewIndex
+    public let changesOverview: ChangesOverviewProjection
     public let originInspection: OriginInspectionIndex
+    public let trends: SessionTrendProjection
 }
 
 /// One builder per window. Filter changes reuse indexes; all preparation is on
@@ -84,6 +92,14 @@ public actor SessionPresentationBuilder {
         published = presentation; publishedSequence = sequence
     }
     public func prepare(snapshot: SessionSnapshot, revision: Int, filters: EventFilters, agentFilters: AgentFilters? = nil) throws -> SessionPresentation {
+        // Actor tasks do not have a per-run-loop autorelease boundary. Index
+        // preparation parses recorded arguments and creates Foundation lookup
+        // objects; keep those temporaries out of the published generation.
+        try autoreleasepool {
+            try prepareIndex(snapshot: snapshot, revision: revision, filters: filters, agentFilters: agentFilters)
+        }
+    }
+    private func prepareIndex(snapshot: SessionSnapshot, revision: Int, filters: EventFilters, agentFilters: AgentFilters?) throws -> SessionPresentation {
         let span = LensSignposts.begin("SessionPresentation"); defer { span.end() }
         try Task.checkCancellation()
         // nil keeps the original API's shared query semantics for existing consumers.
@@ -91,6 +107,10 @@ public actor SessionPresentationBuilder {
         if self.revision == revision, lastPrepared?.rootID == snapshot.root.id, lastFilters == filters, lastAgentFilters == agentFilters, let lastPrepared {
             return lastPrepared
         }
+        // Agent-tree search does not change the event scope. Reuse its curves,
+        // rather than aggregating the same metadata for each graph query.
+        let cachedTrends = self.revision == revision && lastPrepared?.rootID == snapshot.root.id && lastFilters == filters
+            ? lastPrepared?.trends : nil
         if self.revision != revision || indexed?.rootID != snapshot.root.id {
             var events: [String: LensEvent] = [:]
             var eventIDsByAgent: [String: [String]] = [:]
@@ -108,16 +128,17 @@ public actor SessionPresentationBuilder {
             let agentRows = try flattenedAgents(snapshot.agents, agentsByID: agentsByID)
             var searchText: [String: String] = [:]
             for (agent, _) in agentRows {
-                searchText[agent.id] = ([agent.name, agent.id, agent.mission] + agent.environmentIDs + agent.paths).joined(separator: "\n")
+                searchText[agent.id] = ([agent.name, agent.id, agent.mission, AgentMetadataField.searchText(agent.metadata ?? [])] + agent.environmentIDs + agent.paths).joined(separator: "\n")
             }
             agentSearchText = searchText
             let contextInspection = { let span = LensSignposts.begin("ContextInspectionIndex"); defer { span.end() }; return ContextInspectionIndex(events: snapshot.events) }()
             let communicationInspection = { let span = LensSignposts.begin("CommunicationInspectionIndex"); defer { span.end() }; return CommunicationInspectionIndex(events: snapshot.events, agents: snapshot.agents) }()
             let activityEvidence = { let span = LensSignposts.begin("ActivityEvidenceIndex"); defer { span.end() }; return ActivityEvidenceIndex(events: snapshot.events, changes: snapshot.changes, resources: snapshot.resources) }()
-            let originInspection = { let span = LensSignposts.begin("OriginInspectionIndex"); defer { span.end() }; return OriginInspectionIndex(snapshot: snapshot, communication: communicationInspection, activity: activityEvidence) }()
+            let changesOverview = ChangesOverviewIndex(snapshot: snapshot, activity: activityEvidence)
+            let originInspection = { let span = LensSignposts.begin("OriginInspectionIndex"); defer { span.end() }; return OriginInspectionIndex(snapshot: snapshot, communication: communicationInspection, activity: activityEvidence, sharedEventsByID: events) }()
             let changesByID = Dictionary(snapshot.changes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             let recentRecordedChanges = try recentChanges(changesByID: changesByID, eventsByID: events)
-            indexed = SessionPresentation(id: UUID(), rootID: snapshot.root.id, filteredEvents: [], filteredCalls: [], callCount: callCount, filteredEventRowIndices: [:], filteredCallRowIndices: [:], eventsByID: events,
+            indexed = SessionPresentation(id: UUID(), rootID: snapshot.root.id, filteredEvents: [], filteredCalls: [], timelineEvents: [], callCount: callCount, filteredEventRowIndices: [:], filteredCallRowIndices: [:], eventsByID: events,
                 agentsByID: agentsByID, eventIDsByAgent: eventIDsByAgent, eventCountByAgent: eventCountByAgent, agentRows: agentRows,
                 changesByEvent: Dictionary(grouping: snapshot.changes, by: \.eventID),
                 changesByID: changesByID, recentRecordedChanges: recentRecordedChanges,
@@ -126,7 +147,10 @@ public actor SessionPresentationBuilder {
                 communicationInspection: communicationInspection, filteredCommunications: [],
                 changesByAgent: Dictionary(grouping: snapshot.changes, by: \.agentID),
                 sequence: CommunicationSequenceProjection(communications: [], agents: snapshot.agents),
-                activityEvidence: activityEvidence, originInspection: originInspection)
+                activityEvidence: activityEvidence,
+                filteredChanges: [], changesOverviewIndex: changesOverview, changesOverview: changesOverview.projection(visibleChangeIDs: []),
+                originInspection: originInspection,
+                trends: try SessionTrendProjection(events: [], coverage: snapshot.coverage))
             self.revision = revision
         }
         let index = indexed!
@@ -159,7 +183,30 @@ public actor SessionPresentationBuilder {
         }
         let visibleIDs = Set(filtered.map(\.id))
         let communications = index.communicationInspection.communications.filter { !$0.eventIDs.allSatisfy { !visibleIDs.contains($0) } }
-        let result = SessionPresentation(id: UUID(), rootID: index.rootID, filteredEvents: filtered, filteredCalls: calls, callCount: index.callCount, filteredEventRowIndices: eventRows, filteredCallRowIndices: callRows, eventsByID: index.eventsByID, agentsByID: index.agentsByID, eventIDsByAgent: index.eventIDsByAgent, eventCountByAgent: index.eventCountByAgent, agentRows: agentRows, changesByEvent: index.changesByEvent, changesByID: index.changesByID, recentRecordedChanges: index.recentRecordedChanges, resourcesByID: index.resourcesByID, contextInspection: index.contextInspection, communicationInspection: index.communicationInspection, filteredCommunications: communications, changesByAgent: index.changesByAgent, sequence: CommunicationSequenceProjection(communications: communications, agents: snapshot.agents), activityEvidence: index.activityEvidence, originInspection: index.originInspection)
+        let trends: SessionTrendProjection
+        if let cachedTrends { trends = cachedTrends }
+        else {
+            let span = LensSignposts.begin("SessionTrends"); defer { span.end() }
+            trends = try SessionTrendProjection(events: filtered, changesByEvent: index.changesByEvent,
+                contextInspection: index.contextInspection, coverage: snapshot.coverage)
+        }
+        let unplottable = Set(trends.excludedTimestampEventIDs)
+        let timelineEvents = unplottable.isEmpty ? filtered : filtered.filter { !unplottable.contains($0.id) }
+        var changeIDs = Set<String>()
+        var visitedChangeIDs = Set<String>()
+        var filteredChanges: [ChangeRecord] = []
+        for (offset, change) in snapshot.changes.enumerated() {
+            if offset.isMultiple(of: 1024) { try Task.checkCancellation() }
+            guard visitedChangeIDs.insert(change.id).inserted else { continue }
+            guard filters.changeKind == nil || filters.changeKind == change.kind,
+                  filters.agentID == nil || filters.agentID == change.agentID,
+                  filters.environmentID == nil || filters.environmentID == change.environmentID,
+                  filters.query.isEmpty || (change.path + change.evidence).localizedStandardContains(filters.query) || filters.sourceMatches?.contains(change.eventID) == true,
+                  filters.period == nil || index.eventsByID[change.eventID].map({ $0.overlaps(filters.period!) }) == true else { continue }
+            changeIDs.insert(change.id); filteredChanges.append(change)
+        }
+        let changesOverview = index.changesOverviewIndex.projection(visibleChangeIDs: changeIDs)
+        let result = SessionPresentation(id: UUID(), rootID: index.rootID, filteredEvents: filtered, filteredCalls: calls, timelineEvents: timelineEvents, callCount: index.callCount, filteredEventRowIndices: eventRows, filteredCallRowIndices: callRows, eventsByID: index.eventsByID, agentsByID: index.agentsByID, eventIDsByAgent: index.eventIDsByAgent, eventCountByAgent: index.eventCountByAgent, agentRows: agentRows, changesByEvent: index.changesByEvent, changesByID: index.changesByID, recentRecordedChanges: index.recentRecordedChanges, resourcesByID: index.resourcesByID, contextInspection: index.contextInspection, communicationInspection: index.communicationInspection, filteredCommunications: communications, changesByAgent: index.changesByAgent, sequence: CommunicationSequenceProjection(communications: communications, agents: snapshot.agents), activityEvidence: index.activityEvidence, filteredChanges: filteredChanges, changesOverviewIndex: index.changesOverviewIndex, changesOverview: changesOverview, originInspection: index.originInspection, trends: trends)
         lastFilters = filters; lastAgentFilters = agentFilters; lastPrepared = result
         return result
     }

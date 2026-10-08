@@ -34,7 +34,7 @@ private actor LensGuideImages {
 
 struct LensGuideView: View {
     @ObservedObject private var guide = LensGuideCoordinator.shared
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
     private func text(_ value: String) -> String { LensL10n.text(value, in: LensL10n.Language(rawValue: language) ?? .system) }
     var body: some View {
         VStack(spacing: 0) {
@@ -65,7 +65,7 @@ struct LensOnboardingView: View {
     let onOpenSession: (() -> Void)?
     let onClose: () -> Void
     @State private var step = LensOnboardingStep.openSession
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
 
     init(onOpenSession: (() -> Void)? = nil, onClose: @escaping () -> Void) {
         self.onOpenSession = onOpenSession
@@ -128,7 +128,7 @@ struct LensOnboardingView: View {
 private struct LensGuideArticleView: View {
     let topic: LensGuideTopic
     var compact = false
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
     private func text(_ value: String) -> String { LensL10n.text(value, in: LensL10n.Language(rawValue: language) ?? .system) }
     var body: some View {
         let article = LensGuideArticle.article(for: topic)
@@ -162,7 +162,7 @@ private struct LensGuideScreenshot: View {
     @State private var image: NSImage?
     @State private var loaded = false
     @State private var enlarged = false
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
     private func text(_ value: String) -> String { LensL10n.text(value, in: LensL10n.Language(rawValue: language) ?? .system) }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {

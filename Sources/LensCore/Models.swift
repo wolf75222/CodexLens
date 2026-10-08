@@ -30,8 +30,9 @@ public struct SessionSummary: Identifiable, Codable, Hashable, Sendable {
     public var relation: RelationKind
     public var agentName: String
     public var evidence: String
-    public init(id: String, sessionID: String? = nil, title: String = "", cwd: String = "", paths: [String] = [], modifiedAt: Date = .distantPast, cliVersion: String = "", parentID: String? = nil, relation: RelationKind = .root, agentName: String = "", evidence: String = "") {
-        self.id = id; self.sessionID = sessionID ?? id; self.title = title; self.cwd = cwd; self.paths = paths; self.modifiedAt = modifiedAt; self.cliVersion = cliVersion; self.parentID = parentID; self.relation = relation; self.agentName = agentName; self.evidence = evidence
+    public var agentMetadata: [AgentMetadataField]?
+    public init(id: String, sessionID: String? = nil, title: String = "", cwd: String = "", paths: [String] = [], modifiedAt: Date = .distantPast, cliVersion: String = "", parentID: String? = nil, relation: RelationKind = .root, agentName: String = "", evidence: String = "", agentMetadata: [AgentMetadataField]? = nil) {
+        self.id = id; self.sessionID = sessionID ?? id; self.title = title; self.cwd = cwd; self.paths = paths; self.modifiedAt = modifiedAt; self.cliVersion = cliVersion; self.parentID = parentID; self.relation = relation; self.agentName = agentName; self.evidence = evidence; self.agentMetadata = agentMetadata
     }
 }
 public struct AgentRecord: Identifiable, Codable, Hashable, Sendable {
@@ -46,8 +47,9 @@ public struct AgentRecord: Identifiable, Codable, Hashable, Sendable {
     public var environmentIDs: [String]
     public var accessible: Bool
     public var relationSources: [SourceRef]?
-    public init(id: String, parentID: String? = nil, name: String = "", relation: RelationKind = .root, mission: String = "", missionEventID: String? = nil, evidence: String = "", paths: [String] = [], environmentIDs: [String] = [], accessible: Bool = true, relationSources: [SourceRef]? = nil) {
-        self.id = id; self.parentID = parentID; self.name = name; self.relation = relation; self.mission = mission; self.missionEventID = missionEventID; self.evidence = evidence; self.paths = paths; self.environmentIDs = environmentIDs; self.accessible = accessible
+    public var metadata: [AgentMetadataField]?
+    public init(id: String, parentID: String? = nil, name: String = "", relation: RelationKind = .root, mission: String = "", missionEventID: String? = nil, evidence: String = "", paths: [String] = [], environmentIDs: [String] = [], accessible: Bool = true, relationSources: [SourceRef]? = nil, metadata: [AgentMetadataField]? = nil) {
+        self.id = id; self.parentID = parentID; self.name = name; self.relation = relation; self.mission = mission; self.missionEventID = missionEventID; self.evidence = evidence; self.paths = paths; self.environmentIDs = environmentIDs; self.accessible = accessible; self.metadata = metadata
         self.relationSources = relationSources
     }
 }

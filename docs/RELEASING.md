@@ -71,3 +71,7 @@ Community CI signs locally, with no Developer ID certificate or account secrets 
 For an owner-managed signed release, explicitly set `LENS_SIGNING_IDENTITY` to an installed Developer ID Application identity before building. The build adds hardened runtime and a timestamp. Set `LENS_NOTARY_PROFILE` to an existing `notarytool` keychain profile when packaging. The packager requires Accepted status, staples and validates the app ticket, then does the same for the DMG. No Apple credentials are stored in this repository and no notarization is attempted by default.
 
 Provision credentials outside the repository using Apple's documented tooling. Do not add certificate files, passwords or private keychain exports to Git. Current public CI does not claim to qualify this optional signing path.
+
+## Signed in-app updates
+
+The publishing job uses the pinned Sparkle 2.10.0 tools and the `SPARKLE_ED25519_PRIVATE_KEY` Actions secret to sign both the appcast and full app ZIP. Its public key is embedded in `Support/Info.plist`. Publication fails if signatures, exact version, build, architecture, revision or artifact checksums do not match. The secret is never an artifact. See [updates and removal](UPDATES.md) for key backup, bootstrap and channel details.

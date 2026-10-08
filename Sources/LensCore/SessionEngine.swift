@@ -1,6 +1,7 @@
 import Foundation
 import CSQLite
 import CryptoKit
+import Darwin
 
 /// Read-only adapter for local Codex rollout JSONL, supported schema families 0.158/0.159.
 /// It never starts Codex, uses an app server, resumes a thread, or opens auth.json.
@@ -20,6 +21,10 @@ public actor SessionEngine {
     private var eventsByID: [String: LensEvent] = [:]
     private var fingerprintsBySource: [SourceRef: String] = [:]
     private var catalogIssues: [CoverageIssue] = []
+    private var catalogHeaderCache: SessionCatalogCache
+    internal private(set) var catalogHeaderReads = 0
+    internal private(set) var catalogHeaderHits = 0
+    internal var catalogHeaderCacheBytes: Int { catalogHeaderCache.estimatedBytes }
     private var loadedCache = false
     private var lastCollectionSignature: String?
     private var lastSelectedSignature: String?
@@ -27,17 +32,21 @@ public actor SessionEngine {
     private let maximumLineBytes = 64 * 1024 * 1024
     private let maximumIndexedEvents = 150_000
     // Parsing changes must invalidate cached classification of unchanged source bytes.
-    private let cacheVersion = 7
+    private let cacheVersion = 8
 
     public init(home: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex"), cacheDirectory: URL? = nil, investigationRegistryDirectory: URL? = nil) {
         self.home = home.standardizedFileURL
         self.cacheDirectory = cacheDirectory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("CodexLens/Index-v1")
+        self.catalogHeaderCache = SessionCatalogCache(home: self.home, cacheDirectory: self.cacheDirectory)
         self.investigationRegistryDirectory = investigationRegistryDirectory
         self.investigationWorkspaceRoot = CodexInvestigationRegistry.workspaceRoot(directory: investigationRegistryDirectory).path
         self.investigationConnectionProbeRoot = CodexInvestigationRegistry.workspaceRoot(directory: investigationRegistryDirectory).deletingLastPathComponent().appendingPathComponent("ConnectionProbe", isDirectory: true).path
     }
 
-    public func catalog() async throws -> [SessionSummary] {
+    public func catalog(progress: SessionProgressHandler? = nil) async throws -> [SessionSummary] {
+        let span = LensSignposts.begin("SessionCatalog"); defer { span.end() }
+        let reporter = SessionProgressReporter(progress)
+        reporter.send(.init(stage: .discoveringSessions))
         relationSources = [:]
         try Task.checkCancellation()
         catalogIssues = []
@@ -46,12 +55,13 @@ public actor SessionEngine {
         var found: [String: SessionSummary] = [:]
         var meta: [String: RolloutMetadata] = [:]
         var candidatePaths = Set<String>()
+        let databaseSpan = LensSignposts.begin("CatalogDatabase")
         let databaseURL = home.appendingPathComponent("state_5.sqlite")
         if FileManager.default.fileExists(atPath: databaseURL.path) {
             do {
                 let database = try ReadOnlyDatabase(url: databaseURL)
                 let columns = try database.columns("threads")
-                let wanted = ["id", "rollout_path", "updated_at", "updated_at_ms", "cwd", "title", "cli_version", "agent_nickname", "agent_path", "source", "git_branch", "git_sha"].filter { columns.contains($0) }
+                let wanted = ["id", "rollout_path", "updated_at", "updated_at_ms", "cwd", "title", "cli_version", "agent_nickname", "agent_path", "agent_role", "agent_description", "model", "model_provider", "reasoning_effort", "source", "git_branch", "git_sha"].filter { columns.contains($0) }
                 guard wanted.contains("id"), wanted.contains("rollout_path") else { throw LensError.unsupported("Schéma threads sans id/rollout_path.") }
                 for row in try database.rows("SELECT " + wanted.joined(separator: ",") + " FROM threads") {
                     guard let id = row["id"], let path = row["rollout_path"] else { continue }
@@ -60,6 +70,7 @@ public actor SessionEngine {
                     let spawn = Self.spawnMetadata(source)
                     let date = Double(row["updated_at_ms"] ?? "").map { Date(timeIntervalSince1970: $0 / 1000) } ?? Double(row["updated_at"] ?? "").map(Date.init(timeIntervalSince1970:)) ?? .distantPast
                     found[id] = SessionSummary(id: id, title: Self.redact(row["title"] ?? ""), cwd: row["cwd"] ?? "", paths: [path], modifiedAt: date, cliVersion: row["cli_version"] ?? "", parentID: spawn?["parent_thread_id"] as? String, relation: spawn == nil ? .root : .subagent, agentName: row["agent_nickname"] ?? row["agent_path"] ?? "", evidence: "state_5.sqlite threads (lecture SQLITE_OPEN_READONLY)")
+                    found[id]?.agentMetadata = AgentMetadataField.threadFields(row, path: databaseURL.path)
                     candidatePaths.insert(path)
                     meta[id] = RolloutMetadata(id: id, cwd: row["cwd"] ?? "", branch: row["git_branch"], gitRef: row["git_sha"], name: row["agent_nickname"] ?? row["agent_path"] ?? "", parent: spawn?["parent_thread_id"] as? String, relation: spawn == nil ? .root : .subagent)
                 }
@@ -77,27 +88,64 @@ public actor SessionEngine {
                 }
             } catch { catalogIssues.append(CoverageIssue("catalogue", "Base locale non lisible : \(error.localizedDescription). Repli sur les journaux.", source: databaseURL.path)) }
         }
+        databaseSpan.end()
+        let enumerationSpan = LensSignposts.begin("CatalogEnumeration")
+        var discoveredFiles: Int64 = 0
         for directory in ["sessions", "archived_sessions"] {
             let url = home.appendingPathComponent(directory)
-            candidatePaths.formUnion(Self.rolloutPaths(in: url))
+            candidatePaths.formUnion(try Self.rolloutPaths(in: url, onFile: {
+                try Task.checkCancellation()
+                discoveredFiles += 1
+                reporter.send(.init(stage: .discoveringSessions, completed: discoveredFiles))
+            }))
         }
+        enumerationSpan.end()
+        var processedFiles: Int64 = 0
+        let totalFiles = Int64(candidatePaths.count)
+        reporter.send(.init(stage: .readingMetadata, total: totalFiles))
+        catalogHeaderCache.prepare(paths: candidatePaths)
+        let headerSpan = LensSignposts.begin("CatalogHeaders")
         // First record is the file owner. Later copied session_meta records are inherited context.
         for path in candidatePaths.sorted() {
             try Task.checkCancellation()
+            defer {
+                processedFiles += 1
+                reporter.send(.init(stage: .readingMetadata, completed: processedFiles, total: totalFiles))
+            }
             guard FileManager.default.fileExists(atPath: path) else { continue }
             do {
-                let (first, firstSource) = try Self.firstRecord(path: path, limit: 16 * 1024 * 1024)
-                guard first["type"] as? String == "session_meta", let payload = first["payload"] as? [String: Any], let id = payload["id"] as? String else { catalogIssues.append(CoverageIssue("métadonnées", "Premier enregistrement sans session_meta.id ; association du fichier inconnue.", source: path)); continue }
-                if excludedInvestigationIDs.contains(id) || isInvestigationWorkspace(payload["cwd"] as? String ?? "") { excludedInvestigationIDs.insert(id); continue }
-                let parsed = RolloutMetadata(payload: payload)
-                let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+                let stamp = try SessionCatalogStamp.read(path: path)
+                let header: SessionCatalogHeader
+                if let cached = catalogHeaderCache.header(path: path, stamp: stamp) {
+                    header = cached; catalogHeaderHits += 1
+                } else {
+                    catalogHeaderReads += 1
+                    // Foundation's large JSON objects must die per file, not at
+                    // the end of a catalog containing thousands of instructions.
+                    guard let read = try autoreleasepool(invoking: { try Self.catalogHeader(path: path) }) else {
+                        catalogIssues.append(CoverageIssue("métadonnées", "Premier enregistrement sans session_meta.id ; association du fichier inconnue.", source: path)); continue
+                    }
+                    guard try SessionCatalogStamp.read(path: path) == stamp else { throw LensError.unavailable("Métadonnées du journal modifiées pendant leur lecture.") }
+                    header = read
+                    catalogHeaderCache.insert(header, stamp: stamp)
+                }
+                let id = header.id, firstSource = header.source
+                if excludedInvestigationIDs.contains(id) || isInvestigationWorkspace(header.cwd) {
+                    excludedInvestigationIDs.insert(id); catalogHeaderCache.remove(path: path); continue
+                }
+                // A new mutable object for this merge; cached parentage cannot
+                // inherit a previous database edge that has since disappeared.
+                let parsed = RolloutMetadata(id: id, cwd: header.cwd, branch: header.branch, gitRef: header.gitRef,
+                    name: header.name, parent: header.parent, relation: header.relation)
+                parsed.sessionID = header.sessionID; parsed.historyStart = header.historyStart
                 var summary = found[id] ?? SessionSummary(id: id)
                 summary.sessionID = parsed.sessionID ?? id
                 if !summary.paths.contains(path) { summary.paths.append(path) }
                 summary.cwd = parsed.cwd.isEmpty ? summary.cwd : parsed.cwd
-                summary.cliVersion = (payload["cli_version"] as? String) ?? summary.cliVersion
+                summary.cliVersion = header.cliVersion ?? summary.cliVersion
                 summary.agentName = parsed.name.isEmpty ? summary.agentName : parsed.name
-                summary.modifiedAt = max(summary.modifiedAt, attrs?[.modificationDate] as? Date ?? .distantPast)
+                summary.modifiedAt = max(summary.modifiedAt, stamp.modifiedAt)
+                summary.agentMetadata = (summary.agentMetadata ?? []) + (header.agentMetadata ?? [])
                 if let parent = parsed.parent { summary.parentID = parent; summary.relation = parsed.relation; relationSources[id] = [firstSource] }
                 summary.evidence += "; session_meta initial propriétaire (\(URL(fileURLWithPath: path).lastPathComponent))"
                 if let existing = meta[id], parsed.parent == nil { parsed.parent = existing.parent; parsed.relation = existing.relation }
@@ -105,6 +153,7 @@ public actor SessionEngine {
                 found[id] = summary
             } catch { catalogIssues.append(CoverageIssue("journal", "Métadonnées non lisibles : \(error.localizedDescription)", source: path)) }
         }
+        headerSpan.end()
         // A child of a private investigation cannot re-enter the source catalog
         // through its own rollout, even when rows/edges arrived in another order.
         var exclusionsGrew = true
@@ -114,6 +163,7 @@ public actor SessionEngine {
             exclusionsGrew = before != excludedInvestigationIDs.count
         }
         for id in excludedInvestigationIDs { found.removeValue(forKey: id); meta.removeValue(forKey: id) }
+        let titleSpan = LensSignposts.begin("CatalogTitles")
         let titleURL = home.appendingPathComponent("session_index.jsonl")
         if (try? LocalContentGuard.requireResident(path: titleURL.path)) != nil,
            let attrs = try? FileManager.default.attributesOfItem(atPath: titleURL.path),
@@ -123,15 +173,18 @@ public actor SessionEngine {
                 if let row = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any], let id = row["id"] as? String, let title = row["thread_name"] as? String ?? row["title"] as? String { found[id]?.title = Self.redact(title) }
             }
         }
+        titleSpan.end()
         for id in found.keys { if found[id]?.title.isEmpty == true { found[id]?.title = "Session \(id.prefix(8))" } }
+        try Task.checkCancellation()
+        catalogHeaderCache.persist()
         summaries = found; metadata = meta
         return found.values.sorted { $0.modifiedAt > $1.modifiedAt }
     }
 
-    public func open(id: String) async throws -> SessionSnapshot {
+    public func open(id: String, progress: SessionProgressHandler? = nil) async throws -> SessionSnapshot {
         let span = LensSignposts.begin("SessionLoad"); defer { span.end() }
         try Task.checkCancellation()
-        _ = try await catalog()
+        _ = try await catalog(progress: progress)
         let requestedID = SessionPickerTarget.sessionID(from: id) ?? id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !excludedInvestigationIDs.contains(where: { SessionPickerTarget.sameIdentity($0, requestedID) }) else { throw LensError.unavailable("Ce thread appartient à une investigation Lens ; il est exclu des sources observées.") }
         var cleanID = summaries[requestedID] != nil ? requestedID : summaries.keys.first(where: { SessionPickerTarget.sameIdentity($0, requestedID) }) ?? requestedID
@@ -146,7 +199,7 @@ public actor SessionEngine {
         let previousLoaded = loadedCache, previousCollectionSignature = lastCollectionSignature, previousSelectedSignature = lastSelectedSignature
         if selectedID != cleanID { files = [:]; eventsByID = [:]; fingerprintsBySource = [:]; loadedCache = false }
         selectedID = cleanID
-        do { return try collect() }
+        do { return try collect(progress: progress) }
         catch {
             // A cancelled/failed load must not silently change the session subsequently polled by this engine.
             selectedID = previousID; files = previousFiles; eventsByID = previousEvents; fingerprintsBySource = previousFingerprints
@@ -227,22 +280,28 @@ public actor SessionEngine {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return [] }
         // Capture the requested graph once. Actor reentrancy or another opened session must not change its links.
-        var requestedEvents: [String: LensEvent] = [:]
-        requestedEvents.reserveCapacity(snapshot.events.count)
+        // Borrow the immutable snapshot through row offsets. Storing every
+        // complete event again makes a full-text query retain a second large
+        // value dictionary even though it only needs related-event lookup.
+        var requestedRows: [String: Int] = [:]
+        requestedRows.reserveCapacity(snapshot.events.count)
         for (offset, event) in snapshot.events.enumerated() {
             if offset.isMultiple(of: 1024) { try Task.checkCancellation() }
-            requestedEvents[event.id] = event
+            requestedRows[event.id] = offset
         }
         let capturedFingerprints = fingerprintsBySource
         var matches: [String] = []
         for (i, event) in snapshot.events.enumerated() {
             try Task.checkCancellation()
             if i % 32 == 0 { await Task.yield() }
-            if event.title.localizedCaseInsensitiveContains(term) || event.preview.localizedCaseInsensitiveContains(term) { matches.append(event.id); continue }
-            let related = event.relatedEventID.flatMap { requestedEvents[$0] }
             do {
-                let detail = try recordedDetail(for: event, related: related, fingerprints: capturedFingerprints)
-                if detail.raw.localizedCaseInsensitiveContains(term) { matches.append(event.id) }
+                let found = try autoreleasepool {
+                    if event.title.localizedCaseInsensitiveContains(term) || event.preview.localizedCaseInsensitiveContains(term) { return true }
+                    let related = event.relatedEventID.flatMap { requestedRows[$0] }.map { snapshot.events[$0] }
+                    let detail = try recordedDetail(for: event, related: related, fingerprints: capturedFingerprints)
+                    return detail.raw.localizedCaseInsensitiveContains(term)
+                }
+                if found { matches.append(event.id) }
             } catch is CancellationError { throw CancellationError() }
             catch { /* A missing or changed source cannot produce a verified full-record match. */ }
         }
@@ -256,24 +315,43 @@ public actor SessionEngine {
         return Set(ids)
     }
 
-    private func collect() throws -> SessionSnapshot {
+    private func collect(progress: SessionProgressHandler? = nil) throws -> SessionSnapshot {
+        // Collection also creates temporary file buffers, lookup objects and
+        // cache-encoding objects outside individual JSON record scopes.
+        try autoreleasepool { try collectIndex(progress: progress) }
+    }
+
+    private func collectIndex(progress: SessionProgressHandler?) throws -> SessionSnapshot {
+        let reporter = SessionProgressReporter(progress)
         try Task.checkCancellation()
         guard let selectedID, let root = summaries[selectedID] else { throw LensError.unavailable("Aucune session sélectionnée.") }
         guard !excludedInvestigationIDs.contains(selectedID), !isInvestigationWorkspace(root.cwd) else { throw LensError.unavailable("Chat d’enquête exclu de l’historique de session.") }
         let collectionSignature = Self.sourceSignature(home: home)
         let selectedCollectionSignature = selectedSignature(root: selectedID)
         var memberIDs = descendants(of: selectedID)
-        if !loadedCache { restore(root: selectedID); loadedCache = true }
+        if !loadedCache {
+            reporter.send(.init(stage: .restoringIndex))
+            restore(root: selectedID); loadedCache = true
+        }
         var readOwners = Set<String>()
+        let history = SessionHistoryProgress()
         while !memberIDs.isSubset(of: readOwners) {
             try Task.checkCancellation()
+            for id in memberIDs {
+                for path in summaries[id]?.paths ?? [] {
+                    guard !history.contains(path: path) else { continue }
+                    let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.int64Value
+                    history.register(path: path, bytes: size)
+                }
+            }
             for id in memberIDs.subtracting(readOwners) {
                 readOwners.insert(id)
                 guard let summary = summaries[id] else { continue }
                 for path in summary.paths where FileManager.default.fileExists(atPath: path) {
-                    do { try update(path: path, owner: id) }
+                    do { try update(path: path, owner: id, reporter: reporter, history: history) }
                     catch is CancellationError { throw CancellationError() }
                     catch { var index = files[path] ?? FileIndex(owner: id); index.issues.append(CoverageIssue("lecture", error.localizedDescription, source: path)); files[path] = index }
+                    history.finish(path: path)
                 }
             }
             discoverSpawnedChildren(in: memberIDs)
@@ -286,6 +364,7 @@ public actor SessionEngine {
             coverage += file.issues
             if file.pendingBytes > 0 { coverage.append(CoverageIssue("ligne partielle", "\(file.pendingBytes) octets en fin de journal attendent une ligne JSON complète ; la collecte reprendra sans doublon.", source: path)) }
         }
+        reporter.send(.init(stage: .organizingEvents, total: Int64(all.count)))
         all.sort { $0.event.timestamp == $1.event.timestamp ? ($0.event.agentID == $1.event.agentID ? $0.event.source.offset < $1.event.source.offset : $0.event.agentID < $1.event.agentID) : $0.event.timestamp < $1.event.timestamp }
         var events: [LensEvent] = []
         var recordForID: [String: IndexedEvent] = [:]
@@ -293,7 +372,10 @@ public actor SessionEngine {
         var itemIDs: [String: Int] = [:]
         // Stable protocol IDs deduplicate copied/supplementary records; equal text alone never does.
         for (recordIndex, record) in all.enumerated() {
-            if recordIndex.isMultiple(of: 1024) { try Task.checkCancellation() }
+            if recordIndex.isMultiple(of: 1024) {
+                try Task.checkCancellation()
+                reporter.send(.init(stage: .organizingEvents, completed: Int64(recordIndex), total: Int64(all.count)))
+            }
             let event = record.event
             let identity = record.protocolID.map { event.agentID + ":" + $0 }
             if let identity, let existing = itemIDs[identity] {
@@ -353,6 +435,8 @@ public actor SessionEngine {
         }
         events.sort { $0.timestamp == $1.timestamp ? ($0.agentID == $1.agentID ? $0.source.offset < $1.source.offset : $0.agentID < $1.agentID) : $0.timestamp < $1.timestamp }
         var calls: [String: Int] = [:]
+        reporter.send(.init(stage: .organizingEvents, completed: Int64(all.count), total: Int64(all.count)))
+        reporter.send(.init(stage: .linkingEvents))
         for i in events.indices where events[i].kind == .toolCall || events[i].kind == .delegation || events[i].kind == .wait {
             if let callID = events[i].callID { calls[events[i].agentID + ":" + callID] = i }
         }
@@ -425,11 +509,14 @@ public actor SessionEngine {
             let incoming = events.first { $0.agentID == id && $0.kind == .user }
             let spawnObservation = all.first { $0.spawnedChildID == id && $0.event.agentID == summary.parentID }
             let parentMission = spawnObservation.flatMap { observation in all.first { $0.event.agentID == summary.parentID && $0.event.callID == observation.event.callID && $0.delegatedMission != nil } }
+            let parentRequest = spawnObservation.flatMap { observation in all.first { $0.event.agentID == summary.parentID && $0.event.callID == observation.event.callID && $0.delegatedMetadata != nil } }
             let encrypted = events.first { $0.agentID == id && $0.preview.contains("Charge utile chiffrée") }
             let mission = id == selectedID ? incoming?.preview ?? "" : parentMission?.delegatedMission ?? incoming?.preview ?? (encrypted == nil ? "Mission non enregistrée dans les données disponibles." : "Charge utile de mission chiffrée, non accessible dans ce journal.")
             let missionEventID = id == selectedID ? incoming?.id : parentMission?.event.id ?? incoming?.id ?? encrypted?.id
             let parentSources = relationSources[id] ?? spawnObservation.map { [$0.event.source] + $0.event.supplementarySources } ?? []
-            agents.append(AgentRecord(id: id, parentID: id == selectedID ? nil : summary.parentID, name: summary.agentName.isEmpty ? (id == selectedID ? "Session principale" : "Agent \(id.prefix(8))") : summary.agentName, relation: id == selectedID ? .root : summary.relation, mission: mission, missionEventID: missionEventID, evidence: summary.evidence, paths: summary.paths, environmentIDs: environments.values.filter { $0.agentIDs.contains(id) }.map(\.id).sorted(), accessible: accessible, relationSources: parentSources))
+            var agentMetadata = summary.agentMetadata ?? []
+            if let requested = parentRequest?.delegatedMetadata { agentMetadata += requested }
+            agents.append(AgentRecord(id: id, parentID: id == selectedID ? nil : summary.parentID, name: summary.agentName.isEmpty ? (id == selectedID ? "Session principale" : "Agent \(id.prefix(8))") : summary.agentName, relation: id == selectedID ? .root : summary.relation, mission: mission, missionEventID: missionEventID, evidence: summary.evidence, paths: summary.paths, environmentIDs: environments.values.filter { $0.agentIDs.contains(id) }.map(\.id).sorted(), accessible: accessible, relationSources: parentSources, metadata: agentMetadata.isEmpty ? nil : agentMetadata))
             if !accessible { coverage.append(CoverageIssue("descendant inaccessible", "Lien parent/enfant enregistré pour \(id), mais ses octets de journal sont indisponibles.", source: summary.paths.first ?? id)) }
             if let version = summaries[id]?.cliVersion, !version.isEmpty, !version.hasPrefix("0.158"), !version.hasPrefix("0.159") { coverage.append(CoverageIssue("compatibilité", "Version \(version) hors des familles vérifiées 0.158/0.159 ; champs inconnus conservés comme événements bruts.", source: id)) }
         }
@@ -438,6 +525,7 @@ public actor SessionEngine {
         coverage.append(CoverageIssue("historique", "L’explorateur affiche les fichiers actuels. Un instantané Git n’est proposé que si le commit enregistré et son fichier sont vérifiés. L’état non commité à l’époque reste inconnu. Les sorties et patches restent accessibles dans les traces ; les périodes sans traces ne sont pas reconstituées."))
         var snapshot = SessionSnapshot(root: root, agents: agents, events: events, environments: environments.values.sorted { $0.path < $1.path }, resources: resources.values.sorted { $0.location < $1.location }, changes: changes, coverage: Array(Set(coverage)).sorted { $0.category < $1.category }, collectedAt: Date())
         try Task.checkCancellation()
+        reporter.send(.init(stage: .savingIndex))
         if let cacheIssue = persist(root: selectedID) { snapshot.coverage.append(cacheIssue) }
         try Task.checkCancellation()
         eventsByID = Dictionary(events.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -480,7 +568,7 @@ public actor SessionEngine {
         return [investigationWorkspaceRoot, investigationConnectionProbeRoot].contains { path == $0 || path.hasPrefix($0 + "/") }
     }
 
-    private func update(path: String, owner: String) throws {
+    private func update(path: String, owner: String, reporter: SessionProgressReporter? = nil, history: SessionHistoryProgress? = nil) throws {
         try LocalContentGuard.requireResident(path: path)
         let attrs = try FileManager.default.attributesOfItem(atPath: path)
         let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
@@ -493,11 +581,23 @@ public actor SessionEngine {
             file.issues.append(CoverageIssue("rotation/troncature", "Le journal a changé d'identité ou raccourci. Index relu depuis le début ; anciennes données non vérifiables remplacées.", source: path))
         }
         file.inode = inode
+        let fileName = URL(fileURLWithPath: path).lastPathComponent
+        var reportedOffset = file.offset
+        func report(_ offset: UInt64) {
+            reportedOffset = offset
+            let completed = Int64(clamping: offset), total = Int64(clamping: max(size, offset))
+            history?.update(path: path, completedBytes: completed, totalBytes: total)
+            reporter?.send(.init(stage: .readingHistory, completed: completed, total: total, fileName: fileName, history: history?.snapshot))
+        }
+        defer {
+            if !Task.isCancelled { history?.finish(path: path); report(reportedOffset) }
+        }
+        report(file.offset)
         guard size > file.offset else { file.pendingBytes = 0; files[path] = file; return }
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path)); defer { try? handle.close() }
         try handle.seek(toOffset: file.offset)
         var buffer = Data(), cursor = file.offset, readEnd = file.offset, dropping = false
-        while let chunk = try handle.read(upToCount: 256 * 1024), !chunk.isEmpty {
+        while let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: 256 * 1024) }), !chunk.isEmpty {
             try Task.checkCancellation()
             readEnd += UInt64(chunk.count)
             buffer.append(chunk)
@@ -508,12 +608,21 @@ public actor SessionEngine {
                 if file.line.isMultiple(of: 1024) { try Task.checkCancellation() }
                 if dropping { file.issues.append(CoverageIssue("événement volumineux", "Ligne \(file.line) de plus de \(maximumLineBytes) octets : non indexée, source conservée à l'offset \(cursor).", source: path)); dropping = false }
                 else if file.records.count >= maximumIndexedEvents { if !file.issues.contains(where: { $0.category == "limite d'index" }) { file.issues.append(CoverageIssue("limite d'index", "Plus de \(maximumIndexedEvents) événements dans ce journal ; les suivants restent disponibles dans la source mais ne sont pas indexés.", source: path)) } }
-                else { parse(line: line, source: SourceRef(path: path, offset: cursor, length: length, line: file.line), index: &file) }
+                else {
+                    // Foundation's JSON reader creates autoreleased objects. A
+                    // collection task can decode many files without returning to
+                    // a run loop; release temporary dictionaries after each line
+                    // instead of retaining them for the entire history load.
+                    autoreleasepool {
+                        parse(line: line, source: SourceRef(path: path, offset: cursor, length: length, line: file.line), index: &file)
+                    }
+                }
                 cursor += UInt64(length + 1)
                 buffer.removeSubrange(...newline)
                 file.offset = cursor
             }
             if buffer.count > maximumLineBytes { dropping = true; cursor += UInt64(buffer.count); buffer.removeAll(keepingCapacity: false) }
+            report(readEnd)
         }
         // Active rollouts may grow after attributesOfItem. Count bytes actually read,
         // never subtract a stale pre-read size from a later (larger) parsed offset.
@@ -587,7 +696,11 @@ public actor SessionEngine {
                     event.preview = Self.preview(Self.pretty(visible))
                     index.issues.append(CoverageIssue("mission opaque", "Forme chiffrée reconnue dans un message d’agent ; contenu et authenticité non vérifiés. Aucun texte de mission reconstruit.", source: source.path))
                 }
-                if name.contains("spawn_agent") { record.delegatedMission = opaqueMessage ? "Mission opaque ; contenu non accessible dans les données visibles." : (args["message"] as? String).map(Self.preview) }
+                if name.contains("spawn_agent") {
+                    record.delegatedMission = opaqueMessage ? "Mission opaque ; contenu non accessible dans les données visibles." : (args["message"] as? String).map(Self.preview)
+                    var metadataSource = source; metadataSource.sha256 = record.fingerprint
+                    record.delegatedMetadata = AgentMetadataField.delegationFields(args, source: metadataSource, eventID: event.id)
+                }
                 let cwd = args["workdir"] as? String ?? args["cwd"] as? String
                 if let cwd { event.environmentID = Self.resolve(cwd, cwd: index.cwd) }
                 let command = args["cmd"] as? String ?? args["command"] as? String ?? ""
@@ -797,28 +910,42 @@ public actor SessionEngine {
                     else if summaries[child]?.parentID == nil { summaries[child]?.parentID = file.owner; summaries[child]?.relation = .subagent; summaries[child]?.evidence += "; SubAgentActivity started, agent_thread_id enregistré" }
                 }
                 if event.toolName?.contains("spawn_agent") == true, let callID = event.callID { spawnCalls.insert(callID) }
-                if event.kind == .toolResult, let callID = event.callID, spawnCalls.contains(callID), !event.isError,
-                   let raw = try? Self.read(event.source), let root = try? JSONSerialization.jsonObject(with: raw) as? [String: Any], let payload = root["payload"] as? [String: Any] {
-                    let output = Self.jsonDictionary(Self.string(payload["output"] ?? ""))
-                    if let child = output["agent_id"] as? String ?? output["thread_id"] as? String,
-                       !excludedInvestigationIDs.contains(child),
-                       child.range(of: #"^[A-Fa-f0-9]{8}-[A-Fa-f0-9-]{27}$"#, options: .regularExpression) != nil {
-                        if summaries[child] == nil { summaries[child] = SessionSummary(id: child, parentID: file.owner, relation: .subagent, evidence: "spawn_agent \(callID) → agent_id enregistré ; journal indisponible") }
-                        else if summaries[child]?.parentID == nil { summaries[child]?.parentID = file.owner; summaries[child]?.relation = .subagent; summaries[child]?.evidence += "; spawn_agent \(callID) → agent_id enregistré" }
+                autoreleasepool {
+                    if event.kind == .toolResult, let callID = event.callID, spawnCalls.contains(callID), !event.isError,
+                       let raw = try? Self.read(event.source), let root = try? JSONSerialization.jsonObject(with: raw) as? [String: Any], let payload = root["payload"] as? [String: Any] {
+                        let output = Self.jsonDictionary(Self.string(payload["output"] ?? ""))
+                        if let child = output["agent_id"] as? String ?? output["thread_id"] as? String,
+                           !excludedInvestigationIDs.contains(child),
+                           child.range(of: #"^[A-Fa-f0-9]{8}-[A-Fa-f0-9-]{27}$"#, options: .regularExpression) != nil {
+                            if summaries[child] == nil { summaries[child] = SessionSummary(id: child, parentID: file.owner, relation: .subagent, evidence: "spawn_agent \(callID) → agent_id enregistré ; journal indisponible") }
+                            else if summaries[child]?.parentID == nil { summaries[child]?.parentID = file.owner; summaries[child]?.relation = .subagent; summaries[child]?.evidence += "; spawn_agent \(callID) → agent_id enregistré" }
+                        }
                     }
                 }
             }
         }
     }
     private func selectedSignature(root: String) -> String {
+        struct AgentAttributes: Encodable {
+            let name: String?
+            let cliVersion: String?
+            let metadata: [AgentMetadataField]?
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
         let ids = descendants(of: root).sorted()
         return Self.digest(ids.map { id in
             let summary = summaries[id]
+            // The thread database can change while the journal stays unchanged.
+            // Refresh the displayed fields without invalidating cached headers.
+            let attributes = AgentAttributes(name: summary?.agentName,
+                cliVersion: summary?.cliVersion, metadata: summary?.agentMetadata)
+            let metadataSignature = Self.digest((try? encoder.encode(attributes)) ?? Data())
             let paths = (summary?.paths ?? []).sorted().map { path in
                 let a = (try? FileManager.default.attributesOfItem(atPath: path)) ?? [:]
                 return path + ":" + String(describing: a[.size] ?? "") + ":" + String(describing: a[.systemFileNumber] ?? "") + ":" + String((a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)
             }.joined(separator: "|")
-            return id + ":" + (summary?.parentID ?? "") + ":" + (summary?.relation.rawValue ?? "") + ":" + (summary?.title ?? "") + ":" + paths
+            return id + ":" + (summary?.parentID ?? "") + ":" + (summary?.relation.rawValue ?? "") + ":" + (summary?.title ?? "") + ":" + paths + ":" + metadataSignature
         }.joined(separator: "\n"))
     }
     private func persist(root: String) -> CoverageIssue? {
@@ -856,23 +983,43 @@ public actor SessionEngine {
         return false
     }
 
+    private static func catalogHeader(path: String) throws -> SessionCatalogHeader? {
+        let (first, source) = try firstRecord(path: path, limit: 16 * 1024 * 1024)
+        guard first["type"] as? String == "session_meta", let payload = first["payload"] as? [String: Any],
+              let id = payload["id"] as? String, !id.isEmpty else { return nil }
+        let parsed = RolloutMetadata(payload: payload)
+        return SessionCatalogHeader(id: id, sessionID: parsed.sessionID, cwd: parsed.cwd,
+            cliVersion: payload["cli_version"] as? String, name: parsed.name, branch: parsed.branch, gitRef: parsed.gitRef,
+            parent: parsed.parent, relation: parsed.relation, historyStart: parsed.historyStart, source: source,
+            agentMetadata: AgentMetadataField.sessionFields(payload, source: source))
+    }
     private static func firstRecord(path: String, limit: Int) throws -> ([String: Any], SourceRef) {
         try LocalContentGuard.requireResident(path: path)
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path)); defer { try? handle.close() }
         var data = Data()
         while let chunk = try handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
-            data.append(chunk)
-            if let newline = data.firstIndex(of: 10) {
-                let record = Data(data.prefix(upTo: newline))
+            let newlineOffset = chunk.withUnsafeBytes { bytes -> Int? in
+                guard let start = bytes.baseAddress, let newline = memchr(start, 10, bytes.count) else { return nil }
+                return start.distance(to: newline)
+            }
+            if let newlineOffset {
+                guard data.count <= limit - newlineOffset else { throw LensError.unsupported("session_meta dépasse \(limit) octets") }
+                data.append(contentsOf: chunk.prefix(newlineOffset))
+                let record = data
                 return ((try JSONSerialization.jsonObject(with: record)) as? [String: Any] ?? [:], SourceRef(path: path, offset: 0, length: record.count, line: 1, sha256: Self.digest(record)))
             }
-            if data.count > limit { throw LensError.unsupported("session_meta dépasse \(limit) octets") }
+            guard data.count <= limit - chunk.count else { throw LensError.unsupported("session_meta dépasse \(limit) octets") }
+            data.append(chunk)
         }
         return ((try JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:], SourceRef(path: path, offset: 0, length: data.count, line: 1, sha256: Self.digest(data)))
     }
-    private static func rolloutPaths(in directory: URL) -> Set<String> {
+    private static func rolloutPaths(in directory: URL, onFile: (() throws -> Void)? = nil) rethrows -> Set<String> {
         var paths = Set<String>()
-        if let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) { for case let file as URL in enumerator where file.pathExtension == "jsonl" { paths.insert(file.path) } }
+        if let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
+            for case let file as URL in enumerator where file.pathExtension == "jsonl" {
+                paths.insert(file.path); try onFile?()
+            }
+        }
         return paths
     }
     private static func sourceSignature(home: URL) -> String {
@@ -920,10 +1067,14 @@ public actor SessionEngine {
         let clean = redact(String(bounded.prefix(limit)))
         return more ? clean + "\n[aperçu ; contenu complet chargé depuis la source]" : clean
     }
+    private static let redactions: [(NSRegularExpression, String)] = [#"(?i)(\"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|client_secret|creator_user_id|creator_account_id)\"\s*:\s*\")[^\"]*(\")"#, #"(?i)(Bearer\s+)[A-Za-z0-9._~+/-]{12,}"#, #"\bsk-[A-Za-z0-9_-]{16,}\b"#].compactMap { pattern in
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        return (regex, pattern.hasPrefix("\\b") ? "[secret masqué]" : pattern.contains("Bearer") ? "$1[secret masqué]" : "$1[secret masqué]$2")
+    }
     private static func redact(_ text: String) -> String {
         var value = text
-        for pattern in [#"(?i)(\"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|client_secret|creator_user_id|creator_account_id)\"\s*:\s*\")[^\"]*(\")"#, #"(?i)(Bearer\s+)[A-Za-z0-9._~+/-]{12,}"#, #"\bsk-[A-Za-z0-9_-]{16,}\b"#] {
-            if let regex = try? NSRegularExpression(pattern: pattern) { value = regex.stringByReplacingMatches(in: value, range: NSRange(value.startIndex..., in: value), withTemplate: pattern.hasPrefix("\\b") ? "[secret masqué]" : pattern.contains("Bearer") ? "$1[secret masqué]" : "$1[secret masqué]$2") }
+        for (regex, replacement) in redactions {
+            value = regex.stringByReplacingMatches(in: value, range: NSRange(value.startIndex..., in: value), withTemplate: replacement)
         }
         return value
     }
@@ -946,7 +1097,14 @@ public actor SessionEngine {
         return matchesDiagnostic(diagnostic, patterns: successDiagnostics)
     }
     private static func digest(_ value: String) -> String { digest(Data(value.utf8)) }
-    private static func digest(_ value: Data) -> String { SHA256.hash(data: value).map { String(format: "%02x", $0) }.joined() }
+    private static let digestHex = Array("0123456789abcdef".utf8)
+    private static func digest(_ value: Data) -> String {
+        var encoded: [UInt8] = []; encoded.reserveCapacity(64)
+        for byte in SHA256.hash(data: value) {
+            encoded.append(digestHex[Int(byte >> 4)]); encoded.append(digestHex[Int(byte & 15)])
+        }
+        return String(decoding: encoded, as: UTF8.self)
+    }
     private static func resolve(_ path: String, cwd: String) -> String {
         if path.hasPrefix("file://"), let url = URL(string: path) { return url.standardizedFileURL.path }
         if path.hasPrefix("http://") || path.hasPrefix("https://") || path.hasPrefix("data:") || path.hasPrefix("trace:") { return path }
@@ -1094,6 +1252,7 @@ private struct IndexedEvent: Codable {
     var resultPatchPaths: [String] = []
     var spawnedChildID: String?
     var delegatedMission: String?
+    var delegatedMetadata: [AgentMetadataField]?
     var producedPaths: [String] = []
     mutating func mergeFileChangeStatus(_ other: IndexedEvent, isError: Bool) {
         let existing = fileChangeStatuses ?? fileChangeStatus.map { [$0] } ?? []

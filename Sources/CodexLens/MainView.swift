@@ -7,8 +7,8 @@ struct MainView: View {
     @Environment(\.lensWindowContext) private var windowContext
     @Environment(\.openSettings) private var openSettings
     @AppStorage("lensControlAccent") private var controlAccent = "lens"
-    @AppStorage("lensAppearance") private var appearance = "system"
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lensAppearance") private var appearance = "dark"
+    @AppStorage("lens.language") private var language = "en"
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @SceneStorage("lensSidebarVisible") private var sidebarVisible = true
     @SceneStorage("lensChatVisible") private var savedChatVisible = false
@@ -114,9 +114,14 @@ struct MainView: View {
             savedChatVisible = value
             if value { windowContext?.focusPane(.chat, afterLayout: true) }
         }
-        .toolbar(id: "LensSessionToolbar") { navigationToolbar; inspectionToolbar }
+        // AppKit synchronizes toolbars with the same identifier as one family.
+        // A child loading a session has different transient items from its idle
+        // parent; that family insertion can throw while creating the window.
+        // Keep customization and state local to the stable scene identity.
+        .toolbar(id: windowContext?.toolbarIdentifier ?? "LensSessionToolbar-" + store.windowIdentity) { navigationToolbar; inspectionToolbar }
         .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
         .sheet(item: presentation) { sheet in
+            Group {
             switch sheet {
             case .onboarding:
                 LensOnboardingView(onOpenSession: { store.perform(.openSession) }) {
@@ -130,6 +135,7 @@ struct MainView: View {
                     ConversationExportView(snapshot: snapshot, onClose: { store.showConversation = false })
                 }
             }
+            }.lensControlAccent(LensControlAccent(rawValue: controlAccent) ?? .lens)
         }
         .lensMotionAware()
     }
@@ -286,9 +292,9 @@ struct MainView: View {
             .accessibilityIdentifier("lens-section-" + section.rawValue)
     }
     @ViewBuilder private var tabs: some View {
-      if !store.tabs.isEmpty || store.liveTimelineVisible || (selectionNeedsOpenAction && store.selection != nil && !store.tabContentVisible) {
+      if store.hasWorkspaceReturn || (selectionNeedsOpenAction && store.selection != nil && !store.tabContentVisible) {
         HStack(spacing: 12) {
-            if !store.tabs.isEmpty || store.liveTimelineVisible {
+            if store.hasWorkspaceReturn {
                 LensWorkspaceTabs(store: store)
             } else { Spacer(minLength: 0) }
             if !store.tabContentVisible, let target = store.selection, store.presents(target), selectionNeedsOpenAction {
@@ -447,8 +453,6 @@ struct MainView: View {
     }
     @ViewBuilder private var liveCenter: some View {
         if let target = store.livePreview { LensLivePreviewView(destination: target) }
-        else if case .event = store.selection, store.section == .activity || store.section == .calls,
-                let target = store.selection { LensLivePreviewView(destination: target, temporary: false).accessibilityIdentifier("lens-event-tab-content") }
         else { center }
     }
     @ViewBuilder private var center: some View {
@@ -477,7 +481,8 @@ struct MainView: View {
         Group {
             if store.busy {
                 LensLoadingState(title: LensL10n.text("Lecture des traces de la session…"),
-                    cancelTitle: LensL10n.text("Annuler l’ouverture"), onCancel: { store.cancelSessionOpening() })
+                    cancelTitle: LensL10n.text("Annuler l’ouverture"), onCancel: { store.cancelSessionOpening() },
+                    operationID: store.openingIdentity, progress: store.openingProgress, showsOpeningSteps: true)
             } else {
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 7) {
@@ -554,20 +559,24 @@ struct SessionPickerView: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack { Text(LensL10n.text("Sessions")).font(.title2); Spacer(); Button(LensL10n.text("Fermer")) { store.showSessionPicker = false }.keyboardShortcut(.cancelAction) }
-            HStack {
+            Text(LensL10n.text("Sessions")).font(.title2)
+            HStack(spacing: 8) {
                 LensNativeSearchField(placeholder: LensL10n.text("Rechercher, coller un ID ou un lien Codex…"), text: $text, focused: Binding(get: { searchFocused }, set: { searchFocused = $0 }), onSubmit: { openSelection() }).frame(height: 28)
                     .onChange(of: text) { _, _ in selectedSessionID = nil }
                     .accessibilityLabel(LensL10n.text("Recherche, ID ou lien de session"))
-                Button(LensL10n.text("Ouvrir la session")) { openSelection() }
-                    .disabled(openingID == nil || store.busy).keyboardShortcut(.defaultAction)
-                    .help(LensL10n.text("Collez un ID ou un lien codex://threads/…, sélectionnez une session ou affinez la recherche."))
+                Button { Task { await store.refreshCatalog() } } label: {
+                    Image(systemName: LensSymbols.name("arrow.clockwise"))
+                        .frame(width: 28, height: 28).contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .disabled(store.catalogLoading)
+                .help(LensL10n.text("Actualiser"))
+                .accessibilityLabel(LensL10n.text("Actualiser"))
+                .accessibilityIdentifier("lens-session-refresh")
             }
             HStack {
                 Toggle(LensL10n.text("Inclure les sous-agents et reprises"), isOn: $showDescendants).help(LensL10n.text("Ajouter les historiques descendants au catalogue ; cela ne change pas leurs liens enregistrés"))
-                if store.catalogLoading { LensProgressIndicator(LensL10n.text("Actualisation…")).controlSize(.mini) }
                 Spacer()
-                Button { Task { await store.refreshCatalog() } } label: { Label(LensL10n.text("Actualiser"), systemImage: LensSymbols.name("arrow.clockwise")) }.disabled(store.catalogLoading)
             }.font(.caption)
             HStack(spacing: 8) {
                 Image(systemName: LensSymbols.name("folder")).accessibilityHidden(true)
@@ -583,6 +592,9 @@ struct SessionPickerView: View {
                 }
             }.font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("lens-session-source")
             if let error = store.error { Label(LensL10n.display(error), systemImage: LensSymbols.name("exclamationmark.triangle")).foregroundStyle(LensAppearance.errorText).textSelection(.enabled) }
+            if store.catalogLoading, !store.busy, !choices.isEmpty, let progress = store.catalogProgress {
+                LensSessionProgressLine(progress: progress)
+            }
             List(choices, selection: $selectedSessionID) { session in
                 Button {
                     selectedSessionID = session.id
@@ -609,19 +621,31 @@ struct SessionPickerView: View {
                         Button(LensL10n.text("Copier le répertoire initial")) { store.copyLocalText(session.cwd, notice: LensL10n.text("Répertoire initial copié")) }.disabled(session.cwd.isEmpty)
                     }
             }
+            .scrollContentBackground(.hidden)
+            // Retain the native list's selection/scroll state while opening,
+            // but let the sheet's surface show through behind the loader.
+            .opacity(store.busy ? 0 : 1)
+            .accessibilityHidden(store.busy)
             .disabled(store.busy)
             .overlay {
                 if store.busy {
                     LensLoadingState(title: LensL10n.text("Lecture des traces…"),
-                        cancelTitle: LensL10n.text("Annuler l’ouverture"), onCancel: { store.cancelSessionOpening() })
+                        cancelTitle: LensL10n.text("Annuler l’ouverture"), onCancel: { store.cancelSessionOpening() },
+                        operationID: store.openingIdentity, progress: store.openingProgress, showsOpeningSteps: true)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color(nsColor: .windowBackgroundColor))
                 } else if choices.isEmpty {
-                    if store.catalogLoading { LensLoadingState(title: LensL10n.text("Recherche des sessions locales…")) }
+                    if store.catalogLoading { LensLoadingState(title: LensL10n.text("Recherche des sessions locales…"), operationID: store.catalogLoadingIdentity, progress: store.catalogProgress) }
                     else { Text(store.catalog.isEmpty ? LensL10n.text("Aucune session locale accessible. Collez un ID complet ou actualisez la liste.") : LensL10n.text("Aucune session ne correspond. Essayez un autre terme ou collez un ID complet.")).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(24).allowsHitTesting(false) }
                 }
             }
-            Text(LensL10n.text("Lens consulte les traces existantes et suit les nouveaux événements disponibles, sans reprendre la session.")).font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Spacer()
+                Button(LensL10n.text("Fermer")) { store.showSessionPicker = false }
+                    .keyboardShortcut(.cancelAction)
+                LensNativePrimaryButton(title: LensL10n.text("Ouvrir la session"), isDefault: true) { openSelection() }
+                    .disabled(openingID == nil || store.busy)
+                    .help(LensL10n.text("Collez un ID ou un lien codex://threads/…, sélectionnez une session ou affinez la recherche."))
+            }
         }.padding(22).frame(minWidth: 620, idealWidth: 740, minHeight: 470, idealHeight: 540)
             .onAppear { searchFocused = true }
             .onChange(of: store.sourceHome) { _, _ in selectedSessionID = nil }

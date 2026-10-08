@@ -14,7 +14,7 @@ struct LensChatMarkdownView: View {
     var onCopyMessage: ((String) -> Void)? = nil
     var sources: [ChatContextSource] = []
     @State private var showsSource = false
-    @AppStorage("lens.language") private var language = "system"
+    @AppStorage("lens.language") private var language = "en"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -153,7 +153,8 @@ struct LensChatMarkdownView: View {
 /// A question is visually distinct from the answer without using a second
 /// accent color. Native selectable text preserves exact copy and wrapping.
 struct LensChatQuestionBubble: View {
-    @AppStorage("lens.language") private var language = "system"
+    @Environment(\.lensAccent) private var accent
+    @AppStorage("lens.language") private var language = "en"
     let text: String
     let fontSize: Double
 
@@ -166,7 +167,7 @@ struct LensChatQuestionBubble: View {
                 Text(text).font(LensUI.readingFont(fontSize)).lineSpacing(3)
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             }.padding(.horizontal, 14).padding(.vertical, 10)
-                .background(LensBrand.controlHover, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .background(accent.hoverColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }.frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityIdentifier("lens-chat-question-bubble")
     }

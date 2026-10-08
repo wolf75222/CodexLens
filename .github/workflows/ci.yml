@@ -21,7 +21,7 @@ jobs:
   validate:
     name: Build, test and package
     runs-on: macos-26
-    timeout-minutes: 35
+    timeout-minutes: 75
     outputs:
       version: ${{ steps.version.outputs.version }}
     env:
@@ -54,10 +54,47 @@ jobs:
           python3 -m unittest discover -s scripts/tests -v
       - name: Swift tests
         run: bash scripts/test.sh -c release -Xswiftc -g --jobs 3
+      - name: Qualified Codex permission profiles
+        run: |
+          for entry in \
+            "0.159.2:025deffd84cbc99d88ef952e585dc67c7c94e4273f89ba3d45f7e5799743c13c" \
+            "0.160.1:670af2b049d9c95afb74d7da385f30c5033d13a07175001dd8958c51944984d0"; do
+            version="${entry%%:*}"
+            digest="${entry#*:}"
+            directory="$RUNNER_TEMP/codex-policy-$version"
+            mkdir -p "$directory"
+            curl --fail --location --proto '=https' --tlsv1.2 \
+              --output "$directory/codex.tar.gz" \
+              "https://github.com/openai/codex/releases/download/rust-v$version/codex-aarch64-apple-darwin.tar.gz"
+            printf '%s  %s\n' "$digest" "$directory/codex.tar.gz" | shasum -a 256 --check
+            tar -xzf "$directory/codex.tar.gz" -C "$directory"
+            LENS_POLICY_TEST_EXECUTABLE="$directory/codex-aarch64-apple-darwin" \
+              bash scripts/test.sh -c release -Xswiftc -g --skip-build --filter CodexInvestigationPolicyTests
+          done
       - name: Build native app with symbols
         run: bash scripts/build.sh --profile
       - name: Native AppKit icon tests
         run: bash scripts/test-app-icon.sh "$RUNNER_TEMP/icon-receipt.json"
+      - name: Timeline appearance regression
+        run: |
+          corpus="/private/tmp/lens-ci-timeline-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          timeline="/private/tmp/lens-ci-timeline-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python3 scripts/create-curves-corpus-v77.py --output "$corpus" --events 600
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$timeline" --corpus "$corpus" --entrypoint TimelineAppearanceV78Main.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/timeline
+          cp "$timeline/native-design-v07-receipt.json" dist/ui-validation/timeline/receipt.json
+          cp "$timeline/"*.png dist/ui-validation/timeline/
+      - name: Session curves regression
+        env:
+          LENS_CURVES_COMPACT_LAYOUT: "1"
+        run: |
+          corpus="/private/tmp/lens-ci-curves-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curves="/private/tmp/lens-ci-curves-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python3 scripts/create-curves-corpus-v77.py --output "$corpus" --events 600
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$curves" --corpus "$corpus" --entrypoint SessionCurvesV77Main.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/curves
+          cp "$curves/native-design-v07-receipt.json" dist/ui-validation/curves/receipt.json
+          cp "$curves/"*.png dist/ui-validation/curves/
       - name: Offline native UI smoke
         run: |
           corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -67,11 +104,99 @@ jobs:
           mkdir -p dist/ui-validation
           cp "$renders/native-design-v07-receipt.json" dist/ui-validation/receipt.json
           cp "$renders/"*.png dist/ui-validation/
+      - name: Workspace navigation regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          navigation="/private/tmp/lens-ci-navigation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$navigation" --corpus "$corpus" --entrypoint WorkspaceNavigationV76Main.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/navigation
+          cp "$navigation/native-design-v07-receipt.json" dist/ui-validation/navigation/receipt.json
+          cp "$navigation/"*.png dist/ui-validation/navigation/
+      - name: SwiftUI window scene regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          scenes="/private/tmp/lens-ci-scenes-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$scenes" --corpus "$corpus" --entrypoint WorkspaceSceneV76Main.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/scenes
+          cp "$scenes/native-design-v07-receipt.json" dist/ui-validation/scenes/receipt.json
+          cp "$scenes/"*.png dist/ui-validation/scenes/
+      - name: Session picker regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          picker="/private/tmp/lens-ci-picker-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$picker" --corpus "$corpus" --entrypoint SessionCatalogPickerMain.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/picker
+          cp "$picker/native-design-v07-receipt.json" dist/ui-validation/picker/receipt.json
+          cp "$picker/"*.png dist/ui-validation/picker/
+      - name: Loading state regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          loading="/private/tmp/lens-ci-loading-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$loading" --corpus "$corpus" --entrypoint LoadingV42Main.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/loading
+          cp "$loading/native-design-v07-receipt.json" dist/ui-validation/loading/receipt.json
+          for image in "$loading/"*.png; do
+            if [ -f "$image" ]; then cp "$image" dist/ui-validation/loading/; fi
+          done
+      - name: Changes overview regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          changes="/private/tmp/lens-ci-changes-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$changes" --corpus "$corpus" --entrypoint ChangesOverviewMain.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/changes
+          cp "$changes/native-design-v07-receipt.json" dist/ui-validation/changes/receipt.json
+          cp "$changes/"*.png dist/ui-validation/changes/
+      - name: Large history follow regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          largefollow="/private/tmp/lens-ci-largefollow-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$largefollow" --corpus "$corpus" --entrypoint LargeHistoryFollowMain.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/largefollow
+          cp "$largefollow/native-design-v07-receipt.json" dist/ui-validation/largefollow/receipt.json
+      - name: Control color regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          colors="/private/tmp/lens-ci-colors-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$colors" --corpus "$corpus" --entrypoint ControlColorsMain.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/colors
+          cp "$colors/native-design-v07-receipt.json" dist/ui-validation/colors/receipt.json
+      - name: Agent information regression
+        run: |
+          corpus="/private/tmp/lens-ci-corpus-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          agents="/private/tmp/lens-ci-agents-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          zsh scripts/verify-design-v07.sh --source-root "$PWD" --output "$agents" --corpus "$corpus" --entrypoint AgentMetadataMain.swift --after-source-freeze --run
+          mkdir -p dist/ui-validation/agents
+          cp "$agents/native-design-v07-receipt.json" dist/ui-validation/agents/receipt.json
+          cp "$agents/"*.png dist/ui-validation/agents/
+      - name: Signed update regression
+        run: |
+          updates="/private/tmp/lens-ci-updates-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          bash scripts/verify-updates.sh --artifacts "$LENS_BUILD_DIR/artifacts" --output "$updates"
+          mkdir -p dist/ui-validation/updates
+          cp "$updates/receipt.json" dist/ui-validation/updates/receipt.json
       - name: Package and verify installer
         run: bash scripts/package-release.sh --app "$LENS_APP_PATH" --output dist/release
       - name: Release version
         id: version
         run: python3 -c 'import plistlib,os; d=plistlib.load(open("Support/Info.plist","rb")); open(os.environ["GITHUB_OUTPUT"],"a").write("version="+d["CFBundleShortVersionString"]+"\n")'
+      - name: Collect native diagnostics
+        if: always()
+        run: |
+          mkdir -p dist/native-diagnostics
+          for kind in ui navigation scenes curves timeline picker loading changes largefollow colors agents; do
+            probe="/private/tmp/lens-ci-${kind}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            mkdir -p "dist/native-diagnostics/$kind"
+            for file in native-design-v07-receipt.json process-receipt.json phase.json scene-phase.json runtime.log build.log toolchain.log; do
+              if [ -f "$probe/$file" ]; then cp "$probe/$file" "dist/native-diagnostics/$kind/"; fi
+            done
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: native-diagnostics-${{ github.sha }}
+          path: dist/native-diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: codex-lens-${{ github.sha }}

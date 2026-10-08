@@ -7,10 +7,23 @@ struct ActivityView: View {
     @State private var periodEditorVisible = false
     @State private var timelineGuideVisible = false
     var body: some View {
-      GeometryReader { geometry in
-        if store.activityMode == .chronology { chronology(width: geometry.size.width) }
-        else { CommunicationSequenceView() }
-      }
+        VStack(spacing: 0) {
+            HStack {
+                Picker(LensL10n.text("Vue de l’activité"), selection: $store.activityMode) {
+                    ForEach(ActivityInspectionMode.allCases, id: \.self) { Text(LensL10n.text($0.rawValue)).tag($0) }
+                }.pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small).lensFilledControlAccent()
+                    .accessibilityIdentifier("lens-activity-mode")
+                Spacer(minLength: 0)
+            }.padding(.horizontal, 16).padding(.vertical, 8)
+            Divider()
+            GeometryReader { geometry in
+                switch store.activityMode {
+                case .chronology: chronology(width: geometry.size.width)
+                case .communications: CommunicationSequenceView()
+                case .trends: SessionTrendsView()
+                }
+            }
+        }
     }
     private func chronology(width: CGFloat) -> some View {
         VSplitView {
@@ -226,7 +239,7 @@ private struct EventTableView: NSViewRepresentable {
     let isCalls: Bool
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
+        let scroll = EventListScrollView()
         scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.drawsBackground = false
         let table = EventNativeTableView()
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("event"))
@@ -241,6 +254,7 @@ private struct EventTableView: NSViewRepresentable {
         table.setAccessibilityLabel(title)
         scroll.documentView = table
         context.coordinator.table = table; context.coordinator.scroll = scroll
+        context.coordinator.attachViewportTracking()
         context.coordinator.updateAccent(LensControlAccent(rawValue: controlAccent) ?? .lens)
         table.menuProvider = { [weak coordinator = context.coordinator] in coordinator?.menu(for: $0) }
         table.onReselect = { [weak coordinator = context.coordinator] in coordinator?.revealReselectedRow($0) }
@@ -254,6 +268,7 @@ private struct EventTableView: NSViewRepresentable {
         context.coordinator.update(store: store, events: events, isCalls: isCalls, title: title)
     }
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        coordinator.detachViewportTracking()
         coordinator.cancelPendingSelection()
         coordinator.table?.delegate = nil; coordinator.table?.dataSource = nil; coordinator.table?.menuProvider = nil
         coordinator.table?.target = nil; coordinator.table?.doubleAction = nil; coordinator.table?.onReselect = nil; coordinator.table?.onOpenRow = nil
@@ -267,8 +282,10 @@ private struct EventTableView: NSViewRepresentable {
         private var rowByID: [String: Int] = [:]
         private var version: UUID?
         private var rootID: String?
+        private var sourceHome: String?
         private var calls = false
         private var fontSize = 12.0
+        private var timestampColumnWidth: CGFloat = 68
         private var codeFont: LensCodeFont = .system
         private var accent: LensControlAccent = .lens
         func updateAccent(_ value: LensControlAccent) {
@@ -279,6 +296,44 @@ private struct EventTableView: NSViewRepresentable {
         private var language = LensL10n.resolvedLanguage.rawValue
         private var selectedID: String?
         private var suppressSelection = false
+        private var restorationRevision: Int?
+        private var pendingViewport: LensEventListViewport?
+        private var applyingViewport = false
+        func attachViewportTracking() {
+            guard let scroll else { return }
+            scroll.contentView.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(self, selector: #selector(viewportChanged), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+            (scroll as? EventListScrollView)?.onLayout = { [weak self] in self?.restoreViewportIfReady() }
+        }
+        func detachViewportTracking() {
+            recordViewport()
+            NotificationCenter.default.removeObserver(self)
+            (scroll as? EventListScrollView)?.onLayout = nil
+            pendingViewport = nil
+        }
+        @objc private func viewportChanged() { recordViewport() }
+        private func recordViewport() {
+            guard !applyingViewport, pendingViewport == nil, !suppressSelection,
+                  let scroll, let table, let rootID, let store,
+                  scroll.contentSize.height > 1, !rows.isEmpty else { return }
+            let origin = scroll.contentView.bounds.origin
+            let row = table.row(at: NSPoint(x: 2, y: origin.y + 1))
+            guard rows.indices.contains(row) else { return }
+            store.recordEventListViewport(LensEventListViewport(rootID: rootID, anchorID: rows[row].id,
+                anchorOffset: origin.y - table.rect(ofRow: row).minY, origin: origin, sourceHome: sourceHome), calls: calls)
+        }
+        private func restoreViewportIfReady() {
+            guard !applyingViewport, let saved = pendingViewport, let scroll, let table,
+                  scroll.contentSize.width > 1, scroll.contentSize.height > 1,
+                  table.bounds.height > 0 else { return }
+            applyingViewport = true
+            var origin = saved.origin
+            if let id = saved.anchorID, let row = rowByID[id] { origin.y = table.rect(ofRow: row).minY + saved.anchorOffset }
+            origin.y = min(max(0, origin.y), max(0, table.bounds.height - scroll.contentSize.height))
+            scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView)
+            pendingViewport = nil; applyingViewport = false
+            recordViewport()
+        }
         private var selectionTask: Task<Void, Never>?
         private var pendingSelection: (rootID: String?, eventID: String, previousSelection: Destination?)?
         private let cellID = NSUserInterfaceItemIdentifier("recordedEventCell")
@@ -289,7 +344,8 @@ private struct EventTableView: NSViewRepresentable {
             self.store = store
             let nextVersion = store.presentation?.id, nextRoot = store.presentation?.rootID
             let nextFontSize = min(24, max(10, store.fontSize))
-            let rootChanged = rootID != nextRoot
+            let nextSourceHome = store.observedSourceHome.standardizedFileURL.path
+            let rootChanged = rootID != nextRoot || sourceHome != nextSourceHome
             let dataChanged = version != nextVersion || rootChanged || calls != isCalls || rows.count != events.count
             let fontChanged = fontSize != nextFontSize || codeFont != store.codeFont
             let nextLanguage = LensL10n.resolvedLanguage.rawValue
@@ -304,6 +360,9 @@ private struct EventTableView: NSViewRepresentable {
             // Keep the user's pending selection if it still belongs to these rows.
             let nextSelectedID = pendingSelection?.eventID ?? store.selectedEvent?.id
             let selectionChanged = selectedID != nextSelectedID
+            let restoring = restorationRevision != store.eventListRestoration
+            if restoring || rootChanged { pendingViewport = store.eventListViewport(calls: isCalls) }
+            restorationRevision = store.eventListRestoration
             var origin = scroll.contentView.bounds.origin
             var anchorID: String?, anchorOffset: CGFloat = 0
             if dataChanged || fontChanged || languageChanged, !rootChanged, !rows.isEmpty {
@@ -315,7 +374,8 @@ private struct EventTableView: NSViewRepresentable {
                 suppressSelection = true
                 rows = events // Copy-on-write values, never a scan or a new UI-side index.
                 rowByID = nextRowsByID
-                version = nextVersion; rootID = nextRoot; calls = isCalls; fontSize = nextFontSize; codeFont = store.codeFont; language = nextLanguage
+                version = nextVersion; rootID = nextRoot; sourceHome = nextSourceHome; calls = isCalls; fontSize = nextFontSize; codeFont = store.codeFont; language = nextLanguage
+                timestampColumnWidth = EventTableCell.timestampWidth(fontSize: fontSize)
                 table.rowHeight = fontSize >= 18 ? CGFloat(fontSize + 6) * 5.5 : max(84, CGFloat(fontSize + 4) * 5)
                 table.reloadData()
                 applySelection(nextSelectedID, reveal: false)
@@ -325,12 +385,14 @@ private struct EventTableView: NSViewRepresentable {
                 scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView)
                 // An explicit cross-view selection takes precedence over a live
                 // viewport anchor; an unchanged selection never jumps the reader.
-                if selectionChanged { applySelection(nextSelectedID, reveal: true) }
+                if selectionChanged && pendingViewport == nil && !restoring { applySelection(nextSelectedID, reveal: true) }
                 suppressSelection = false
             } else if selectedID != nextSelectedID {
-                suppressSelection = true; applySelection(nextSelectedID, reveal: true); suppressSelection = false
+                suppressSelection = true; applySelection(nextSelectedID, reveal: pendingViewport == nil && !restoring); suppressSelection = false
             }
             selectedID = nextSelectedID
+            restoreViewportIfReady()
+            recordViewport()
         }
         private func applySelection(_ id: String?, reveal: Bool) {
             guard let table else { return }
@@ -350,7 +412,7 @@ private struct EventTableView: NSViewRepresentable {
             let cell = tableView.makeView(withIdentifier: cellID, owner: self) as? EventTableCell ?? EventTableCell(frame: .zero)
             cell.identifier = cellID
             let event = rows[row]
-            cell.configure(event: event, agentLabel: store?.agentName(event.agentID) ?? event.agentID, fontSize: fontSize, codeFont: codeFont)
+            cell.configure(event: event, agentLabel: store?.agentName(event.agentID) ?? event.agentID, fontSize: fontSize, codeFont: codeFont, timestampWidth: timestampColumnWidth)
             return cell
         }
         func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
@@ -387,6 +449,9 @@ private struct EventTableView: NSViewRepresentable {
             guard rows.indices.contains(row), let store else { return }
             let id = rows[row].id
             cancelPendingSelection()
+            // A double-click can finish before the deferred selection delegate.
+            // Preserve the row actually selected by AppKit as the workspace anchor.
+            if store.selection != .event(id) { store.navigate(.event(id)) }
             store.navigate(.event(id), newTab: true)
         }
         func menu(for row: Int) -> NSMenu? {
@@ -395,12 +460,17 @@ private struct EventTableView: NSViewRepresentable {
             menu.autoenablesItems = false
             func add(_ title: String, command: String, enabled: Bool = true) {
                 let item = NSMenuItem(title: title, action: #selector(menuAction(_:)), keyEquivalent: "")
-                item.target = self; item.representedObject = ["command": command, "id": event.id]
+                item.target = self; item.representedObject = ["command": command, "id": event.id, "root": store.snapshot?.root.id ?? "", "source": store.observedSourceHome.standardizedFileURL.path]
                 item.isEnabled = enabled; menu.addItem(item)
             }
             add(LensAction.investigate.title(in: store), command: "investigate", enabled: store.canPerform(.investigate, target: .event(event.id)))
             if event.isError { add(LensL10n.text("Expliquer cette erreur"), command: "explainError", enabled: store.canPerform(.investigate, target: .event(event.id))) }
             add(LensL10n.text("Ouvrir dans un onglet"), command: "tab")
+            if let context = LensApplicationCoordinator.shared.context(for: scroll?.window) {
+                let item = NSMenuItem(title: LensAction.openInNewWindow.title(in: store), action: #selector(menuAction(_:)), keyEquivalent: "")
+                item.target = self; item.representedObject = context.capture(.openInNewWindow, destination: .event(event.id))
+                item.isEnabled = store.canPerform(.openInNewWindow, target: .event(event.id)); menu.addItem(item)
+            }
             add(LensL10n.text("Afficher dans la chronologie"), command: "timeline")
             add(LensL10n.text("Voir l’agent"), command: "agent")
             if event.environmentID != nil { add(LensL10n.text("Voir l’environnement"), command: "environment") }
@@ -410,7 +480,9 @@ private struct EventTableView: NSViewRepresentable {
             return menu
         }
         @objc private func menuAction(_ item: NSMenuItem) {
+            if let command = item.representedObject as? LensCommandTarget { command.execute(); return }
             guard let payload = item.representedObject as? [String: String], let id = payload["id"], let store,
+                  payload["root"] == store.snapshot?.root.id, payload["source"] == store.observedSourceHome.standardizedFileURL.path,
                   let event = store.event(id) else { return }
             switch payload["command"] {
             case "investigate": store.perform(.investigate, target: .event(id))
@@ -425,6 +497,11 @@ private struct EventTableView: NSViewRepresentable {
             }
         }
     }
+}
+
+@MainActor private final class EventListScrollView: NSScrollView {
+    var onLayout: (() -> Void)?
+    override func layout() { super.layout(); onLayout?() }
 }
 
 @MainActor private final class EventNativeTableView: NSTableView {
@@ -470,7 +547,7 @@ private struct EventTableView: NSViewRepresentable {
 @MainActor private final class EventTableCell: NSTableCellView {
     override var isFlipped: Bool { true }
     private let timeField = NSTextField(labelWithString: "")
-    private let dateField = NSTextField(labelWithString: "")
+    private let dateField = NSTextField(wrappingLabelWithString: "")
     private let kindField = NSTextField(labelWithString: "")
     private let titleField = NSTextField(labelWithString: "")
     private let agentField = NSTextField(labelWithString: "")
@@ -478,6 +555,7 @@ private struct EventTableView: NSViewRepresentable {
     private let environmentField = NSTextField(labelWithString: "")
     private let swatch = LensEventSwatch()
     private var baseFontSize = 12.0
+    private var timestampColumnWidth: CGFloat = 68
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         for field in [timeField, dateField, kindField, titleField, agentField, previewField, environmentField] {
@@ -485,18 +563,34 @@ private struct EventTableView: NSViewRepresentable {
             field.setAccessibilityElement(false); addSubview(field)
         }
         previewField.maximumNumberOfLines = 2
+        dateField.maximumNumberOfLines = 2
+        dateField.lineBreakMode = .byWordWrapping
         swatch.setAccessibilityElement(false); addSubview(swatch)
         setAccessibilityElement(true); setAccessibilityRole(.cell)
     }
     required init?(coder: NSCoder) { return nil }
-    func configure(event: LensEvent, agentLabel: String, fontSize: Double, codeFont: LensCodeFont = .system) {
+    /// One width per table presentation, based on the fonts and locale rather
+    /// than each row's text. Sample all months without scanning session events.
+    static func timestampWidth(fontSize: Double) -> CGFloat {
+        let clockFont = NSFont.monospacedDigitSystemFont(ofSize: CGFloat(max(10, fontSize - 1)), weight: .regular)
+        let dateFont = NSFont.systemFont(ofSize: CGFloat(max(10, fontSize - 3)))
+        let clockWidth = ("11:59:59 PM" as NSString).size(withAttributes: [.font: clockFont]).width
+        let calendar = Calendar(identifier: .gregorian)
+        let dates = (1...12).compactMap { calendar.date(from: DateComponents(year: 2088, month: $0, day: 28, hour: 12)) }
+        let dateWidth = dates.map { ($0.lensFormatted(date: .abbreviated, time: .omitted) as NSString).size(withAttributes: [.font: dateFont]).width }.max() ?? 0
+        return max(68, ceil(max(clockWidth, dateWidth)) + 4)
+    }
+    func configure(event: LensEvent, agentLabel: String, fontSize: Double, codeFont: LensCodeFont = .system, timestampWidth: CGFloat) {
         baseFontSize = fontSize
-        timeField.stringValue = event.timestamp.lensFormatted(date: .omitted, time: .standard)
-        dateField.stringValue = event.timestamp.lensFormatted(date: .abbreviated, time: .omitted)
+        timestampColumnWidth = timestampWidth
+        let dated = event.timestamp != .distantPast && event.timestamp.timeIntervalSince1970.isFinite
+        timeField.stringValue = dated ? event.timestamp.lensFormatted(date: .omitted, time: .standard) : LensL10n.text("Non daté")
+        dateField.stringValue = dated ? event.timestamp.lensFormatted(date: .abbreviated, time: .omitted) : LensL10n.text("Horodatage indisponible")
+        dateField.maximumNumberOfLines = dated ? 1 : 2
         kindField.stringValue = event.kind.label
         titleField.stringValue = event.title.nonempty ?? event.kind.label
         var identity = agentLabel
-        if let end = event.endTime, end >= event.timestamp { identity += " · " + LensUI.duration(end.timeIntervalSince(event.timestamp)) }
+        if dated, let end = event.endTime, end >= event.timestamp { identity += " · " + LensUI.duration(end.timeIntervalSince(event.timestamp)) }
         else if event.endTime != nil { identity += LensL10n.text(" · durée incohérente") }
         agentField.stringValue = identity
         previewField.stringValue = event.preview
@@ -518,17 +612,12 @@ private struct EventTableView: NSViewRepresentable {
     override func layout() {
         super.layout()
         let font = CGFloat(baseFontSize), titleHeight = font + 7, metadataHeight = max(14, font - 1)
-        // Reserve a complete 12-hour clock as well as the localized value.
-        // English adds AM/PM; an eight-character estimate clipped that suffix.
-        let clockWidth = max(("11:59:59 PM" as NSString).size(withAttributes: [.font: timeField.font!]).width,
-                             (timeField.stringValue as NSString).size(withAttributes: [.font: timeField.font!]).width)
-        let dateWidth = (dateField.stringValue as NSString).size(withAttributes: [.font: dateField.font!]).width
-        let timeWidth = max(68, ceil(max(clockWidth, dateWidth)) + 4)
+        let timeWidth = timestampColumnWidth
         let textX = timeWidth + 26, textWidth = max(0, bounds.width - textX - 12)
         let stacked = baseFontSize >= 18
         let agentWidth = min(200, max(100, textWidth * 0.30))
         timeField.frame = NSRect(x: 10, y: 8, width: timeWidth, height: titleHeight)
-        dateField.frame = NSRect(x: 10, y: 8 + titleHeight, width: timeWidth, height: metadataHeight)
+        dateField.frame = NSRect(x: 10, y: 8 + titleHeight, width: timeWidth, height: metadataHeight * CGFloat(dateField.maximumNumberOfLines))
         kindField.frame = NSRect(x: 10, y: bounds.height - metadataHeight - 10, width: timeWidth, height: metadataHeight)
         swatch.frame = NSRect(x: timeWidth + 14, y: 10, width: 3, height: max(0, bounds.height - 20))
         titleField.frame = NSRect(x: textX, y: 6, width: stacked ? textWidth : max(0, textWidth - agentWidth - 10), height: titleHeight)
@@ -605,6 +694,7 @@ struct TimelineView: NSViewRepresentable {
         private var previousReset: Int?
         private var previousZoom: Double?
         private var previousViewport: NSSize?
+        private var previousClipSize: NSSize?
         private var axisRange: ClosedRange<Date>?
         private var rootID: String?
         private var processedFocus: UUID?
@@ -633,33 +723,62 @@ struct TimelineView: NSViewRepresentable {
         }
         private func resize() { if let store, !isConfiguring { configure(store: store, live: live) } }
         @objc private func boundsChanged() {
-            guard !isConfiguring, let scroll, let store else { return }
-            if live { liveOrigin = scroll.contentView.bounds.origin }
-            else { store.timelineOrigin = scroll.contentView.bounds.origin }
+            guard let scroll else { return }
+            // Sticky labels and the density plan depend on the visible rect.
+            // Layout/restoration notifications must repaint even when they
+            // cannot yet publish a user scroll position to the store.
             scroll.documentView?.needsDisplay = true
+            // AppKit emits bounds notifications while a reader is remounted,
+            // before configure can apply the restored origin. Those layout
+            // notifications are not user scrolling and must not replace it.
+            guard !isConfiguring, let store,
+                  previousViewport != nil, rootID == store.snapshot?.root.id,
+                  previousReset == store.timelineReset,
+                  previousClipSize == scroll.contentSize else { return }
+            if live { liveOrigin = scroll.contentView.bounds.origin }
+            else if store.timelineOrigin != scroll.contentView.bounds.origin {
+                store.timelineOrigin = scroll.contentView.bounds.origin
+                rememberTimelinePosition()
+            }
+        }
+        private func rememberTimelinePosition(midpoint: Date? = nil) {
+            guard !live, let store, let rootID, let range = axisRange, let viewport = previousViewport,
+                  let geometry = (scroll?.documentView as? TimelineCanvas)?.geometry else { return }
+            let x = store.timelineOrigin.x + (CGFloat(geometry.labelWidth) + viewport.width) / 2
+            store.timelinePosition = LensTimelinePosition(rootID: rootID, sourceHome: store.observedSourceHome.path,
+                range: range, zoom: store.timelineZoom,
+                origin: store.timelineOrigin, midpoint: midpoint ?? geometry.date(atX: Double(x), clamped: false))
         }
         func configure(store: LensStore, live: Bool = false, animateLive: Bool? = nil) {
             guard !isConfiguring, let scroll, let canvas = scroll.documentView as? TimelineCanvas else { return }
             isConfiguring = true; defer { isConfiguring = false }
             self.store = store; self.live = live
             if let animateLive { self.animateLive = animateLive }
+            // A remounted reader starts at zero size. Do not clamp the saved
+            // timeline origin or infer a zoom anchor until its viewport exists.
+            guard scroll.contentSize.width > 1, scroll.contentSize.height > 1 else { return }
             let rootChanged = rootID != store.snapshot?.root.id
             if rootChanged {
                 liveOrigin = .zero
                 rootID = store.snapshot?.root.id; processedFocus = nil
                 focusTask?.cancel(); focusTask = nil; pendingFocus = nil; zoomAnchor = nil
             }
-            let viewport = NSSize(width: max(1, scroll.contentSize.width), height: max(120, scroll.contentSize.height))
+            let clipSize = scroll.contentSize
+            let viewport = NSSize(width: max(1, clipSize.width), height: max(120, clipSize.height))
             let baseWidth = max(live ? 300 : 500, viewport.width)
             let zoom = live ? 1 : min(store.timelineZoomLimit, max(1, store.timelineZoom))
             let resetChanged = previousReset != store.timelineReset
             let extent = live ? store.liveState.window.map { $0.start...$0.end } : (store.timelineWindow ?? store.timelineProjection?.bounds.map { $0.start...$0.end })
             let extentChanged = axisRange != extent
             let scaleChanged = previousZoom != zoom || previousViewport?.width != viewport.width
-            let oldOrigin = scroll.contentView.bounds.origin
+            let oldOrigin = live ? liveOrigin : store.timelineOrigin
             let temporalMidpoint = (CGFloat(canvas.geometry?.labelWidth ?? 145) + viewport.width) / 2
             let previousTemporalMidpoint = (CGFloat(canvas.geometry?.labelWidth ?? 145) + (previousViewport?.width ?? viewport.width)) / 2
-            let anchor = live ? nil : (zoomAnchor ?? ((!resetChanged && !extentChanged && scaleChanged)
+            let savedPosition = store.timelinePosition
+            let restoredAnchor: (date: Date, viewportX: CGFloat)? = !live && savedPosition?.matches(
+                rootID: rootID, sourceHome: store.observedSourceHome.path, range: extent, zoom: store.timelineZoom, origin: oldOrigin) == true
+                ? savedPosition.map { (date: $0.midpoint, viewportX: temporalMidpoint) } : nil
+            let anchor = live ? nil : (zoomAnchor ?? restoredAnchor ?? ((!resetChanged && !extentChanged && scaleChanged)
                 ? canvas.geometry.map { (date: $0.date(atX: Double(oldOrigin.x + previousTemporalMidpoint), clamped: false), viewportX: temporalMidpoint) } : nil))
             zoomAnchor = nil
             canvas.projection = store.timelineProjection
@@ -729,11 +848,23 @@ struct TimelineView: NSViewRepresentable {
             // Reset uses the store's saved origin; Tout voir already stores zero, while history restores its own origin.
             var origin = live ? liveOrigin : store.timelineOrigin
             if let anchor, let geometry = canvas.geometry { origin.x = CGFloat(geometry.x(for: anchor.date)) - anchor.viewportX }
+            let requestedX = origin.x
             origin.x = min(max(0, origin.x), max(0, width - scroll.contentSize.width))
             origin.y = min(max(0, origin.y), max(0, height - scroll.contentSize.height))
             if scroll.contentView.bounds.origin != origin { scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView) }
-            if live { liveOrigin = origin } else { store.timelineOrigin = origin }
-            previousReset = store.timelineReset; previousZoom = zoom; previousViewport = viewport; axisRange = extent
+            // Scrolling can consume/copy a previously invalidated display.
+            // Invalidate after the final frame and clip origin are restored.
+            canvas.needsDisplay = true
+            if live { liveOrigin = scroll.contentView.bounds.origin } else { store.timelineOrigin = scroll.contentView.bounds.origin }
+            previousReset = store.timelineReset; previousZoom = zoom; previousViewport = viewport; previousClipSize = clipSize; axisRange = extent
+            let retainedMidpoint = anchor.flatMap { anchor -> Date? in
+                guard abs(requestedX - store.timelineOrigin.x) < 1 else { return nil }
+                // Pinch anchors can be under the pointer rather than at the
+                // viewport centre. The saved reference must remain a centre.
+                if anchor.viewportX == temporalMidpoint { return anchor.date }
+                return canvas.geometry?.date(atX: Double(requestedX + temporalMidpoint), clamped: false)
+            }
+            rememberTimelinePosition(midpoint: retainedMidpoint)
             canvas.configureAccessibility()
             canvas.updateAccessibilitySelection()
             canvas.needsDisplay = true
@@ -756,7 +887,7 @@ struct TimelineView: NSViewRepresentable {
             return changeZoom(factor: max(0.05, 1 + Double(event.magnification)),
                               focalViewportX: point.x - scroll.contentView.bounds.minX)
         }
-        @discardableResult private func changeZoom(factor: Double, focalViewportX: CGFloat? = nil) -> Bool {
+        @discardableResult func changeZoom(factor: Double, focalViewportX: CGFloat? = nil) -> Bool {
             guard factor.isFinite, factor > 0, let scroll, let store,
                   let geometry = (scroll.documentView as? TimelineCanvas)?.geometry else { return false }
             let width = scroll.contentSize.width
@@ -822,6 +953,7 @@ struct TimelineView: NSViewRepresentable {
                 // preserve that date, rather than losing an event against the old right edge.
                 canvas.reveal(request.eventID, centered: true)
                 if let scroll = self.scroll { store.timelineOrigin = scroll.contentView.bounds.origin }
+                self.rememberTimelinePosition()
             }
         }
     }
@@ -948,7 +1080,10 @@ struct TimelineView: NSViewRepresentable {
         densityQueryCount &+= 1
         var estimate = 128 + plan.details.count * 192 + plan.clusters.count * 192
         for item in plan.details { estimate += item.id.utf8.count + item.agentID.utf8.count }
-        for cluster in plan.clusters { estimate += cluster.id.utf8.count + cluster.sampleEventIDs.reduce(0) { $0 + $1.utf8.count + 24 } }
+        for cluster in plan.clusters {
+            estimate += cluster.id.utf8.count + cluster.kindCounts.count * 48
+                + cluster.sampleEventIDs.reduce(0) { $0 + $1.utf8.count + 24 }
+        }
         if estimate <= densityCacheBudget {
             if densityPlans.count >= 24 || densityCacheBytes + estimate > densityCacheBudget { densityPlans = [:]; densityCacheBytes = 0 }
             densityPlans[lane] = plan; densityCacheBytes += estimate
@@ -995,6 +1130,7 @@ struct TimelineView: NSViewRepresentable {
                         + " · " + cluster.window.start.lensFormatted(date: .omitted, time: .standard)
                         + " – " + cluster.window.end.lensFormatted(date: .omitted, time: .standard))
                     element.setAccessibilityHelp(LensL10n.text("Zoomer sur ce groupe"))
+                    element.setAccessibilityValue(clusterComposition(cluster))
                     element.localFrame = clusterRect(cluster, geometry: geometry)
                     element.onPress = { [weak self] in
                         guard let self, self.projection?.fingerprintSHA256 == fingerprint,
@@ -1073,10 +1209,6 @@ struct TimelineView: NSViewRepresentable {
                 drawSelection(selected, geometry: geometry, clip: plotClip)
             }
             NSGraphicsContext.restoreGraphicsState()
-            if !result.clusters.isEmpty {
-                let message = LensL10n.text("Groupes · cliquer pour zoomer")
-                (message as NSString).draw(in: NSRect(x: plot.minX + 8, y: row.maxY - 15, width: max(0, plot.width - 16), height: 14), withAttributes: [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: NSColor.secondaryLabelColor])
-            }
             NSColor.windowBackgroundColor.setFill(); NSRect(x: visible.minX, y: row.minY, width: labelWidth - 5, height: laneHeight).fill()
             let paragraph = NSMutableParagraphStyle(); paragraph.lineBreakMode = .byTruncatingTail
             (lane.name as NSString).draw(in: NSRect(x: visible.minX + 12, y: row.minY + 10, width: labelWidth - 22, height: 16), withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph])
@@ -1098,20 +1230,32 @@ struct TimelineView: NSViewRepresentable {
     }
     private func clusterRect(_ cluster: TimelineDensityCluster, geometry: TimelineGeometry) -> NSRect {
         let x = geometry.x(for: cluster.window.start), end = geometry.x(for: cluster.window.end)
-        let height = min(geometry.barHeight, 8 + log2(Double(cluster.count) + 1) * 2)
+        let height = min(geometry.barHeight * 0.65, 8 + log2(Double(cluster.count) + 1) * 0.7)
         return NSRect(x: x + 1.5, y: geometry.rulerHeight + Double(cluster.laneIndex) * geometry.laneHeight + geometry.barInset + geometry.barHeight - height,
                       width: max(1, end - x - 3), height: height)
     }
     private func draw(_ cluster: TimelineDensityCluster, geometry: TimelineGeometry, clip: NSRect) {
-        let rect = clusterRect(cluster, geometry: geometry).intersection(clip)
-        guard !rect.isEmpty else { return }
-        LensControlAccent.current.nsColor.withAlphaComponent(hoverClusterID == cluster.id ? 0.25 : 0.15).setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
-        if rect.width >= 24 {
-            let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
-            (String(cluster.count) as NSString).draw(in: NSRect(x: rect.minX + 1, y: rect.midY - 6, width: rect.width - 2, height: 13),
-                withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 9.5, weight: .medium), .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph])
+        let rect = clusterRect(cluster, geometry: geometry)
+        guard rect.intersects(clip) else { return }
+        let shape = NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3)
+        NSGraphicsContext.saveGraphicsState(); shape.addClip()
+        // These portions describe the bin's exact type composition, not the
+        // temporal positions of individual actions. Clip after placement so
+        // panning or a partial redraw cannot change their proportions.
+        var x = rect.minX
+        for kind in EventKind.allCases {
+            let count = cluster.kindCounts[kind, default: 0]
+            guard count > 0 else { continue }
+            let width = rect.width * CGFloat(count) / CGFloat(cluster.count)
+            LensBrand.eventNSColor(kind).withAlphaComponent(hoverClusterID == cluster.id ? 0.95 : 0.88).setFill()
+            NSRect(x: x, y: rect.minY, width: width, height: rect.height).fill()
+            if x > rect.minX {
+                NSColor.textBackgroundColor.withAlphaComponent(0.6).setFill()
+                NSRect(x: x, y: rect.minY, width: 0.75, height: rect.height).fill()
+            }
+            x += width
         }
+        NSGraphicsContext.restoreGraphicsState()
         if cluster.errorCount > 0 {
             ("!" as NSString).draw(at: NSPoint(x: rect.minX + 1, y: rect.minY - 1),
                 withAttributes: [.font: NSFont.systemFont(ofSize: 10, weight: .bold), .foregroundColor: LensAppearance.error])
@@ -1122,17 +1266,13 @@ struct TimelineView: NSViewRepresentable {
         }
     }
     private func drawSelection(_ item: TimelineItem, geometry: TimelineGeometry, clip: NSRect) {
-        let rect = nativeRect(item, geometry: geometry).intersection(clip)
-        guard !rect.isEmpty else { return }
-        LensControlAccent.current.nsColor.setStroke()
-        let outline = NSBezierPath(roundedRect: rect.insetBy(dx: -1, dy: -1), xRadius: 3, yRadius: 3)
-        outline.lineWidth = 2; outline.stroke()
+        draw(item, geometry: geometry, clip: clip)
     }
     private func draw(_ item: TimelineItem, geometry: TimelineGeometry, clip: NSRect) {
         // Clip before constructing a path: a years-long recorded interval can extend far outside the viewport.
         let rect = nativeRect(item, geometry: geometry).intersection(clip)
         guard !rect.isEmpty else { return }
-        color(item).withAlphaComponent(item.id == selectedID ? 1 : 0.72).setFill()
+        color(item).withAlphaComponent(item.id == selectedID ? 1 : 0.88).setFill()
         NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
         if item.id == hoverID && item.id != selectedID {
             NSColor.labelColor.setStroke()
@@ -1145,22 +1285,70 @@ struct TimelineView: NSViewRepresentable {
             outline.lineWidth = 1.5; outline.stroke()
         }
     }
-    private func drawRuler(geometry: TimelineGeometry, visible: NSRect, plot: NSRect, dirtyRect: NSRect) {
+    struct RulerTick {
+        let x: CGFloat
+        let date: Date
+        let label: String
+        let fullTimestamp: String
+        let labelRect: NSRect?
+    }
+    /// Grid positions remain unchanged. Only measured text is thinned when its
+    /// glyph bounds cannot fit without colliding with the previous label.
+    func rulerTicks(geometry: TimelineGeometry, plot: NSRect) -> [RulerTick] {
+        guard geometry.timeWidth > 0, plot.width > 0 else { return [] }
         let ticks = max(4, Int(geometry.timeWidth / 130))
         let first = max(0, Int(floor((Double(plot.minX) - geometry.labelWidth) / geometry.timeWidth * Double(ticks))))
         let last = min(ticks, Int(ceil((Double(plot.maxX) - geometry.labelWidth) / geometry.timeWidth * Double(ticks))))
-        guard first <= last else { return }
-        NSGraphicsContext.saveGraphicsState(); NSBezierPath(rect: plot.intersection(dirtyRect)).addClip()
-        for index in first...last {
+        guard first <= last else { return [] }
+        let interval = geometry.window.duration / Double(ticks)
+        let calendar = Calendar.current
+        let showsDate = !calendar.isDate(geometry.window.start, inSameDayAs: geometry.window.end)
+        let showsYear = calendar.component(.year, from: geometry.window.start) != calendar.component(.year, from: geometry.window.end)
+        let locale = Locale(identifier: LensL10n.resolvedLanguage.rawValue)
+        var compact = Date.FormatStyle.dateTime.locale(locale)
+        if showsDate { compact = compact.month(.abbreviated).day() }
+        if showsYear { compact = compact.year() }
+        if !showsDate || interval < 86400 { compact = compact.hour().minute() }
+        if interval < 60 { compact = compact.second() }
+        if interval < 1 { compact = compact.secondFraction(.fractional(3)) }
+        var full = Date.FormatStyle.dateTime.locale(locale).year().month(.abbreviated).day().hour().minute().second()
+        if interval < 1 { full = full.secondFraction(.fractional(3)) }
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        var previousMaxX = plot.minX - 8
+        return (first...last).map { index in
             let x = CGFloat(geometry.labelWidth + Double(index) / Double(ticks) * geometry.timeWidth)
+            let date = geometry.window.start.addingTimeInterval(Double(index) / Double(ticks) * geometry.window.duration)
+            let label = date.formatted(compact)
+            let size = (label as NSString).size(withAttributes: [.font: font])
+            let originX = min(x + 3, plot.maxX - size.width - 3)
+            let fits = x >= plot.minX && x <= plot.maxX && size.width + 6 <= plot.width
+                && originX >= previousMaxX + 8 && originX >= plot.minX
+            let rect = fits ? NSRect(x: originX, y: 14, width: size.width, height: size.height) : nil
+            if let rect { previousMaxX = rect.maxX }
+            return RulerTick(x: x, date: date, label: label, fullTimestamp: date.formatted(full), labelRect: rect)
+        }
+    }
+    private func visibleRulerTicks(geometry: TimelineGeometry) -> [RulerTick] {
+        let visible = visibleRect.intersection(bounds)
+        let plot = NSRect(x: visible.minX + CGFloat(geometry.labelWidth), y: visible.minY,
+            width: max(0, visible.width - CGFloat(geometry.labelWidth)), height: visible.height)
+        return rulerTicks(geometry: geometry, plot: plot).filter { $0.x >= plot.minX && $0.x <= plot.maxX }
+    }
+    override func accessibilityHelp() -> String? {
+        let help = super.accessibilityHelp() ?? ""
+        guard let geometry = displayGeometry else { return help }
+        let timestamps = visibleRulerTicks(geometry: geometry).map(\.fullTimestamp)
+        return timestamps.isEmpty ? help : help + "\n" + LensL10n.text("Horodatages de la grille : {0}", timestamps.joined(separator: " ; "))
+    }
+    private func drawRuler(geometry: TimelineGeometry, visible: NSRect, plot: NSRect, dirtyRect: NSRect) {
+        NSGraphicsContext.saveGraphicsState(); NSBezierPath(rect: plot.intersection(dirtyRect)).addClip()
+        for tick in rulerTicks(geometry: geometry, plot: plot) {
+            let x = tick.x
             NSColor.separatorColor.withAlphaComponent(NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0.8 : 0.3).setStroke()
             let line = NSBezierPath(); line.move(to: NSPoint(x: x, y: 36)); line.line(to: NSPoint(x: x, y: bounds.maxY)); line.lineWidth = 0.5; line.stroke()
-            let date = geometry.window.start.addingTimeInterval(Double(index) / Double(ticks) * geometry.window.duration)
-            let label = geometry.window.duration / Double(ticks) < 1
-                ? date.formatted(.dateTime.locale(Locale(identifier: LensL10n.resolvedLanguage.rawValue)).hour().minute().second().secondFraction(.fractional(3)))
-                : date.lensFormatted(date: geometry.window.duration > 86400 ? .abbreviated : .omitted, time: .standard)
-            (label as NSString)
-                .draw(at: NSPoint(x: x + 3, y: 14), withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor])
+            if let rect = tick.labelRect {
+                (tick.label as NSString).draw(at: rect.origin, withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor])
+            }
         }
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -1264,8 +1452,16 @@ struct TimelineView: NSViewRepresentable {
         let menu = NSMenu(); menu.autoenablesItems = false
         let select = NSMenuItem(title: LensL10n.text("Voir le contexte de l’événement"), action: #selector(selectMenuItem(_:)), keyEquivalent: "")
         select.target = self; select.representedObject = id; menu.addItem(select)
-        let tab = NSMenuItem(title: LensL10n.text("Ouvrir dans un onglet"), action: #selector(openTabMenuItem(_:)), keyEquivalent: "")
-        tab.target = self; tab.representedObject = id; menu.addItem(tab)
+        if let context = LensApplicationCoordinator.shared.context(for: window) {
+            for action in [LensAction.openInNewTab, .openInNewWindow] {
+                let item = NSMenuItem(title: action.title(in: context.store), action: #selector(openCapturedCommand(_:)), keyEquivalent: "")
+                item.target = self; item.representedObject = context.capture(action, destination: .event(id))
+                item.isEnabled = context.store.canPerform(action, target: .event(id)); menu.addItem(item)
+            }
+        } else {
+            let tab = NSMenuItem(title: LensL10n.text("Ouvrir dans un onglet"), action: #selector(openTabMenuItem(_:)), keyEquivalent: "")
+            tab.target = self; tab.representedObject = id; menu.addItem(tab)
+        }
         for change in changesLookup?(id) ?? [] {
             let diff = NSMenuItem(title: LensL10n.text("Aperçu du diff : {0}", URL(fileURLWithPath: change.path).lastPathComponent), action: #selector(changeMenuItem(_:)), keyEquivalent: "")
             diff.target = self; diff.representedObject = change.id; diff.toolTip = change.environmentID + "\n" + change.path; menu.addItem(diff)
@@ -1277,6 +1473,7 @@ struct TimelineView: NSViewRepresentable {
         return menu
     }
     @objc private func openTabMenuItem(_ sender: NSMenuItem) { if let id = sender.representedObject as? String { onOpenTab?(id) } }
+    @objc private func openCapturedCommand(_ sender: NSMenuItem) { (sender.representedObject as? LensCommandTarget)?.execute() }
     @objc private func changeMenuItem(_ sender: NSMenuItem) { if let id = sender.representedObject as? String { onChangeSelect?(id) } }
     @objc private func investigateMenuItem(_ sender: NSMenuItem) { if let id = sender.representedObject as? String, canInvestigate?(id) == true { onInvestigate?(id) } }
     override func keyDown(with event: NSEvent) {
@@ -1314,7 +1511,8 @@ struct TimelineView: NSViewRepresentable {
         else if rect.minX > visible.maxX - 12 { origin.x = max(0, rect.minX - visible.width + 24) }
         if rect.minY < visible.minY + 8 { origin.y = max(0, rect.minY - 8) }
         else if rect.maxY > visible.maxY - 8 { origin.y = rect.maxY - visible.height + 8 }
-        origin.x = min(origin.x, max(0, bounds.width - visible.width)); origin.y = min(origin.y, max(0, bounds.height - visible.height))
+        origin.x = min(max(0, origin.x), max(0, bounds.width - visible.width))
+        origin.y = min(max(0, origin.y), max(0, bounds.height - visible.height))
         scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView)
     }
     override func updateTrackingAreas() {
@@ -1325,11 +1523,18 @@ struct TimelineView: NSViewRepresentable {
     }
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if let geometry = displayGeometry, point.y >= 0, point.y < CGFloat(geometry.rulerHeight),
+           point.x >= visibleRect.minX + CGFloat(geometry.labelWidth), point.x <= visibleRect.maxX,
+           let tick = visibleRulerTicks(geometry: geometry).min(by: { abs($0.x - point.x) < abs($1.x - point.x) }) {
+            if hoverID != nil || hoverClusterID != nil { hoverID = nil; hoverClusterID = nil; needsDisplay = true }
+            toolTip = tick.fullTimestamp
+            return
+        }
         if let cluster = densityCluster(at: point) {
             if hoverClusterID != cluster.id || hoverID != nil { hoverClusterID = cluster.id; hoverID = nil; needsDisplay = true }
             toolTip = LensL10n.text("{0} événements dans ce groupe · cliquer pour zoomer", String(cluster.count))
                 + "\n" + cluster.window.start.lensFormatted(date: .omitted, time: .standard) + " – " + cluster.window.end.lensFormatted(date: .omitted, time: .standard)
-                + "\n" + LensL10n.text("{0} erreurs · {1} compactages", String(cluster.errorCount), String(cluster.compactionCount))
+                + "\n" + clusterComposition(cluster)
                 + "\n" + LensL10n.text("Un intervalle long peut apparaître dans plusieurs groupes. Les marqueurs proches des limites sont inclus.")
             return
         }
@@ -1347,6 +1552,12 @@ struct TimelineView: NSViewRepresentable {
         guard let hits, let id = hits.eventIDs.first, let record = eventLookup?(id) else { toolTip = nil; return }
         let ambiguity = hits.requiresDisambiguation ? LensL10n.text("\nPlusieurs événements se superposent ; cliquer pour choisir.") : ""
         toolTip = record.title + " · " + record.timestamp.lensFormatted(date: .abbreviated, time: .standard) + "\n" + String(record.preview.prefix(1800)) + ambiguity
+    }
+    private func clusterComposition(_ cluster: TimelineDensityCluster) -> String {
+        EventKind.allCases.compactMap { kind in
+            let count = cluster.kindCounts[kind, default: 0]
+            return count > 0 ? "\(kind.label) : \(count.formatted(.number.locale(Locale(identifier: LensL10n.resolvedLanguage.rawValue))))" : nil
+        }.joined(separator: " · ")
     }
     override func mouseExited(with event: NSEvent) {
         if hoverClusterID != nil { hoverClusterID = nil; needsDisplay = true }

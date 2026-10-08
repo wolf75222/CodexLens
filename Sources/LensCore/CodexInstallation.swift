@@ -2,6 +2,15 @@ import Foundation
 
 /// Discovers executable paths only. No shell, credential file, login or inference.
 public enum CodexInstallation {
+    /// Versions qualified against exact protocol schemas and isolation probes.
+    /// A newer, older or prerelease version needs its own qualification.
+    public static var supportedVersions: [String] { CodexInvestigationPolicy.supportedVersions }
+
+    public static func isSupportedVersion(_ version: String?) -> Bool {
+        guard let version else { return false }
+        return supportedVersions.contains(version)
+    }
+
     public static func candidates(home: URL = FileManager.default.homeDirectoryForCurrentUser,
                                   path: String = ProcessInfo.processInfo.environment["PATH"] ?? "",
                                   applications: [URL]? = nil) -> [URL] {
@@ -34,12 +43,12 @@ public enum CodexInstallation {
             }
             do {
                 let version = try await CodexInvestigationLocalStatus.inspectVersion(executable: url)
-                if version == CodexInvestigationPolicy.supportedVersion { return url }
+                if isSupportedVersion(version) { return url }
                 observed.append(version ?? "inconnue")
             } catch is CancellationError { throw CancellationError() }
             catch { if preferred != nil { throw error } }
         }
-        throw LensError.unsupported("Version Codex incompatible avec cet adaptateur. Version prise en charge : \(CodexInvestigationPolicy.supportedVersion). Version trouvée : \(observed.joined(separator: ", ").nonEmptyVersion). Le brouillon est conservé.")
+        throw LensError.unsupported("Version Codex incompatible avec cet adaptateur. Versions prises en charge : \(supportedVersions.joined(separator: ", ")). Version trouvée : \(observed.joined(separator: ", ").nonEmptyVersion). Le brouillon est conservé.")
     }
 }
 

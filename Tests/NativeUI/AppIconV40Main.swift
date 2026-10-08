@@ -34,6 +34,7 @@ import AppKit
             }
         }
         check(LensAppIconController.resolve(choice: nil, lensAppearance: nil, systemIsDark: false) == "dark", "Absent preferences")
+        check(LensAppIconController.resolve(choice: "appearance", lensAppearance: nil, systemIsDark: false) == "dark", "Follow Lens uses the dark first-launch default")
         application.appearance = NSAppearance(named: .aqua)
         let controller = LensAppIconController(defaults: defaults, resources: resources, application: application)
         controller.start()

@@ -110,8 +110,23 @@ with (out/'runtime.log').open('wb') as log:
             try:child.wait(timeout=5)
             except subprocess.TimeoutExpired:method='own-probe-SIGKILL';child.kill();child.wait()
     (out/'process-receipt.json').write_text(json.dumps({'pid':child.pid,'exitStatus':child.poll(),'receiptWritten':receipt.exists(),'shutdownMethod':method,'nativeQuitQualified':method=='native-exit' and child.poll()==0,'timeoutSeconds':120},indent=2)+'\n')
-if not receipt.exists():raise SystemExit('No receipt; inspect runtime.log')
+def report_failure(details=None):
+    if details:
+        for check in details.get('checks',[]):
+            if not check.get('passed',False):print('FAILED_CHECK:',check.get('name','unnamed'),flush=True)
+        for key in ('failedStage','failure','error'):
+            if details.get(key):print(key+':',str(details[key])[:2000],flush=True)
+    for name in ('phase.json','scene-phase.json'):
+        phase=out/name
+        if phase.exists():print('LAST_PHASE:',phase.read_text()[-2000:],flush=True)
+    runtime=out/'runtime.log'
+    if runtime.exists():print('RUNTIME_TAIL:', '\n'.join(runtime.read_text(errors='replace').splitlines()[-40:])[-8000:],flush=True)
+if not receipt.exists():
+    report_failure()
+    raise SystemExit('No receipt; inspect retained native diagnostics.')
 j=json.loads(receipt.read_text())
-if not j.get('allExecutedChecksPassed'):raise SystemExit('Design v07 qualification failed; retain receipt/logs.')
+if not j.get('allExecutedChecksPassed'):
+    report_failure(j)
+    raise SystemExit('Design v07 qualification failed; retain receipt/logs.')
 print('DESIGN_V07_'+('PARTIAL' if j.get('unqualified') else 'PASS'),len(j['checks']),'checks')
 PYCODE

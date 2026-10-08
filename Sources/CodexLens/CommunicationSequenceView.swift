@@ -81,6 +81,7 @@ private struct CommunicationLaneHeader: View {
 }
 
 private struct CommunicationSequenceRow: View {
+    @Environment(\.lensAccent) private var accent
     @EnvironmentObject var store: LensStore
     let route: CommunicationSequenceProjection.Route
     let laneCount: Int
@@ -109,8 +110,8 @@ private struct CommunicationSequenceRow: View {
                                 path.move(to: CGPoint(x: target + direction * 7, y: 15)); path.addLine(to: CGPoint(x: target, y: 20)); path.addLine(to: CGPoint(x: target + direction * 7, y: 25))
                             }
                         }
-                    }.stroke(Color.accentColor, lineWidth: 1.5)
-                    Circle().fill(Color.accentColor).frame(width: 7, height: 7).position(x: sender, y: 20)
+                    }.stroke(accent.color, lineWidth: 1.5)
+                    Circle().fill(accent.color).frame(width: 7, height: 7).position(x: sender, y: 20)
                 }.frame(height: 42).accessibilityHidden(true).allowsHitTesting(false)
             }
             HStack(spacing: 8) {

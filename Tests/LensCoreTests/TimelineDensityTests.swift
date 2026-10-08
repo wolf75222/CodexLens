@@ -12,6 +12,132 @@ final class TimelineDensityTests: XCTestCase {
         XCTAssertEqual(next.window.duration, geometry.window.duration, accuracy: 0.000001)
     }
 
+    func testSeparatedMarksRemainDetailedAboveTheOldTwoItemThreshold() throws {
+        let viewport = try geometry(0, 100)
+        let rows = (0..<12).map { event("separated-\($0)", date: viewport.date(atX: 220 + Double($0) * 8, clamped: false)) }
+        let projection = try TimelineProjection.prepare(events: rows, agents: [])
+        let result = projection.density(lane: 0, geometry: viewport, xRange: axis(viewport))
+        XCTAssertEqual(result.totalMatches, rows.count)
+        XCTAssertEqual(Set(result.details.map(\.id)), Set(rows.map(\.id)))
+        XCTAssertTrue(result.clusters.isEmpty, "A bin with several spatially separated marks is not dense")
+    }
+
+    func testSmallSimultaneousGroupsUseExactEffectiveKinds() throws {
+        let rows = [event("call", at: 10, kind: .toolCall),
+                    event("failed-response", at: 10, kind: .assistant, isError: true),
+                    event("explicit-error", at: 10, kind: .error, isError: true)]
+        let projection = try TimelineProjection.prepare(events: rows, agents: [])
+        let viewport = try geometry(0, 100)
+        let result = projection.density(lane: 0, geometry: viewport, xRange: axis(viewport))
+        XCTAssertTrue(result.details.isEmpty, "Simultaneous marks overlap even below the detail-count limit")
+        let cluster = try XCTUnwrap(result.clusters.first)
+        XCTAssertEqual(cluster.count, 3)
+        XCTAssertEqual(cluster.kindCounts, [.toolCall: 1, .error: 2])
+        XCTAssertEqual(cluster.kindCounts.values.reduce(0, +), cluster.count)
+        XCTAssertEqual(projection.item(id: "failed-response")?.effectiveKind, .error)
+        XCTAssertEqual(cluster.errorCount, 2, "The explicit error with an error flag is counted once")
+    }
+
+    func testMarkerOverlapAcrossBinsDoesNotLeakASupposedlySeparateDetail() throws {
+        let viewport = try geometry(0, 100)
+        let binCount = ceil(viewport.timeWidth / 32)
+        let edge = viewport.labelWidth + viewport.timeWidth * 3 / binCount
+        let rows = [event("before-edge", date: viewport.date(atX: edge - 2, clamped: false)),
+                    event("after-edge", date: viewport.date(atX: edge + 2, clamped: false))]
+        let projection = try TimelineProjection.prepare(events: rows, agents: [])
+        let result = projection.density(lane: 0, geometry: viewport, xRange: axis(viewport))
+        XCTAssertEqual(result.totalMatches, 2)
+        XCTAssertTrue(result.details.isEmpty, "The five-pixel markers overlap across a bin boundary")
+        XCTAssertTrue(result.clusters.contains { $0.count == 2 })
+        XCTAssertTrue(result.clusters.allSatisfy { $0.kindCounts.values.reduce(0, +) == $0.count })
+    }
+
+    func testLongMarkIsGroupedWhenItOverlapsALaterEventBeyondItsFirstBin() throws {
+        let rows = [event("long", at: 0, end: 100, kind: .toolCall), event("later", at: 90, kind: .assistant)]
+        let projection = try TimelineProjection.prepare(events: rows, agents: [])
+        let viewport = try geometry(0, 100)
+        let result = projection.density(lane: 0, geometry: viewport, xRange: axis(viewport))
+        XCTAssertEqual(result.totalMatches, 2)
+        XCTAssertTrue(result.details.isEmpty)
+        XCTAssertTrue(result.clusters.contains { $0.kindCounts == [.toolCall: 1, .assistant: 1] })
+        XCTAssertEqual(projection.item(id: "long")?.recordedDuration, 100)
+    }
+
+    func testMixedHundredThousandGroupCompositionDoesNotComeFromItsSample() throws {
+        let rows: [LensEvent] = (0..<100_000).map { (index: Int) -> LensEvent in
+            let kind: EventKind
+            if index < 50_000 { kind = .assistant }
+            else if index < 80_000 { kind = .toolCall }
+            else if index < 99_999 { kind = .toolResult }
+            else { kind = .compaction }
+            let identifier: String = "mixed-\(index)"
+            let failed: Bool = index == 99_999
+            let offset: UInt64 = UInt64(index)
+            return event(identifier, at: 10, offset: offset, kind: kind, isError: failed)
+        }
+        let projection = try TimelineProjection.prepare(events: rows, agents: [], budget: TimelineBuildBudget(maxQueryItems: 1))
+        let viewport = try geometry(0, 600)
+        let result = projection.density(lane: 0, geometry: viewport, xRange: axis(viewport))
+        let cluster = try XCTUnwrap(result.clusters.first)
+        let expected: [EventKind: Int] = [.assistant: 50_000, .toolCall: 30_000, .toolResult: 19_999, .error: 1]
+        XCTAssertEqual(cluster.kindCounts, expected)
+        XCTAssertEqual(cluster.kindCounts.values.reduce(0, +), 100_000)
+        XCTAssertEqual(cluster.sampleEventIDs, ["mixed-0"])
+        XCTAssertFalse(cluster.sampleEventIDs.contains("mixed-99999"))
+        XCTAssertEqual(cluster.errorCount, 1)
+        XCTAssertEqual(cluster.compactionCount, 1, "Raw compaction statistics are separate from error-priority display kinds")
+        XCTAssertNil(cluster.kindCounts[.compaction])
+        XCTAssertLessThan(result.visitedNodes, 2048, "Exact colors use prepared indexes, not enumeration of the group")
+        XCTAssertNotNil(projection.item(id: "mixed-99999"))
+    }
+
+    func testMixedMarkerFringesAndLongIntervalsKeepExactKindComposition() throws {
+        let rows = (0..<2048).map { index in
+            event("fringe-\(index)", at: index.isMultiple(of: 2) ? 99.998 : 99.9,
+                  end: index.isMultiple(of: 2) ? nil : 100.6, offset: UInt64(index),
+                  kind: index.isMultiple(of: 3) ? .compaction : .toolResult, isError: index.isMultiple(of: 7))
+        }
+        let projection = try TimelineProjection.prepare(events: rows, agents: [])
+        let viewport = try geometry(100, 101)
+        let result = projection.density(lane: 0, geometry: viewport, xRange: axis(viewport))
+        let padding = viewport.window.duration * viewport.minimumMarkerWidth / viewport.timeWidth
+        XCTAssertFalse(result.clusters.isEmpty)
+        for cluster in result.clusters {
+            let matching = rows.filter { event in
+                event.timestamp <= cluster.window.end
+                    && max(event.timestamp.addingTimeInterval(padding), event.endTime ?? event.timestamp) >= cluster.window.start
+            }
+            let reference = matching.reduce(into: [EventKind: Int]()) { $0[$1.isError ? .error : $1.kind, default: 0] += 1 }
+            XCTAssertEqual(cluster.kindCounts, reference)
+            XCTAssertEqual(cluster.kindCounts.values.reduce(0, +), cluster.count)
+        }
+        XCTAssertLessThan(result.visitedNodes, 4096, "Mixed fringe queries must not scan 2048 items for every bin")
+    }
+
+    func testZoomAndDezoomRestoreGroupsAndTheirExactColors() throws {
+        let kinds: [EventKind] = [.user, .assistant, .toolCall, .toolResult, .delegation, .wait]
+        let rows = (0..<500).map { event("zoom-\($0)", at: Double($0) * 0.25, offset: UInt64($0), kind: kinds[$0 % kinds.count]) }
+        let projection = try TimelineProjection.prepare(events: rows, agents: [])
+        let overviewGeometry = try geometry(0, 500)
+        let overview = projection.density(lane: 0, geometry: overviewGeometry, xRange: axis(overviewGeometry))
+        XCTAssertFalse(overview.clusters.isEmpty)
+        let middleGeometry = try geometry(0, 20)
+        let middle = projection.density(lane: 0, geometry: middleGeometry, xRange: axis(middleGeometry))
+        XCTAssertEqual(middle.totalMatches, 81)
+        XCTAssertEqual(middle.details.count, 81)
+        XCTAssertTrue(middle.clusters.isEmpty)
+        let closeGeometry = try geometry(5, 6.75)
+        let close = projection.density(lane: 0, geometry: closeGeometry, xRange: axis(closeGeometry))
+        XCTAssertEqual(close.details.count, 8)
+        XCTAssertTrue(close.clusters.isEmpty)
+        let restored = projection.density(lane: 0, geometry: overviewGeometry, xRange: axis(overviewGeometry))
+        XCTAssertEqual(restored.totalMatches, overview.totalMatches)
+        XCTAssertEqual(restored.clusters.map(\.id), overview.clusters.map(\.id))
+        XCTAssertEqual(restored.clusters.map(\.kindCounts), overview.clusters.map(\.kindCounts))
+        XCTAssertEqual(projection.eventCount, 500)
+        XCTAssertNotNil(projection.item(id: "zoom-499"))
+    }
+
     private let epoch = Date(timeIntervalSince1970: 1_790_784_000)
 
     func testDenseOverviewKeepsAll12014EventsAndZoomRevealsIndividualEvents() throws {
@@ -152,6 +278,7 @@ final class TimelineDensityTests: XCTestCase {
         XCTAssertEqual(cluster.count, 5)
         XCTAssertEqual(cluster.errorCount, 3)
         XCTAssertEqual(cluster.compactionCount, 2)
+        XCTAssertEqual(cluster.kindCounts, [.error: 3, .assistant: 1, .compaction: 1])
         XCTAssertTrue(result.details.isEmpty)
         XCTAssertFalse(cluster.sampleEventIDs.contains("finished-before"))
         XCTAssertFalse(cluster.sampleEventIDs.contains("point-before-marker"))

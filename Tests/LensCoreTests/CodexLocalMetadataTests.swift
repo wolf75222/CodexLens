@@ -16,7 +16,9 @@ final class CodexLocalMetadataTests: XCTestCase {
         do {
             let status = try await engine.status()
             XCTAssertTrue(status.isChatGPT)
-            XCTAssertEqual(status.version, CodexInvestigationPolicy.supportedVersion)
+            XCTAssertTrue(CodexInstallation.isSupportedVersion(status.version))
+            let actualVersion = try await CodexInvestigationLocalStatus.inspectVersion(executable: URL(fileURLWithPath: status.executable))
+            XCTAssertEqual(status.version, actualVersion)
             XCTAssertFalse(status.models.isEmpty, status.catalogueIssue ?? "Missing model catalogue")
             await engine.shutdown()
             if let path = ProcessInfo.processInfo.environment["LENS_METADATA_RECEIPT"] {

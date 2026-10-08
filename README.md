@@ -16,6 +16,8 @@ Open an existing session, including one still running in Codex, and follow its r
 2. Open the `.dmg` and drag **Codex Lens** into **Applications**.
 3. Launch Codex Lens and choose a session, paste its ID, or paste a `codex://threads/<thread-id>` link.
 
+Updater-enabled builds offer **Codex Lens → Check for Updates…** and update preferences in **Settings → General**. Future signed releases replace the installed app in place. Older builds need one manual replacement. [Updates and removal](docs/UPDATES.md) describes automatic checks and the optional uninstall/data-cleanup flow.
+
 Release assets include SHA-256 checksums. Current community builds are locally signed, not Developer ID notarized; macOS may require confirmation in **System Settings → Privacy & Security**. Do not disable Gatekeeper.
 
 ## Explore, then ask
@@ -36,7 +38,7 @@ Release assets include SHA-256 checksums. Current community builds are locally s
 | Native UI | SwiftUI and AppKit; Liquid Glass controls on macOS 26 with fallbacks |
 | Language | English and French, selectable in Settings |
 | Session inspection | Local persisted Codex data, including separately stored descendants when their relationships are recorded |
-| Local Codex chat | App Server adapter qualified for **Codex 0.159.2** and a ChatGPT login; other versions are refused |
+| Local Codex chat | App Server adapter qualified for **Codex 0.159.2 or 0.160.1** and a ChatGPT login; other versions are refused |
 | Historical files | Recorded content, verified Git objects, or reconstruction validated against a recorded content hash |
 
 The macOS 14 target is a deployment declaration, not a claim that every feature has been tested on that OS. Intel, every Codex log format, and remote sessions without local traces are not qualified.
@@ -75,6 +77,7 @@ CI runs the repository's build and test scripts. Release workflows and their exa
 - [Feature catalogue](docs/FEATURES.md): detailed functions, entry points, shortcuts, limits, and annotated screenshots.
 - [User guide](docs/USER_GUIDE.md): sessions, live following, versions, chat, exports, and keyboard shortcuts.
 - [Architecture](docs/ARCHITECTURE.md): data flow, identities, storage limits, and source boundaries.
+- [Memory and search qualification](docs/QA/MEMORY_AND_SEARCH.md): measured scope, retained storage, and bounded search behavior.
 - [Contributing](CONTRIBUTING.md): local validation and review expectations.
 - [Security](SECURITY.md): privacy boundaries and reporting sensitive issues.
 - [Changelog](CHANGELOG.md): release changes.
